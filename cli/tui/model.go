@@ -3,15 +3,16 @@ package tui
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"strings"
+	"sync"
+	"time"
+
 	"github.com/kinwyb/kanflux/agent"
 	"github.com/kinwyb/kanflux/agent/tools"
 	"github.com/kinwyb/kanflux/bus"
 	"github.com/kinwyb/kanflux/providers"
 	"github.com/kinwyb/kanflux/session"
-	"log/slog"
-	"strings"
-	"sync"
-	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -381,7 +382,7 @@ func (m *Model) View() string {
 	}
 
 	// 标题栏
-	title := m.styles.Title.Render(" ClawEino AI Agent ")
+	title := m.styles.Title.Render(" KanFlux AI Agent ")
 	titleBar := lipgloss.NewStyle().
 		Width(m.width).
 		Background(lipgloss.Color("62")).

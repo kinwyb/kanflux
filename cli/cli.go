@@ -2,8 +2,9 @@ package cli
 
 import (
 	"fmt"
-	"github.com/kinwyb/kanflux/cli/cmd"
 	"os"
+
+	"github.com/kinwyb/kanflux/cli/cmd"
 
 	"github.com/spf13/cobra"
 )
@@ -19,9 +20,9 @@ func Execute() {
 // NewRootCmd 创建根命令
 func NewRootCmd() *cobra.Command {
 	rootCmd := &cobra.Command{
-		Use:   "claw",
-		Short: "ClawEino AI Agent CLI",
-		Long:  `ClawEino - 一个基于Eino框架的AI Agent CLI工具`,
+		Use:   "kanflux",
+		Short: "KanFlux AI Agent CLI",
+		Long:  `KanFlux - 一个基于Eino框架的AI Agent CLI工具`,
 	}
 
 	// 添加子命令
