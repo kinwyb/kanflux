@@ -410,7 +410,7 @@ func (m *Manager) PublishToBus(ctx context.Context, channel, chatID string, cont
 func (m *Manager) PublishSystemMessage(ctx context.Context, content string, metadata map[string]interface{}) error {
 	inbound := &bus.InboundMessage{
 		ID:        generateID(),
-		Channel:   "system",
+		Channel:   bus.ChannelSystem,
 		Content:   content,
 		Timestamp: time.Now(),
 		Metadata:  metadata,

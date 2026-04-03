@@ -144,7 +144,7 @@ func NewModel(ctx context.Context, cfg *Config) (*Model, error) {
 	msgBus := bus.NewMessageBus(10)
 
 	// 设置 slog 默认 logger 使用 bus handler
-	bus.SetupDefaultLogger(msgBus, slog.LevelDebug, "tui")
+	bus.SetupDefaultLogger(msgBus, slog.LevelDebug, bus.ChannelTUI)
 
 	// 创建Agent管理器
 	manager := agent.NewManager(msgBus, sessionMgr)
@@ -183,7 +183,7 @@ func NewModel(ctx context.Context, cfg *Config) (*Model, error) {
 		messages:        make([]Message, 0),
 		logs:            make([]string, 0),
 		logSub:          msgBus.SubscribeLogEvent(),
-		chatSub:         msgBus.SubscribeChatEvent(),
+		chatSub:         msgBus.SubscribeChatEventFiltered([]string{bus.ChannelTUI}),
 		state:           StateIdle,
 		status:          "就绪",
 		styles:          styles,
@@ -440,8 +440,8 @@ func (m *Model) sendMessage() tea.Cmd {
 	return func() tea.Msg {
 		inMsg := bus.InboundMessage{
 			ID:        fmt.Sprintf("%d", time.Now().UnixNano()),
-			Channel:   "cli",
-			AccountID: "tui",
+			Channel:   bus.ChannelTUI,
+			AccountID: bus.ChannelTUI,
 			SenderID:  "",
 			ChatID:    m.chatID,
 			Content:   content,
@@ -455,7 +455,7 @@ func (m *Model) sendMessage() tea.Cmd {
 			return AgentResponseMsg{Error: err}
 		}
 
-		resp, err := m.bus.ConsumeOutbound(m.ctx)
+		resp, err := m.bus.ConsumeOutboundFiltered(m.ctx, []string{bus.ChannelTUI})
 		if err != nil {
 			return AgentResponseMsg{Error: err}
 		}

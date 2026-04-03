@@ -15,8 +15,8 @@ type MessageBus struct {
 	outbound      chan *OutboundMessage
 	chatEvents    chan *ChatEvent
 	logEvents     chan *LogEvent
-	outSubs       map[string]chan *OutboundMessage
-	chatSubs      map[string]chan *ChatEvent
+	outSubs       map[string]*outboundSubscriber
+	chatSubs      map[string]*chatEventSubscriber
 	logSubs       map[string]chan *LogEvent
 	outSubsMu     sync.RWMutex
 	chatSubsMu    sync.RWMutex
@@ -26,6 +26,18 @@ type MessageBus struct {
 	fanoutStopped bool
 }
 
+// outboundSubscriber 出站消息订阅者
+type outboundSubscriber struct {
+	ch       chan *OutboundMessage
+	channels []string // 过滤的 channels，空切片表示订阅所有
+}
+
+// chatEventSubscriber 聊天事件订阅者
+type chatEventSubscriber struct {
+	ch       chan *ChatEvent
+	channels []string // 过滤的 channels，空切片表示订阅所有
+}
+
 // NewMessageBus 创建消息总线
 func NewMessageBus(bufferSize int) *MessageBus {
 	b := &MessageBus{
@@ -33,8 +45,8 @@ func NewMessageBus(bufferSize int) *MessageBus {
 		outbound:   make(chan *OutboundMessage, bufferSize),
 		chatEvents: make(chan *ChatEvent, bufferSize),
 		logEvents:  make(chan *LogEvent, bufferSize),
-		outSubs:    make(map[string]chan *OutboundMessage),
-		chatSubs:   make(map[string]chan *ChatEvent),
+		outSubs:    make(map[string]*outboundSubscriber),
+		chatSubs:   make(map[string]*chatEventSubscriber),
 		logSubs:    make(map[string]chan *LogEvent),
 		closed:     false,
 	}
@@ -115,6 +127,12 @@ func (b *MessageBus) PublishOutbound(ctx context.Context, msg *OutboundMessage) 
 // ConsumeOutbound 消费出站消息
 // 使用订阅机制，确保消息能够被正确接收
 func (b *MessageBus) ConsumeOutbound(ctx context.Context) (*OutboundMessage, error) {
+	return b.ConsumeOutboundFiltered(ctx, nil)
+}
+
+// ConsumeOutboundFiltered 消费出站消息，按 channels 过滤
+// channels 为空切片时消费所有消息，否则只消费指定 channel 的消息
+func (b *MessageBus) ConsumeOutboundFiltered(ctx context.Context, channels []string) (*OutboundMessage, error) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
@@ -123,7 +141,7 @@ func (b *MessageBus) ConsumeOutbound(ctx context.Context) (*OutboundMessage, err
 	}
 
 	// 创建临时订阅
-	sub := b.SubscribeOutbound()
+	sub := b.SubscribeOutboundFiltered(channels)
 	defer sub.Unsubscribe()
 
 	// 等待消息
@@ -148,8 +166,8 @@ func (b *MessageBus) Close() error {
 
 	// 关闭所有订阅者的 channel
 	b.outSubsMu.Lock()
-	for _, ch := range b.outSubs {
-		close(ch)
+	for _, sub := range b.outSubs {
+		close(sub.ch)
 	}
 	// 清空 map
 	for k := range b.outSubs {
@@ -159,8 +177,8 @@ func (b *MessageBus) Close() error {
 
 	// 关闭聊天事件订阅者的 channel
 	b.chatSubsMu.Lock()
-	for _, ch := range b.chatSubs {
-		close(ch)
+	for _, sub := range b.chatSubs {
+		close(sub.ch)
 	}
 	for k := range b.chatSubs {
 		delete(b.chatSubs, k)
@@ -204,9 +222,10 @@ func (b *MessageBus) OutboundCount() int {
 
 // OutboundSubscription 出站消息订阅
 type OutboundSubscription struct {
-	ID      string
-	Channel <-chan *OutboundMessage
-	bus     *MessageBus
+	ID        string
+	Channel   <-chan *OutboundMessage
+	channels  []string        // 过滤的 channels，空切片表示订阅所有
+	bus       *MessageBus
 }
 
 // Unsubscribe 取消订阅
@@ -221,17 +240,27 @@ func (s *OutboundSubscription) Unsubscribe() {
 // 使用内部订阅机制，每个订阅者有独立的 channel
 // 返回一个 OutboundSubscription 对象，包含只读 channel 和取消订阅方法
 func (b *MessageBus) SubscribeOutbound() *OutboundSubscription {
+	return b.SubscribeOutboundFiltered(nil)
+}
+
+// SubscribeOutboundFiltered 订阅出站消息，按 channels 过滤
+// channels 为空切片时订阅所有消息，否则只订阅指定 channel 的消息
+func (b *MessageBus) SubscribeOutboundFiltered(channels []string) *OutboundSubscription {
 	b.outSubsMu.Lock()
 	defer b.outSubsMu.Unlock()
 
 	subID := uuid.New().String()
 	ch := make(chan *OutboundMessage, 100) // 每个订阅者有独立的缓冲
-	b.outSubs[subID] = ch
+	b.outSubs[subID] = &outboundSubscriber{
+		ch:       ch,
+		channels: channels,
+	}
 
 	return &OutboundSubscription{
-		ID:      subID,
-		Channel: ch,
-		bus:     b,
+		ID:       subID,
+		Channel:  ch,
+		channels: channels,
+		bus:      b,
 	}
 }
 
@@ -240,10 +269,10 @@ func (b *MessageBus) UnsubscribeOutbound(subID string) {
 	b.outSubsMu.Lock()
 	defer b.outSubsMu.Unlock()
 
-	ch, ok := b.outSubs[subID]
+	sub, ok := b.outSubs[subID]
 	if ok {
 		delete(b.outSubs, subID)
-		close(ch)
+		close(sub.ch)
 	}
 }
 
@@ -259,12 +288,16 @@ func (b *MessageBus) fanoutMessages() {
 			continue
 		}
 
-		// 转发到所有订阅者
+		// 转发到匹配的订阅者
 		b.outSubsMu.RLock()
-		for _, ch := range b.outSubs {
+		for _, sub := range b.outSubs {
+			// 检查是否匹配 channel 过滤条件
+			if !matchChannel(msg.Channel, sub.channels) {
+				continue
+			}
 			// 非阻塞发送，避免一个慢订阅者阻塞其他订阅者
 			select {
-			case ch <- msg:
+			case sub.ch <- msg:
 			default:
 			}
 		}
@@ -274,6 +307,20 @@ func (b *MessageBus) fanoutMessages() {
 	b.mu.Lock()
 	b.fanoutStopped = true
 	b.mu.Unlock()
+}
+
+// matchChannel 检查消息 channel 是否匹配订阅者的过滤条件
+// channels 为空切片表示订阅所有，否则需要精确匹配
+func matchChannel(msgChannel string, channels []string) bool {
+	if len(channels) == 0 {
+		return true // 空切片表示订阅所有
+	}
+	for _, c := range channels {
+		if c == msgChannel {
+			return true
+		}
+	}
+	return false
 }
 
 // OutboundChan 获取出站消息通道（已废弃）
@@ -326,9 +373,10 @@ func (b *MessageBus) PublishChatEvent(ctx context.Context, event *ChatEvent) err
 
 // ChatEventSubscription 聊天事件订阅
 type ChatEventSubscription struct {
-	ID      string
-	Channel <-chan *ChatEvent
-	bus     *MessageBus
+	ID        string
+	Channel   <-chan *ChatEvent
+	channels  []string        // 过滤的 channels，空切片表示订阅所有
+	bus       *MessageBus
 }
 
 // Unsubscribe 取消订阅
@@ -341,17 +389,27 @@ func (s *ChatEventSubscription) Unsubscribe() {
 
 // SubscribeChatEvent 订阅聊天事件
 func (b *MessageBus) SubscribeChatEvent() *ChatEventSubscription {
+	return b.SubscribeChatEventFiltered(nil)
+}
+
+// SubscribeChatEventFiltered 订阅聊天事件，按 channels 过滤
+// channels 为空切片时订阅所有事件，否则只订阅指定 channel 的事件
+func (b *MessageBus) SubscribeChatEventFiltered(channels []string) *ChatEventSubscription {
 	b.chatSubsMu.Lock()
 	defer b.chatSubsMu.Unlock()
 
 	subID := uuid.New().String()
 	ch := make(chan *ChatEvent, 100)
-	b.chatSubs[subID] = ch
+	b.chatSubs[subID] = &chatEventSubscriber{
+		ch:       ch,
+		channels: channels,
+	}
 
 	return &ChatEventSubscription{
-		ID:      subID,
-		Channel: ch,
-		bus:     b,
+		ID:       subID,
+		Channel:  ch,
+		channels: channels,
+		bus:      b,
 	}
 }
 
@@ -360,10 +418,10 @@ func (b *MessageBus) UnsubscribeChatEvent(subID string) {
 	b.chatSubsMu.Lock()
 	defer b.chatSubsMu.Unlock()
 
-	ch, ok := b.chatSubs[subID]
+	sub, ok := b.chatSubs[subID]
 	if ok {
 		delete(b.chatSubs, subID)
-		close(ch)
+		close(sub.ch)
 	}
 }
 
@@ -378,11 +436,15 @@ func (b *MessageBus) fanoutChatEvents() {
 			continue
 		}
 
-		// 转发到所有订阅者
+		// 转发到匹配的订阅者
 		b.chatSubsMu.RLock()
-		for _, ch := range b.chatSubs {
+		for _, sub := range b.chatSubs {
+			// 检查是否匹配 channel 过滤条件
+			if !matchChannel(event.Channel, sub.channels) {
+				continue
+			}
 			select {
-			case ch <- event:
+			case sub.ch <- event:
 			default:
 			}
 		}

@@ -4,10 +4,16 @@ import (
 	"time"
 )
 
+// Channel 常量定义
+const (
+	ChannelTUI    = "tui"
+	ChannelSystem = "system"
+)
+
 // InboundMessage 入站消息
 type InboundMessage struct {
 	ID        string                 `json:"id"`
-	Channel   string                 `json:"channel"`    // telegram, whatsapp, feishu, cli, system
+	Channel   string                 `json:"channel"`    // 使用 Channel* 常量 (ChannelTelegram, ChannelWhatsApp, ChannelFeishu, ChannelCLI, ChannelTUI, ChannelSystem)
 	AccountID string                 `json:"account_id"` // 账号ID（用于多账号场景）
 	SenderID  string                 `json:"sender_id"`  // 发送者ID
 	ChatID    string                 `json:"chat_id"`    // 聊天ID
@@ -34,7 +40,7 @@ func (m *InboundMessage) SessionKey() string {
 // OutboundMessage 出站消息
 type OutboundMessage struct {
 	ID        string                 `json:"id"`
-	Channel   string                 `json:"channel"`  // telegram, whatsapp, feishu, cli
+	Channel   string                 `json:"channel"`  // 使用 Channel* 常量
 	ChatID    string                 `json:"chat_id"`  // 聊天ID
 	Content   string                 `json:"content"`  // 消息内容
 	Media     []Media                `json:"media"`    // 媒体文件
@@ -53,7 +59,7 @@ type SystemMessage struct {
 
 // IsSystemMessage 判断是否为系统消息
 func (m *InboundMessage) IsSystemMessage() bool {
-	return m.Channel == "system"
+	return m.Channel == ChannelSystem
 }
 
 // ChatEvent 聊天事件（用于流式响应）
