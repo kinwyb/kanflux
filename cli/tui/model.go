@@ -34,8 +34,9 @@ const (
 type (
 	// AgentResponseMsg Agent响应消息
 	AgentResponseMsg struct {
-		Content string
-		Error   error
+		Content  string
+		Error    error
+		Metadata map[string]interface{} // 元数据，可携带命令返回的信息如新 chatID
 	}
 	// StreamMsg 流式消息
 	StreamMsg struct {
@@ -313,6 +314,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.currentAIMsg = msg.Content
 			m.addMessage("assistant", msg.Content, false)
 		}
+		// 处理元数据，如新 chatID
+		if msg.Metadata != nil {
+			if newChatID, ok := msg.Metadata[agent.MetadataKeyNewChatID].(string); ok && newChatID != "" {
+				m.chatID = newChatID
+				m.addLog("info", fmt.Sprintf("切换到新会话: %s", newChatID))
+			}
+		}
 		m.updateViewports()
 		return m, m.waitForResponse()
 
@@ -405,7 +413,7 @@ func (m *Model) View() string {
 	inputBox := m.styles.Input.Render(" 输入: " + m.input.View())
 
 	// 帮助提示
-	help := m.styles.Help.Render(" Ctrl+C退出 | Enter发送 | ↑↓对话 | ←→日志")
+	help := m.styles.Help.Render(" Ctrl+C退出 | Enter发送 | ↑↓对话 | ←→日志 | /help 查看命令")
 
 	// 组合界面
 	return lipgloss.JoinVertical(lipgloss.Left,
@@ -461,7 +469,7 @@ func (m *Model) sendMessage() tea.Cmd {
 			return AgentResponseMsg{Error: err}
 		}
 
-		return AgentResponseMsg{Content: resp.Content}
+		return AgentResponseMsg{Content: resp.Content, Metadata: resp.Metadata}
 	}
 }
 

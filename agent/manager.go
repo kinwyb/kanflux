@@ -23,13 +23,15 @@ type ResumeParamConverter func(msg *bus.InboundMessage, interruptInfo *Interrupt
 
 // Manager 管理多个 Agent 实例
 type Manager struct {
-	agents           map[string]*Agent // agentID -> Agent
-	defaultAgent     *Agent            // 默认 Agent
+	agents           map[string]*Agent            // agentID -> Agent
+	defaultAgent     *Agent                       // 默认 Agent
 	bus              *bus.MessageBus
 	sessionMgr       *session.Manager
 	mu               sync.RWMutex
 	resumeConverters map[reflect.Type]ResumeParamConverter // 按恢复参数类型注册转换器
 	converterMu      sync.RWMutex
+	commands         map[string]CommandHandler    // 命令注册表
+	commandsMu       sync.RWMutex
 }
 
 // NewManager 创建 Agent 管理器
@@ -39,6 +41,7 @@ func NewManager(msgBus *bus.MessageBus, sessionMgr *session.Manager) *Manager {
 		bus:              msgBus,
 		sessionMgr:       sessionMgr,
 		resumeConverters: make(map[reflect.Type]ResumeParamConverter),
+		commands:         make(map[string]CommandHandler),
 	}
 
 	// 注册 ApprovalResult 类型的转换器
@@ -59,6 +62,10 @@ func NewManager(msgBus *bus.MessageBus, sessionMgr *session.Manager) *Manager {
 			}, nil
 		},
 	)
+
+	// 注册默认命令
+	ret.registerDefaultCommands()
+
 	return ret
 }
 
@@ -114,6 +121,146 @@ func (m *Manager) RegisterResumeConverter(paramType reflect.Type, converter Resu
 func RegisterResumeConverterForType[T any](m *Manager, converter func(msg *bus.InboundMessage, interruptInfo *InterruptInfo) (T, error)) {
 	m.RegisterResumeConverter(reflect.TypeOf(new(T)).Elem(), func(msg *bus.InboundMessage, interruptInfo *InterruptInfo) (any, error) {
 		return converter(msg, interruptInfo)
+	})
+}
+
+// RegisterCommand 注册命令处理器
+// cmd: 命令名称（不含斜杠，如 "help"）
+// handler: 命令处理器
+func (m *Manager) RegisterCommand(cmd string, handler CommandHandler) {
+	m.commandsMu.Lock()
+	defer m.commandsMu.Unlock()
+	m.commands[cmd] = handler
+}
+
+// RegisterCommandFunc 注册命令处理函数
+func (m *Manager) RegisterCommandFunc(cmd string, handler CommandHandlerFunc) {
+	m.RegisterCommand(cmd, handler)
+}
+
+// GetCommandHandler 获取命令处理器
+func (m *Manager) GetCommandHandler(cmd string) (CommandHandler, bool) {
+	m.commandsMu.RLock()
+	defer m.commandsMu.RUnlock()
+	handler, ok := m.commands[cmd]
+	return handler, ok
+}
+
+// ListCommands 列出所有注册的命令
+func (m *Manager) ListCommands() []string {
+	m.commandsMu.RLock()
+	defer m.commandsMu.RUnlock()
+	cmds := make([]string, 0, len(m.commands))
+	for cmd := range m.commands {
+		cmds = append(cmds, "/"+cmd)
+	}
+	return cmds
+}
+
+// registerDefaultCommands 注册默认命令
+func (m *Manager) registerDefaultCommands() {
+	// /help - 显示帮助信息
+	m.RegisterCommandFunc("help", func(ctx context.Context, cmd string, args []string, msg *bus.InboundMessage) *CommandResult {
+		helpText := `可用命令:
+  /help          - 显示帮助信息
+  /agents        - 列出所有 Agent
+  /sessions      - 列出所有会话
+  /commands      - 列出所有可用命令
+  /new           - 开始新会话
+  /clear         - 清空当前会话历史
+  /status        - 显示系统状态
+
+其他消息将由 AI Agent 处理。`
+		return &CommandResult{
+			Content:     helpText,
+			SkipAgent:   true,
+			ShouldReply: true,
+		}
+	})
+
+	// /agents - 列出所有 Agent
+	m.RegisterCommandFunc("agents", func(ctx context.Context, cmd string, args []string, msg *bus.InboundMessage) *CommandResult {
+		result, _ := m.listAgentsCommand()
+		return &CommandResult{
+			Content:     result,
+			SkipAgent:   true,
+			ShouldReply: true,
+		}
+	})
+
+	// /sessions - 列出所有会话
+	m.RegisterCommandFunc("sessions", func(ctx context.Context, cmd string, args []string, msg *bus.InboundMessage) *CommandResult {
+		result, _ := m.listSessionsCommand()
+		return &CommandResult{
+			Content:     result,
+			SkipAgent:   true,
+			ShouldReply: true,
+		}
+	})
+
+	// /commands - 列出所有命令
+	m.RegisterCommandFunc("commands", func(ctx context.Context, cmd string, args []string, msg *bus.InboundMessage) *CommandResult {
+		cmds := m.ListCommands()
+		var sb strings.Builder
+		sb.WriteString("可用命令:\n")
+		for _, c := range cmds {
+			sb.WriteString(fmt.Sprintf("  %s\n", c))
+		}
+		return &CommandResult{
+			Content:     sb.String(),
+			SkipAgent:   true,
+			ShouldReply: true,
+		}
+	})
+
+	// /new - 开始新会话
+	m.RegisterCommandFunc("new", func(ctx context.Context, cmd string, args []string, msg *bus.InboundMessage) *CommandResult {
+		// 生成新的 chatID
+		newChatID := fmt.Sprintf("NEW_%d", time.Now().UnixNano())
+		return &CommandResult{
+			Content:   fmt.Sprintf("已开始新会话: %s", newChatID),
+			SkipAgent: true,
+			ShouldReply: true,
+			Metadata: map[string]interface{}{
+				MetadataKeyNewChatID: newChatID,
+			},
+		}
+	})
+
+	// /clear - 清空当前会话历史
+	m.RegisterCommandFunc("clear", func(ctx context.Context, cmd string, args []string, msg *bus.InboundMessage) *CommandResult {
+		sessionKey := fmt.Sprintf("%s:%s:%s", msg.Channel, msg.AccountID, msg.ChatID)
+		sess, err := m.sessionMgr.GetOrCreate(sessionKey)
+		if err != nil {
+			return &CommandResult{
+				Content:     fmt.Sprintf("获取会话失败: %v", err),
+				SkipAgent:   true,
+				ShouldReply: true,
+				Error:       err,
+			}
+		}
+		sess.Clear()
+		m.sessionMgr.Save(sess)
+		return &CommandResult{
+			Content:     "已清空当前会话历史",
+			SkipAgent:   true,
+			ShouldReply: true,
+		}
+	})
+
+	// /status - 显示系统状态
+	m.RegisterCommandFunc("status", func(ctx context.Context, cmd string, args []string, msg *bus.InboundMessage) *CommandResult {
+		var sb strings.Builder
+		sb.WriteString("系统状态:\n")
+		sb.WriteString(fmt.Sprintf("  Agents: %d\n", len(m.agents)))
+		sessions, _ := m.sessionMgr.List()
+		sb.WriteString(fmt.Sprintf("  Sessions: %d\n", len(sessions)))
+		sb.WriteString(fmt.Sprintf("  Commands: %d\n", len(m.commands)))
+		return &CommandResult{
+			Content:     sb.String(),
+			SkipAgent:   true,
+			ShouldReply: true,
+		}
 	})
 }
 
@@ -197,6 +344,56 @@ func (m *Manager) processMessages(ctx context.Context) {
 
 // RouteInbound 路由入站消息到对应的 Agent
 func (m *Manager) RouteInbound(ctx context.Context, msg *bus.InboundMessage) error {
+	// 检查是否是命令
+	cmd, args, isCommand := ParseCommand(msg.Content)
+	if isCommand {
+		// 查找命令处理器
+		handler, ok := m.GetCommandHandler(cmd)
+		if ok {
+			// 处理命令
+			result := handler.Handle(ctx, cmd, args, msg)
+
+			// 如果有错误，发布错误事件
+			if result.Error != nil {
+				m.publishChatEvent(ctx, msg.Channel, msg.ChatID, bus.ChatEventStateError, result.Error.Error(), 0)
+			}
+
+			// 如果需要回复，发布到 outbound
+			if result.ShouldReply && result.Content != "" {
+				// 合并命令元数据到 outbound 消息
+				outboundMeta := make(map[string]interface{})
+				if msg.Metadata != nil {
+					for k, v := range msg.Metadata {
+						outboundMeta[k] = v
+					}
+				}
+				if result.Metadata != nil {
+					for k, v := range result.Metadata {
+						outboundMeta[k] = v
+					}
+				}
+
+				outbound := &bus.OutboundMessage{
+					Channel:   msg.Channel,
+					ChatID:    msg.ChatID,
+					Content:   result.Content,
+					Media:     result.Media,
+					ReplyTo:   msg.ID,
+					Timestamp: time.Now(),
+					Metadata:  outboundMeta,
+				}
+				if err := m.bus.PublishOutbound(ctx, outbound); err != nil {
+					return err
+				}
+			}
+
+			// 如果跳过 agent，直接返回
+			if result.SkipAgent {
+				return result.Error
+			}
+		}
+	}
+
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -423,31 +620,29 @@ func (m *Manager) PublishSystemMessage(ctx context.Context, content string, meta
 	return m.bus.PublishInbound(ctx, inbound)
 }
 
-// HandleCommand 处理命令
-func (m *Manager) HandleCommand(ctx context.Context, cmd string, args []string) (string, error) {
-	parts := strings.Fields(cmd)
-	if len(parts) == 0 {
-		return "", fmt.Errorf("empty command")
-	}
-
-	command := parts[0]
-	switch command {
-	case "/agents":
-		return m.listAgentsCommand()
-	case "/sessions":
-		return m.listSessionsCommand()
-	default:
-		// 使用默认 Agent 处理
+// HandleCommand 处理命令（独立调用，不经过消息总线）
+func (m *Manager) HandleCommand(ctx context.Context, content string) (string, error) {
+	cmd, args, isCommand := ParseCommand(content)
+	if !isCommand {
+		// 不是命令，使用 agent 处理
 		agent := m.GetDefaultAgent()
 		if agent == nil {
 			return "", fmt.Errorf("no agent available")
 		}
-		resp, err := agent.Prompt(ctx, []adk.Message{schema.UserMessage(cmd)}, "")
+		resp, err := agent.Prompt(ctx, []adk.Message{schema.UserMessage(content)}, "")
 		if err != nil {
 			return "", err
 		}
 		return resp[len(resp)-1].Content, nil
 	}
+
+	handler, ok := m.GetCommandHandler(cmd)
+	if !ok {
+		return "", fmt.Errorf("unknown command: /%s", cmd)
+	}
+
+	result := handler.Handle(ctx, cmd, args, nil)
+	return result.Content, result.Error
 }
 
 // listAgentsCommand 列出所有 Agent
