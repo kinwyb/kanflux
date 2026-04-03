@@ -269,8 +269,8 @@ func (m *Manager) handleInboundMessage(ctx context.Context, msg *bus.InboundMess
 	} else {
 		// 正常处理新消息
 
-		// 将用户消息添加到 session
-		userMsg := schema.UserMessage(msg.Content)
+		// 将用户消息添加到 session（支持媒体内容）
+		userMsg := buildUserMessage(msg.Content, msg.Media)
 		newMessages := append(history, userMsg)
 
 		// 使用 Agent 处理消息
@@ -321,11 +321,15 @@ func (m *Manager) handleInboundMessage(ctx context.Context, msg *bus.InboundMess
 	// 发布聊天事件结束
 	m.publishChatEvent(ctx, msg.Channel, msg.ChatID, bus.ChatEventStateFinal, response.Content, eventSeq)
 
+	// 提取响应中的媒体内容
+	responseMedia := extractMediaFromMessage(response)
+
 	// 发布到总线
 	outbound := &bus.OutboundMessage{
 		Channel:   msg.Channel,
 		ChatID:    msg.ChatID,
 		Content:   response.Content,
+		Media:     responseMedia,
 		ReplyTo:   msg.ID,
 		Timestamp: time.Now(),
 	}
