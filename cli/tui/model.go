@@ -339,7 +339,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.State {
 		case bus.ChatEventStateThinking:
 			m.status = "思考中..."
-			m.currentThinking = msg.Content
+			m.currentThinking += msg.Content // 累加思考内容
 		case bus.ChatEventStateDelta:
 			m.status = "生成中..."
 			m.currentAIMsg += msg.Content
