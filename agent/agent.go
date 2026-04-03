@@ -4,11 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/kinwyb/kanflux/agent/tools"
 	"io"
 	"log/slog"
 	"reflect"
 	"sync"
+
+	"github.com/kinwyb/kanflux/agent/tools"
 
 	localbk "github.com/cloudwego/eino-ext/adk/backend/local"
 	"github.com/cloudwego/eino/adk"
@@ -33,7 +34,7 @@ type Config struct {
 	Workspace    string
 	MaxIteration int
 	ToolRegister *tools.Registry
-	SkillDir     string
+	SkillDirs    []string // 支持多个 skill 目录
 	Streaming    bool
 }
 
@@ -89,15 +90,21 @@ func NewAgent(ctx context.Context, cfg *Config) (*Agent, error) {
 			},
 		}
 	}
-	if cfg.SkillDir != "" {
-		skillBackend, _ := skill.NewBackendFromFilesystem(ctx, &skill.BackendFromFilesystemConfig{
-			Backend: backend,
-			BaseDir: cfg.SkillDir,
-		})
-		skillMiddleware, _ := skill.NewMiddleware(ctx, &skill.Config{
-			Backend: skillBackend,
-		})
-		agentConfig.Handlers = append(agentConfig.Handlers, skillMiddleware)
+	if len(cfg.SkillDirs) > 0 {
+		skillBackends, err := NewSkillBackends(ctx, backend, cfg.SkillDirs)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create skill backends: %w", err)
+		}
+		if len(skillBackends) > 0 {
+			multiSkillBackend := NewMultiSkillBackend(skillBackends...)
+			skillMiddleware, err := skill.NewMiddleware(ctx, &skill.Config{
+				Backend: multiSkillBackend,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("failed to create skill middleware: %w", err)
+			}
+			agentConfig.Handlers = append(agentConfig.Handlers, skillMiddleware)
+		}
 	}
 	ag, err := deep.New(ctx, agentConfig)
 	if err != nil {

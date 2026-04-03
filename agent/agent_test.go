@@ -38,7 +38,7 @@ func TestNewAgent(t *testing.T) {
 		Workspace:    workSpace,
 		MaxIteration: 10,
 		ToolRegister: reg,
-		SkillDir:     "/Users/wangyingbin/Downloads/bodacli/skills",
+		SkillDirs:    []string{"/Users/wangyingbin/Downloads/bodacli/skills"},
 	}
 	agent, err := NewAgent(ctx, cfg)
 	if err != nil {
