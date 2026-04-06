@@ -506,7 +506,7 @@ func (m *Manager) RouteInbound(ctx context.Context, msg *bus.InboundMessage) err
 
 			// 如果有错误，发布错误事件
 			if result.Error != nil {
-				m.publishChatEvent(ctx, msg.Channel, msg.ChatID, bus.ChatEventStateError, result.Error.Error(), 0)
+				m.publishChatEvent(ctx, msg.Channel, msg.ChatID, "command", bus.ChatEventStateError, result.Error.Error(), 0)
 			}
 
 			// 如果需要回复，发布到 outbound
@@ -560,6 +560,9 @@ func (m *Manager) RouteInbound(ctx context.Context, msg *bus.InboundMessage) err
 
 // handleInboundMessage 处理入站消息
 func (m *Manager) handleInboundMessage(ctx context.Context, msg *bus.InboundMessage, agent *Agent) error {
+	// 获取 agent 名称
+	agentName := agent.cfg.Name
+
 	// 生成会话键
 	sessionKey := fmt.Sprintf("%s:%s:%s", msg.Channel, msg.AccountID, msg.ChatID)
 	if msg.ChatID == "default" || msg.ChatID == "" {
@@ -571,14 +574,14 @@ func (m *Manager) handleInboundMessage(ctx context.Context, msg *bus.InboundMess
 		return err
 	}
 
-	// 注册回调，通过闭包携带 msg 信息
+	// 注册回调，通过闭包携带 msg 和 agentName 信息
 	eventSeq := 0
 	cbID := agent.RegisterCallback(func(event *Event) {
 		if event == nil {
 			return
 		}
 		eventSeq++
-		m.handleAgentEvent(ctx, msg, event, eventSeq)
+		m.handleAgentEvent(ctx, msg, agentName, event, eventSeq)
 	})
 
 	var responses []adk.Message
@@ -644,7 +647,7 @@ func (m *Manager) handleInboundMessage(ctx context.Context, msg *bus.InboundMess
 			}
 			return nil
 		}
-		m.publishChatEvent(ctx, msg.Channel, msg.ChatID, bus.ChatEventStateError, err.Error(), eventSeq)
+		m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateError, err.Error(), eventSeq)
 		return err
 	}
 
@@ -667,7 +670,7 @@ func (m *Manager) handleInboundMessage(ctx context.Context, msg *bus.InboundMess
 	response := responses[len(responses)-1]
 
 	// 发布聊天事件结束
-	m.publishChatEvent(ctx, msg.Channel, msg.ChatID, bus.ChatEventStateFinal, response.Content, eventSeq)
+	m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateFinal, response.Content, eventSeq)
 
 	// 提取响应中的媒体内容
 	responseMedia := extractMediaFromMessage(response)
@@ -690,21 +693,21 @@ func (m *Manager) handleInboundMessage(ctx context.Context, msg *bus.InboundMess
 }
 
 // handleAgentEvent 处理 Agent 事件，转发到消息总线
-func (m *Manager) handleAgentEvent(ctx context.Context, msg *bus.InboundMessage, event *Event, seq int) {
+func (m *Manager) handleAgentEvent(ctx context.Context, msg *bus.InboundMessage, agentName string, event *Event, seq int) {
 	switch event.Type {
 	case EventMessageStart:
-		//m.publishChatEvent(ctx, msg.Channel, msg.ChatID, bus.ChatEventStateDelta, "", seq)
+		//m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateDelta, "", seq)
 	case EventMessageUpdate:
 		if event.Message != nil {
 			if event.Message.ReasoningContent != "" {
-				m.publishChatEvent(ctx, msg.Channel, msg.ChatID, bus.ChatEventStateThinking, event.Message.ReasoningContent, seq)
+				m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateThinking, event.Message.ReasoningContent, seq)
 			} else {
-				m.publishChatEvent(ctx, msg.Channel, msg.ChatID, bus.ChatEventStateDelta, event.Message.Content, seq)
+				m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateDelta, event.Message.Content, seq)
 			}
 		}
 	case EventMessageEnd:
 		if event.Message != nil {
-			m.publishChatEvent(ctx, msg.Channel, msg.ChatID, bus.ChatEventStateFinal, event.Message.Content, seq)
+			m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateFinal, event.Message.Content, seq)
 		}
 	case EventToolStart:
 		if event.Message != nil && len(event.Message.ToolCalls) > 0 {
@@ -713,25 +716,26 @@ func (m *Manager) handleAgentEvent(ctx context.Context, msg *bus.InboundMessage,
 				"tool_id":   event.Message.ToolCalls[0].ID,
 				"args":      event.Message.ToolCalls[0].Function.Arguments,
 			}
-			m.publishChatEvent(ctx, msg.Channel, msg.ChatID, bus.ChatEventStateTool, fmt.Sprintf("%v", toolInfo), seq)
+			m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateTool, fmt.Sprintf("%v", toolInfo), seq)
 		}
 	case EventToolEnd:
 		if event.Message != nil {
 			toolInfo := map[string]interface{}{
 				"tool_result": event.Message.Content,
 			}
-			m.publishChatEvent(ctx, msg.Channel, msg.ChatID, bus.ChatEventStateTool, fmt.Sprintf("%v", toolInfo), seq)
+			m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateTool, fmt.Sprintf("%v", toolInfo), seq)
 		}
 	case EventInterrupt:
-		m.publishChatEvent(ctx, msg.Channel, msg.ChatID, bus.ChatEventStateInterrupt, event.Message.Content, seq)
+		m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateInterrupt, event.Message.Content, seq)
 	}
 }
 
 // publishChatEvent 发布聊天事件到总线
-func (m *Manager) publishChatEvent(ctx context.Context, channel, chatID, state string, content string, seq int) {
+func (m *Manager) publishChatEvent(ctx context.Context, channel, chatID, agentName, state string, content string, seq int) {
 	event := &bus.ChatEvent{
 		Channel:   channel,
 		ChatID:    chatID,
+		AgentName: agentName,
 		State:     state,
 		Content:   content,
 		Seq:       seq,

@@ -69,10 +69,11 @@ type ChatEvent struct {
 	ChatID    string      `json:"chat_id"`
 	RunID     string      `json:"run_id"`
 	Seq       int         `json:"seq"`
-	State     string      `json:"state"`   // "delta", "thinking", "tool", "final", "error", "interrupt"
-	Content   string      `json:"content"` // 增量内容
-	Message   string      `json:"message"` // 完整消息（final 时）
-	Error     string      `json:"error"`   // 错误信息
+	AgentName string      `json:"agent_name"` // Agent 名称
+	State     string      `json:"state"`      // "delta", "thinking", "tool", "final", "error", "interrupt"
+	Content   string      `json:"content"`    // 增量内容
+	Message   string      `json:"message"`    // 完整消息（final 时）
+	Error     string      `json:"error"`      // 错误信息
 	Timestamp time.Time   `json:"timestamp"`
 	Metadata  interface{} `json:"metadata,omitempty"`
 }
