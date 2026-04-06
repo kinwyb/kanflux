@@ -361,14 +361,26 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.currentThinking = ""
 		m.currentToolInfo = ""
-		// 不再重复记录"响应完成"日志（ChatEventStateFinal 已记录）
+
+		// 检查错误（msg.Error 或 metadata 中的 error）
+		var errMsg string
 		if msg.Error != nil {
-			m.currentAIMsg = fmt.Sprintf("错误: %v", msg.Error)
+			errMsg = msg.Error.Error()
+		} else if msg.Metadata != nil {
+			if errStr, ok := msg.Metadata["error"].(string); ok && errStr != "" {
+				errMsg = errStr
+			}
+		}
+
+		if errMsg != "" {
+			m.currentAIMsg = fmt.Sprintf("错误: %s", errMsg)
 			m.addMessage("assistant", m.currentAIMsg, "")
+			m.addLog("error", errMsg)
 		} else {
 			m.currentAIMsg = msg.Content
 			m.addMessage("assistant", msg.Content, thinkingContent)
 		}
+
 		// 处理元数据，如新 chatID
 		if msg.Metadata != nil {
 			if newChatID, ok := msg.Metadata[agent.MetadataKeyNewChatID].(string); ok && newChatID != "" {

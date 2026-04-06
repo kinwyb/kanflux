@@ -648,11 +648,37 @@ func (m *Manager) handleInboundMessage(ctx context.Context, msg *bus.InboundMess
 			}
 			return nil
 		}
+		// 发布错误事件
 		m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateError, err.Error(), eventSeq)
+		// 同时发布 OutboundMessage，确保调用方能收到响应不会卡住
+		outbound := &bus.OutboundMessage{
+			Channel:   msg.Channel,
+			ChatID:    msg.ChatID,
+			Content:   "",
+			ReplyTo:   msg.ID,
+			Timestamp: time.Now(),
+			Metadata: map[string]interface{}{
+				"error": err.Error(),
+			},
+		}
+		if pubErr := m.bus.PublishOutbound(ctx, outbound); pubErr != nil {
+			m.log(ctx, bus.LogLevelError, "manager", fmt.Sprintf("Failed to publish error outbound: %v", pubErr))
+		}
 		return err
 	}
 
 	if len(responses) == 0 {
+		// 没有响应，发布空响应确保调用方不会卡住
+		outbound := &bus.OutboundMessage{
+			Channel:   msg.Channel,
+			ChatID:    msg.ChatID,
+			Content:   "",
+			ReplyTo:   msg.ID,
+			Timestamp: time.Now(),
+		}
+		if pubErr := m.bus.PublishOutbound(ctx, outbound); pubErr != nil {
+			m.log(ctx, bus.LogLevelError, "manager", fmt.Sprintf("Failed to publish empty outbound: %v", pubErr))
+		}
 		return nil
 	}
 
