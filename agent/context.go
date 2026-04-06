@@ -33,9 +33,7 @@ func (b *ContextBuilder) BuildSystemPrompt() string {
 	parts = append(parts, b.buildIdentity())
 
 	// 2. Memory 上下文
-	if memoryContext, err := b.memory.GetMemoryContext(); err == nil && memoryContext != "" {
-		parts = append(parts, "## Memory (injected)\n\n"+memoryContext)
-	}
+	parts = append(parts, b.buildMemory())
 
 	// 3. 安全提示
 	parts = append(parts, b.buildSafety())
@@ -48,13 +46,14 @@ func (b *ContextBuilder) BuildSystemPrompt() string {
 
 // buildIdentityAndTools 构建核心身份和工具列表
 func (b *ContextBuilder) buildIdentity() string {
+	identity, _ := b.memory.ReadBootstrapFile("IDENTITY.md")
+	if identity == "" {
+		identity = "You are a personal AI assistant running on the user's system."
+	}
+	agent, _ := b.memory.ReadBootstrapFile("AGENTS.md")
+
 	now := time.Now()
-
-	return fmt.Sprintf(`# Identity
-
-You are **KanFlux**, a personal AI assistant running on the user's system.
-You are NOT a passive chat bot. You are a **DOER** that executes tasks directly.
-Your mission: complete user requests using all available means, minimizing human intervention.
+	return fmt.Sprintf(`%s
 
 ### Work Information
 
@@ -63,30 +62,15 @@ Your mission: complete user requests using all available means, minimizing human
 
 IMPORTANT: When using filesystem tools (ls, read_file, glob, grep, etc.), you MUST use absolute paths.
 
-### Task Complexity Guidelines
+%s
+`, identity,
+		now.Format("2006-01-02 15:04:05 MST"),
+		b.workspace, agent)
+}
 
-- **Simple tasks**: Use tools directly
-- **Moderate tasks**: Use tools, narrate key steps
-- **Complex/Long tasks**: Consider spawning a sub-agent. Completion is push-based: it will auto-announce when done
-- **For long waits**: Avoid rapid poll loops. Use run_shell with background mode, or process(action=poll, timeout=<ms>)
-
-### Skill-First Workflow (HIGHEST PRIORITY)
-
-1. **ALWAYS check the Skills section first** before using any other tools
-2. If a matching skill is found, use the use_skill tool with the skill name
-3. If no matching skill: use built-in tools
-4. Only after checking skills should you proceed with built-in tools
-
-### Core Rules
-
-- For ANY search request ("search for", "find", "google search", etc.): IMMEDIATELY call web_search tool. DO NOT provide manual instructions or advice.
-- When the user asks for information: USE YOUR TOOLS to get it. Do NOT explain how to get it.
-- DO NOT tell the user "I cannot" or "here's how to do it yourself". ACTUALLY DO IT with tools.
-- If you have tools available for a task, use them. No permission needed for safe operations.
-- **NEVER HALLUCINATE SEARCH RESULTS**: When presenting search results, ONLY use the exact data returned by the tool. If no results were found, clearly state that no results were found.
-- When a tool fails: analyze the error, try an alternative approach WITHOUT asking the user unless absolutely necessary.
-
-### Memory Management
+// ContextBuilder 构建记忆
+func (b *ContextBuilder) buildMemory() string {
+	memory := `### Memory Management
 
 You have memory_tool tool available,have two type (long,today) for save memory content:
 
@@ -98,9 +82,13 @@ You have memory_tool tool available,have two type (long,today) for save memory c
   - Use for: Temporary notes, daily reminders, session-specific information, quick references
   - Example: Meeting notes, to-do items, session progress, temporary context
 
-**When to use memory**: When you encounter information that seems worth remembering for future interactions,summary inforation content, use the appropriate memory tool to store it. Be concise and factual.`,
-		now.Format("2006-01-02 15:04:05 MST"),
-		b.workspace)
+**When to use memory**: When you encounter information that seems worth remembering for future interactions,summary inforation content, use the appropriate memory tool to store it. Be concise and factual.
+
+`
+	if memoryContext, err := b.memory.GetMemoryContext(); err == nil && memoryContext != "" {
+		memory = memory + "## Memory (injected)\n\n" + memoryContext
+	}
+	return memory
 }
 
 // buildSafety 构建安全提示

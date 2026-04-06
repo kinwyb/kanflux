@@ -263,13 +263,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.sendMessage()
 			}
 		case tea.KeyUp:
+			m.logViewport.ScrollUp(1)
 			m.chatViewport.ScrollUp(1)
 		case tea.KeyDown:
+			m.logViewport.ScrollDown(1)
 			m.chatViewport.ScrollDown(1)
 		case tea.KeyLeft:
 			m.logViewport.ScrollLeft(1)
+			m.chatViewport.ScrollLeft(1)
 		case tea.KeyRight:
 			m.logViewport.ScrollRight(1)
+			m.chatViewport.ScrollRight(1)
 		}
 
 	case tea.WindowSizeMsg:
