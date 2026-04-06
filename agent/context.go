@@ -70,34 +70,42 @@ IMPORTANT: When using filesystem tools (ls, read_file, glob, grep, etc.), you MU
 
 // ContextBuilder 构建记忆
 func (b *ContextBuilder) buildMemory() string {
-	memory := `### Memory Management
+	memory := fmt.Sprintf(`# Memory Management
 
-You have memory_tool to manage memory content with two types and two actions:
+You have memory_tool to manage memory content.
 
 **Types**:
-- **long**: Long-term memory stored in MEMORY.md
-  - File: <workspace>/memory/MEMORY.md
-  - Use for: Facts, user preferences, important decisions, project information that should persist across sessions
+- **long**: Long-term memory - for facts, preferences, important decisions
+- **day**: Daily notes - for temporary notes, daily tasks
 
-- **today**: Today's daily notes
-  - File: <workspace>/memory/days/YYYY-MM-DD.md
-  - Use for: Temporary notes, daily reminders, session-specific information, quick references
+**Memory Files**:
+- Long-term: %s/memory/MEMORY.md
+- Daily notes: %s/memory/days/YYYY-MM-DD.md
 
 **Actions**:
-- **append**: Add new content to existing memory (default)
-- **replace**: Overwrite the entire memory file with new content
+- **read**: Get current memory content
+- **append**: Add content to the end
+- **edit**: Replace specific text (requires old_text and new_text)
+- **write**: Overwrite entire memory
 
-**When to replace vs append**:
-- Use **replace** when: correcting outdated information, reorganizing memory structure, removing redundant content, or consolidating multiple entries
-- Use **append** when: adding new facts, recording new preferences, logging session progress
+**Parameters**:
+- date: Specify date for daily notes (YYYY-MM-DD format, defaults to today)
+
+**Examples**:
+- Read today's notes: action=read, type=day
+- Read specific date: action=read, type=day, date=2026-04-07
+- Append to long-term: action=append, type=long, content="User prefers dark mode"
+- Edit memory: action=edit, type=long, old_text="old content", new_text="new content"
 
 **Additional Memory Files**:
-- **SOUL.md** (<workspace>/memory/SOUL.md): Your personality and behavioral guidelines. Edit this file when you learn user preferences about your behavior.
-- **USER.md** (<workspace>/memory/USER.md): User information for personalized assistance. Edit this file when you learn about the user's role, expertise, or preferences.
+- %s/memory/SOUL.md - Your personality and behavioral guidelines
+- %s/memory/USER.md - User information for personalized assistance
+- %s/memory/IDENTITY.md - Core identity definition
+- %s/memory/AGENTS.md - Agent behavior guidelines
 
-**When to use memory**: When you encounter information worth remembering for future interactions, use memory_tool. Be concise and factual.
+Edit these files when you learn user preferences.
 
-`
+`, b.workspace, b.workspace, b.workspace, b.workspace, b.workspace, b.workspace)
 
 	if memoryContext, err := b.memory.GetMemoryContext(); err == nil && memoryContext != "" {
 		memory = memory + "## Memory (injected)\n\n" + memoryContext

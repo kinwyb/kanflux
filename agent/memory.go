@@ -138,25 +138,35 @@ func (m *MemoryStore) AppendLongTerm(content string) error {
 	return nil
 }
 
-// ReplaceLongTerm 替换长期记忆（覆盖整个文件）
-func (m *MemoryStore) ReplaceLongTerm(content string) error {
+// WriteLongTerm 写入长期记忆（覆盖整个文件）
+func (m *MemoryStore) WriteLongTerm(content string) error {
 	path := m.longTermFilePath()
 	return os.WriteFile(path, []byte(content), 0644)
 }
 
-// ReplaceToday 替换今日笔记（覆盖整个文件）
-func (m *MemoryStore) ReplaceToday(content string) error {
-	today := time.Now().Format("2006-01-02")
-	return m.ReplaceDay(today, content)
-}
-
-// ReplaceDay 替换指定日期的笔记（覆盖整个文件）
-func (m *MemoryStore) ReplaceDay(date, content string) error {
+// WriteDay 写入指定日期的笔记（覆盖整个文件）
+func (m *MemoryStore) WriteDay(date, content string) error {
 	path, err := m.dayFilePath(date)
 	if err != nil {
 		return err
 	}
 	return os.WriteFile(path, []byte(content), 0644)
+}
+
+// ReplaceLongTerm 替换长期记忆（WriteLongTerm 的别名）
+func (m *MemoryStore) ReplaceLongTerm(content string) error {
+	return m.WriteLongTerm(content)
+}
+
+// ReplaceToday 替换今日笔记
+func (m *MemoryStore) ReplaceToday(content string) error {
+	today := time.Now().Format("2006-01-02")
+	return m.WriteDay(today, content)
+}
+
+// ReplaceDay 替换指定日期的笔记（WriteDay 的别名）
+func (m *MemoryStore) ReplaceDay(date, content string) error {
+	return m.WriteDay(date, content)
 }
 
 // GetMemoryContext 获取格式化的记忆上下文
