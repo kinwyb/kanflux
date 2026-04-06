@@ -399,9 +399,9 @@ func buildSubAgentPrompt(ctx context.Context, subAgents []adk.Agent) string {
 	}
 
 	var prompt strings.Builder
-	prompt.WriteString("\n\n---\n\n## 子 Agent 任务分配\n\n")
-	prompt.WriteString("你是监督者 Agent，负责协调多个子 Agent 来完成任务。")
-	prompt.WriteString("你可以将任务分配给以下子 Agent 处理：\n\n")
+	prompt.WriteString("\n\n---\n\n## Sub-Agent Task Assignment\n\n")
+	prompt.WriteString("You are a Supervisor Agent responsible for coordinating multiple sub-agents to complete tasks.")
+	prompt.WriteString("You can delegate tasks to the following sub-agents:\n\n")
 
 	for _, agent := range subAgents {
 		name := agent.Name(ctx)
@@ -409,10 +409,10 @@ func buildSubAgentPrompt(ctx context.Context, subAgents []adk.Agent) string {
 		prompt.WriteString(fmt.Sprintf("- **%s**: %s\n", name, desc))
 	}
 
-	prompt.WriteString("\n### 任务分配指导\n\n")
-	prompt.WriteString("根据任务类型和子 Agent 的能力描述，将合适的任务分配给对应的子 Agent。\n")
-	prompt.WriteString("分配任务时，请提供清晰的任务描述和期望的输出格式。\n")
-	prompt.WriteString("子 Agent 完成任务后会返回结果，你需要整合结果并决定下一步行动。\n")
+	prompt.WriteString("\n### Task Assignment Guidelines\n\n")
+	prompt.WriteString("Assign tasks to the appropriate sub-agent based on task type and the sub-agent's capability description.\n")
+	prompt.WriteString("When delegating a task, provide a clear task description and expected output format.\n")
+	prompt.WriteString("After a sub-agent completes a task, it will return the result. You need to integrate the results and decide the next action.\n")
 
 	return prompt.String()
 }

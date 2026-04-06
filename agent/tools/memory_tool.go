@@ -216,7 +216,7 @@ func (t *MemoryTool) Name() string {
 
 // Description 返回工具描述
 func (t *MemoryTool) Description() string {
-	return "Manage memory content. Use type='long' for long-term memory (MEMORY.md) or type='today' for today's notes. Use action='append' to add content, or action='replace' to overwrite the entire file."
+	return "Manage memory content. IMPORTANT: The 'content' parameter is REQUIRED and must contain the actual content to be remembered. Without content, this tool cannot function. Use type='long' for long-term memory (MEMORY.md) or type='today' for today's notes. Use action='append' to add content, or action='replace' to overwrite the entire file."
 }
 
 // Parameters 返回参数定义
@@ -226,7 +226,7 @@ func (t *MemoryTool) Parameters() map[string]interface{} {
 		"properties": map[string]interface{}{
 			"content": map[string]interface{}{
 				"type":        "string",
-				"description": "The content to write to memory",
+				"description": "REQUIRED: The actual content to be remembered. This is the information you want to store in memory. DO NOT omit this parameter. Example: 'User prefers dark mode in the editor'",
 			},
 			"type": map[string]interface{}{
 				"type":        "string",
