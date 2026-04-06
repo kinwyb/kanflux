@@ -219,9 +219,59 @@ Your mission: complete user requests using all available means, minimizing human
 - When a tool fails: analyze the error, try an alternative approach WITHOUT asking the user unless absolutely necessary.
 `
 			case "SOUL.md":
-				defaultContent = "# Agent Soul\n\nThis file defines the agent's personality and core principles."
+				defaultContent = `# Agent Soul
+
+This file defines the agent's personality, behavior patterns, and core principles.
+
+## File Location
+
+This file is located at: <workspace>/memory/SOUL.md
+
+You can edit this file to update your personality and behavioral guidelines.
+
+## Purpose
+
+- Store learned preferences about how the user likes to work
+- Record behavioral guidelines that improve over time
+- Define the agent's character and interaction style
+
+## When to Update
+
+You should proactively update this file when:
+- The user expresses preferences about your behavior (e.g., "be more concise", "explain in detail")
+- You discover patterns that improve the user's experience
+- The user gives feedback about your responses
+- You learn what works best for this specific user
+
+This file evolves with your interactions to better serve the user.
+`
 			case "USER.md":
-				defaultContent = "# User Information\n\nThis file contains information about the user."
+				defaultContent = `# User Information
+
+This file contains information about the user that helps you provide personalized assistance.
+
+## File Location
+
+This file is located at: <workspace>/memory/USER.md
+
+You can edit this file to store and update user-related information.
+
+## Purpose
+
+- Store relevant facts about the user (role, expertise, preferences)
+- Remember context about ongoing projects or goals
+- Track user-specific knowledge that improves future interactions
+
+## When to Update
+
+You should proactively update this file when:
+- The user shares personal information relevant to your assistance
+- You learn about the user's role, skills, or domain expertise
+- The user mentions preferences, constraints, or working styles
+- New project context or goals emerge that should be remembered
+
+This file helps you understand the user's perspective and tailor responses accordingly.
+`
 			}
 
 			if err := os.WriteFile(path, []byte(defaultContent), 0644); err != nil {
