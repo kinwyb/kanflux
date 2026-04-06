@@ -165,6 +165,8 @@ func (m *Manager) RegisterAgentsFromConfig(ctx context.Context, cfg *config.Conf
 			SubAgents:     subAgents,
 			SubAgentNames: resolved.SubAgents,
 			Streaming:     true,
+			Tools:         resolved.Tools,
+			ToolsApproval: resolved.ToolsApproval,
 		}
 
 		// 创建 Agent

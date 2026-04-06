@@ -80,6 +80,42 @@ func (r *Registry) ToolCount() int {
 	return len(r.tools)
 }
 
+// SetAllowedTools 设置允许的工具白名单
+// 如果 whitelist 为空，表示所有工具都可用
+func (r *Registry) SetAllowedTools(whitelist []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(whitelist) == 0 {
+		return // 空白名单表示所有工具可用
+	}
+	// 删除不在白名单中的工具
+	for name := range r.tools {
+		if !slices.Contains(whitelist, name) {
+			delete(r.tools, name)
+			slog.Debug("Tool removed (not in whitelist)", "tool", name)
+		}
+	}
+}
+
+// SetToolsApproval 设置需要审批的工具列表
+func (r *Registry) SetToolsApproval(approvalList []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.needApproveTool = approvalList
+	slog.Debug("Tools approval list set", "tools", approvalList)
+}
+
+// GetToolNames 获取所有已注册的工具名称
+func (r *Registry) GetToolNames() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	names := make([]string, 0, len(r.tools))
+	for name := range r.tools {
+		names = append(names, name)
+	}
+	return names
+}
+
 func (r *Registry) WrapInvokableToolCall(
 	_ context.Context,
 	endpoint adk.InvokableToolCallEndpoint,

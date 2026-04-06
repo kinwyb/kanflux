@@ -13,6 +13,12 @@ type Config struct {
 	Providers       map[string]*ProviderConfig `json:"providers"`
 	DefaultProvider string                     `json:"default_provider"`
 	Agents          []*AgentConfig             `json:"agents"`
+	Tools           *ToolsConfig               `json:"tools"` // 工具配置
+}
+
+// ToolsConfig 工具配置
+type ToolsConfig struct {
+	Approval []string `json:"approval"` // 需要审批的工具名称列表
 }
 
 // ProviderConfig 供应商配置
@@ -34,30 +40,34 @@ const (
 
 // AgentConfig agent 配置
 type AgentConfig struct {
-	Name         string    `json:"name"`
-	Type         AgentType `json:"type"`         // Agent 类型，默认 deep
-	Description  string    `json:"description"`  // Agent 描述，未配置时使用默认描述
-	Workspace    string    `json:"workspace"`    // 必须指定
-	SubAgents    []string  `json:"sub_agents"`   // 子 agent 名称列表
-	Provider     string    `json:"provider"`     // 未指定使用 default_provider
-	Model        string    `json:"model"`        // 未指定使用供应商的 default_model
-	MaxIteration int       `json:"max_iteration"` // 默认 10
-	Streaming    bool      `json:"streaming"`    // 默认 true
+	Name          string    `json:"name"`
+	Type          AgentType `json:"type"`          // Agent 类型，默认 deep
+	Description   string    `json:"description"`   // Agent 描述，未配置时使用默认描述
+	Workspace     string    `json:"workspace"`     // 必须指定
+	SubAgents     []string  `json:"sub_agents"`    // 子 agent 名称列表
+	Provider      string    `json:"provider"`      // 未指定使用 default_provider
+	Model         string    `json:"model"`         // 未指定使用供应商的 default_model
+	MaxIteration  int       `json:"max_iteration"` // 默认 10
+	Streaming     bool      `json:"streaming"`     // 默认 true
+	Tools         []string  `json:"tools"`         // 允许使用的工具列表，空表示所有工具可用
+	ToolsApproval []string  `json:"tools_approval"` // 需要审批的工具列表，继承全局配置并追加
 }
 
 // ResolvedAgentConfig 解析后的 agent 配置（包含最终确定的值）
 type ResolvedAgentConfig struct {
-	Name         string
-	Type         AgentType // Agent 类型
-	Description  string    // Agent 描述
-	Workspace    string
-	SubAgents    []string  // 子 agent 名称列表
-	Provider     string
-	Model        string
-	APIKey       string
-	APIBaseURL   string
-	MaxIteration int
-	Streaming    bool
+	Name           string
+	Type           AgentType // Agent 类型
+	Description    string    // Agent 描述
+	Workspace      string
+	SubAgents      []string  // 子 agent 名称列表
+	Provider       string
+	Model          string
+	APIKey         string
+	APIBaseURL     string
+	MaxIteration   int
+	Streaming      bool
+	Tools          []string  // 允许使用的工具列表，空表示所有工具可用
+	ToolsApproval  []string  // 需要审批的工具列表
 }
 
 // Load 从指定路径加载配置文件
@@ -170,18 +180,29 @@ func (c *Config) ResolveAgentConfig(name string) (*ResolvedAgentConfig, error) {
 		agentType = AgentTypeDeep // 默认使用 DeepAgent
 	}
 
+	// 处理工具配置
+	tools := agent.Tools // 空表示所有工具可用
+	toolsApproval := agent.ToolsApproval
+
+	// 合并全局工具审批配置
+	if c.Tools != nil && len(c.Tools.Approval) > 0 {
+		toolsApproval = mergeStringLists(c.Tools.Approval, toolsApproval)
+	}
+
 	return &ResolvedAgentConfig{
-		Name:         agent.Name,
-		Type:         agentType,
-		Description:  description,
-		Workspace:    agent.Workspace,
-		SubAgents:    agent.SubAgents,
-		Provider:     providerName,
-		Model:        model,
-		APIKey:       provider.APIKey,
-		APIBaseURL:   provider.APIBaseURL,
-		MaxIteration: maxIteration,
-		Streaming:    agent.Streaming,
+		Name:          agent.Name,
+		Type:          agentType,
+		Description:   description,
+		Workspace:     agent.Workspace,
+		SubAgents:     agent.SubAgents,
+		Provider:      providerName,
+		Model:         model,
+		APIKey:        provider.APIKey,
+		APIBaseURL:    provider.APIBaseURL,
+		MaxIteration:  maxIteration,
+		Streaming:     agent.Streaming,
+		Tools:         tools,
+		ToolsApproval: toolsApproval,
 	}, nil
 }
 
@@ -220,4 +241,26 @@ func (c *Config) GetAllAgentNames() []string {
 		names = append(names, agent.Name)
 	}
 	return names
+}
+
+// mergeStringLists 合并两个字符串列表，去除重复项
+func mergeStringLists(list1, list2 []string) []string {
+	result := make([]string, 0, len(list1)+len(list2))
+	seen := make(map[string]bool)
+
+	for _, item := range list1 {
+		if !seen[item] {
+			seen[item] = true
+			result = append(result, item)
+		}
+	}
+
+	for _, item := range list2 {
+		if !seen[item] {
+			seen[item] = true
+			result = append(result, item)
+		}
+	}
+
+	return result
 }

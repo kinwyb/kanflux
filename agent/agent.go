@@ -45,17 +45,34 @@ type Agent struct {
 }
 
 type Config struct {
-	Name          string
-	Type          AgentType // Agent 类型
-	Description   string    // Agent 描述
-	LLM           model.ToolCallingChatModel
-	Workspace     string
-	MaxIteration  int
-	ToolRegister  *tools.Registry
-	SkillDirs     []string // 支持多个 skill 目录
-	SubAgents     []*Agent // 子 agent 实例
-	SubAgentNames []string // 子 agent 名称（用于配置引用）
-	Streaming     bool
+	Name           string
+	Type           AgentType // Agent 类型
+	Description    string    // Agent 描述
+	LLM            model.ToolCallingChatModel
+	Workspace      string
+	MaxIteration   int
+	ToolRegister   *tools.Registry
+	SkillDirs      []string // 支持多个 skill 目录
+	SubAgents      []*Agent // 子 agent 实例
+	SubAgentNames  []string // 子 agent 名称（用于配置引用）
+	Streaming      bool
+	Tools          []string // 允许使用的工具列表，空表示所有工具可用
+	ToolsApproval  []string // 需要审批的工具列表
+}
+
+// applyToolConfig 应用工具配置到 Registry
+func applyToolConfig(cfg *Config) {
+	if cfg.ToolRegister == nil {
+		return
+	}
+	// 设置允许的工具白名单（空表示所有工具可用）
+	if len(cfg.Tools) > 0 {
+		cfg.ToolRegister.SetAllowedTools(cfg.Tools)
+	}
+	// 设置需要审批的工具列表
+	if len(cfg.ToolsApproval) > 0 {
+		cfg.ToolRegister.SetToolsApproval(cfg.ToolsApproval)
+	}
 }
 
 // NewAgent 创建一个 agent（根据类型自动选择）
@@ -97,6 +114,9 @@ func NewChatModelAgent(ctx context.Context, cfg *Config) (*Agent, error) {
 		cfg.ToolRegister = tools.NewRegistry()
 	}
 	cfg.ToolRegister.Register(tools.NewMemoryTool(prompt.memory))
+
+	// 应用工具配置
+	applyToolConfig(cfg)
 
 	agentConfig := &adk.ChatModelAgentConfig{
 		Name:          cfg.Name,
@@ -160,6 +180,9 @@ func NewDeepAgent(ctx context.Context, cfg *Config) (*Agent, error) {
 		cfg.ToolRegister = tools.NewRegistry()
 	}
 	cfg.ToolRegister.Register(tools.NewMemoryTool(prompt.memory))
+
+	// 应用工具配置
+	applyToolConfig(cfg)
 
 	backend, err := localbk.NewBackend(ctx, &localbk.Config{})
 	if err != nil {
@@ -254,6 +277,9 @@ func NewPlanExecuteAgent(ctx context.Context, cfg *Config) (*Agent, error) {
 	}
 	cfg.ToolRegister.Register(tools.NewMemoryTool(prompt.memory))
 
+	// 应用工具配置
+	applyToolConfig(cfg)
+
 	// 创建 Planner
 	planner, err := planexecute.NewPlanner(ctx, &planexecute.PlannerConfig{
 		ToolCallingChatModel: cfg.LLM,
@@ -333,6 +359,9 @@ func NewSupervisorAgent(ctx context.Context, cfg *Config) (*Agent, error) {
 		cfg.ToolRegister = tools.NewRegistry()
 	}
 	cfg.ToolRegister.Register(tools.NewMemoryTool(prompt.memory))
+
+	// 应用工具配置
+	applyToolConfig(cfg)
 
 	// 构建子 agent 列表（adk.Agent 接口）
 	subAgents := make([]adk.Agent, 0, len(cfg.SubAgents))
