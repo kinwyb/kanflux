@@ -35,9 +35,10 @@ const (
 type (
 	// AgentResponseMsg Agent响应消息
 	AgentResponseMsg struct {
-		Content  string
-		Error    error
-		Metadata map[string]interface{} // 元数据，可携带命令返回的信息如新 chatID
+		Content          string
+		ReasoningContent string                 // 思考/推理内容
+		Error            error
+		Metadata         map[string]interface{} // 元数据，可携带命令返回的信息如新 chatID
 	}
 	// StreamMsg 流式消息
 	StreamMsg struct {
@@ -106,10 +107,10 @@ type Model struct {
 
 // Message 聊天消息
 type Message struct {
-	Role       string // "user" 或 "assistant"
-	Content    string
-	Timestamp  time.Time
-	IsThinking bool
+	Role            string // "user" 或 "assistant"
+	Content         string
+	ThinkingContent string // 思考/推理内容
+	Timestamp       time.Time
 }
 
 // NewModel 创建新模型
@@ -353,15 +354,20 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case AgentResponseMsg:
 		m.state = StateIdle
 		m.status = "就绪"
+		// 使用流式累积的思考内容，或从响应中获取
+		thinkingContent := m.currentThinking
+		if thinkingContent == "" && msg.ReasoningContent != "" {
+			thinkingContent = msg.ReasoningContent
+		}
 		m.currentThinking = ""
 		m.currentToolInfo = ""
 		// 不再重复记录"响应完成"日志（ChatEventStateFinal 已记录）
 		if msg.Error != nil {
 			m.currentAIMsg = fmt.Sprintf("错误: %v", msg.Error)
-			m.addMessage("assistant", m.currentAIMsg, false)
+			m.addMessage("assistant", m.currentAIMsg, "")
 		} else {
 			m.currentAIMsg = msg.Content
-			m.addMessage("assistant", msg.Content, false)
+			m.addMessage("assistant", msg.Content, thinkingContent)
 		}
 		// 处理元数据，如新 chatID
 		if msg.Metadata != nil {
@@ -511,7 +517,7 @@ func (m *Model) sendMessage() tea.Cmd {
 	m.isFinalLogged = false    // 重置完成日志标志
 
 	// 添加用户消息
-	m.addMessage("user", content, false)
+	m.addMessage("user", content, "")
 	m.addLog("info", "发送: "+content)
 	m.updateViewports()
 
@@ -539,7 +545,7 @@ func (m *Model) sendMessage() tea.Cmd {
 			return AgentResponseMsg{Error: err}
 		}
 
-		return AgentResponseMsg{Content: resp.Content, Metadata: resp.Metadata}
+		return AgentResponseMsg{Content: resp.Content, ReasoningContent: resp.ReasoningContent, Metadata: resp.Metadata}
 	}
 }
 
@@ -551,15 +557,15 @@ func (m *Model) waitForResponse() tea.Cmd {
 }
 
 // addMessage 添加消息
-func (m *Model) addMessage(role, content string, isThinking bool) {
+func (m *Model) addMessage(role, content, thinkingContent string) {
 	m.messageMu.Lock()
 	defer m.messageMu.Unlock()
 
 	m.messages = append(m.messages, Message{
-		Role:       role,
-		Content:    content,
-		Timestamp:  time.Now(),
-		IsThinking: isThinking,
+		Role:            role,
+		Content:         content,
+		ThinkingContent: thinkingContent,
+		Timestamp:       time.Now(),
 	})
 }
 
@@ -595,16 +601,18 @@ func (m *Model) updateViewports() {
 		switch msg.Role {
 		case "user":
 			styledContent = m.styles.UserMessage.Render(" 你: " + msg.Content)
+			chatContent.WriteString(styledContent + "\n\n") // 用户消息后加空行
 		case "assistant":
-			if msg.IsThinking {
-				styledContent = m.styles.ThinkingMessage.Render(" [思考] " + msg.Content)
-			} else {
-				styledContent = m.styles.AssistantMessage.Render(" AI: " + msg.Content)
+			// 先显示思考内容（如果有），与AI消息紧挨着
+			if msg.ThinkingContent != "" {
+				chatContent.WriteString(m.styles.ThinkingMessage.Render(" [思考] "+msg.ThinkingContent) + "\n")
 			}
+			styledContent = m.styles.AssistantMessage.Render(" AI: " + msg.Content)
+			chatContent.WriteString(styledContent + "\n")
 		default:
 			styledContent = msg.Content
+			chatContent.WriteString(styledContent + "\n")
 		}
-		chatContent.WriteString(styledContent + "\n")
 	}
 
 	// 显示当前流式内容（如果有）
