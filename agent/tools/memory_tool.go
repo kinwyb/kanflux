@@ -190,6 +190,8 @@ type MemoryTool struct {
 	memoryStore interface {
 		AppendLongTerm(content string) error
 		AppendToday(content string) error
+		ReplaceLongTerm(content string) error
+		ReplaceToday(content string) error
 	}
 	name string
 }
@@ -198,6 +200,8 @@ type MemoryTool struct {
 func NewMemoryTool(memoryStore interface {
 	AppendLongTerm(content string) error
 	AppendToday(content string) error
+	ReplaceLongTerm(content string) error
+	ReplaceToday(content string) error
 }) *MemoryTool {
 	return &MemoryTool{
 		memoryStore: memoryStore,
@@ -212,7 +216,7 @@ func (t *MemoryTool) Name() string {
 
 // Description 返回工具描述
 func (t *MemoryTool) Description() string {
-	return "Append information to memory. Use type='long' for long-term memory (MEMORY.md) to persist facts and preferences across sessions, or type='today' for today's daily notes for temporary/session-specific information."
+	return "Manage memory content. Use type='long' for long-term memory (MEMORY.md) or type='today' for today's notes. Use action='append' to add content, or action='replace' to overwrite the entire file."
 }
 
 // Parameters 返回参数定义
@@ -222,13 +226,19 @@ func (t *MemoryTool) Parameters() map[string]interface{} {
 		"properties": map[string]interface{}{
 			"content": map[string]interface{}{
 				"type":        "string",
-				"description": "The content to append to memory",
+				"description": "The content to write to memory",
 			},
 			"type": map[string]interface{}{
 				"type":        "string",
 				"description": "Memory type: 'long' for long-term memory (MEMORY.md), 'today' for today's notes",
 				"enum":        []string{"long", "today"},
 				"default":     "long",
+			},
+			"action": map[string]interface{}{
+				"type":        "string",
+				"description": "Action: 'append' to add content, 'replace' to overwrite entire file",
+				"enum":        []string{"append", "replace"},
+				"default":     "append",
 			},
 		},
 		"required": []string{"content"},
@@ -239,7 +249,7 @@ func (t *MemoryTool) Parameters() map[string]interface{} {
 func (t *MemoryTool) Execute(ctx context.Context, params map[string]interface{}) (string, error) {
 	content, ok := params["content"].(string)
 	if !ok || content == "" {
-		return "", fmt.Errorf("content is required and must be a non-empty string, please summary inforation for content")
+		return "", fmt.Errorf("content is required and must be a non-empty string")
 	}
 
 	memType := "long"
@@ -247,8 +257,19 @@ func (t *MemoryTool) Execute(ctx context.Context, params map[string]interface{})
 		memType = typ
 	}
 
+	action := "append"
+	if act, ok := params["action"].(string); ok {
+		action = act
+	}
+
 	switch memType {
 	case "today":
+		if action == "replace" {
+			if err := t.memoryStore.ReplaceToday(content); err != nil {
+				return "", fmt.Errorf("failed to replace today's notes: %w", err)
+			}
+			return "Replaced today's notes", nil
+		}
 		if err := t.memoryStore.AppendToday(content); err != nil {
 			return "", fmt.Errorf("failed to append to today's notes: %w", err)
 		}
@@ -256,6 +277,12 @@ func (t *MemoryTool) Execute(ctx context.Context, params map[string]interface{})
 	case "long":
 		fallthrough
 	default:
+		if action == "replace" {
+			if err := t.memoryStore.ReplaceLongTerm(content); err != nil {
+				return "", fmt.Errorf("failed to replace long-term memory: %w", err)
+			}
+			return "Replaced long-term memory", nil
+		}
 		if err := t.memoryStore.AppendLongTerm(content); err != nil {
 			return "", fmt.Errorf("failed to append to long-term memory: %w", err)
 		}

@@ -126,6 +126,21 @@ func (m *MemoryStore) AppendLongTerm(content string) error {
 	return nil
 }
 
+// ReplaceLongTerm 替换长期记忆（覆盖整个文件）
+func (m *MemoryStore) ReplaceLongTerm(content string) error {
+	path := m.longTermFilePath()
+	return os.WriteFile(path, []byte(content), 0644)
+}
+
+// ReplaceToday 替换今日笔记（覆盖整个文件）
+func (m *MemoryStore) ReplaceToday(content string) error {
+	path, err := m.todyFilePath()
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(content), 0644)
+}
+
 // GetMemoryContext 获取格式化的记忆上下文
 func (m *MemoryStore) GetMemoryContext() (string, error) {
 	var parts []string

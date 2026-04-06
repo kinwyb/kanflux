@@ -72,19 +72,33 @@ IMPORTANT: When using filesystem tools (ls, read_file, glob, grep, etc.), you MU
 func (b *ContextBuilder) buildMemory() string {
 	memory := `### Memory Management
 
-You have memory_tool tool available,have two type (long,today) for save memory content:
+You have memory_tool to manage memory content with two types and two actions:
 
-- **type:long**: Append to long-term memory (MEMORY.md)
+**Types**:
+- **long**: Long-term memory stored in MEMORY.md
+  - File: <workspace>/memory/MEMORY.md
   - Use for: Facts, user preferences, important decisions, project information that should persist across sessions
-  - Example: User name, project structure, preferred tools, important conversations
 
-- **type:today**: Append to today's daily notes
+- **today**: Today's daily notes
+  - File: <workspace>/memory/days/YYYY-MM-DD.md
   - Use for: Temporary notes, daily reminders, session-specific information, quick references
-  - Example: Meeting notes, to-do items, session progress, temporary context
 
-**When to use memory**: When you encounter information that seems worth remembering for future interactions,summary inforation content, use the appropriate memory tool to store it. Be concise and factual.
+**Actions**:
+- **append**: Add new content to existing memory (default)
+- **replace**: Overwrite the entire memory file with new content
+
+**When to replace vs append**:
+- Use **replace** when: correcting outdated information, reorganizing memory structure, removing redundant content, or consolidating multiple entries
+- Use **append** when: adding new facts, recording new preferences, logging session progress
+
+**Additional Memory Files**:
+- **SOUL.md** (<workspace>/memory/SOUL.md): Your personality and behavioral guidelines. Edit this file when you learn user preferences about your behavior.
+- **USER.md** (<workspace>/memory/USER.md): User information for personalized assistance. Edit this file when you learn about the user's role, expertise, or preferences.
+
+**When to use memory**: When you encounter information worth remembering for future interactions, use memory_tool. Be concise and factual.
 
 `
+
 	if memoryContext, err := b.memory.GetMemoryContext(); err == nil && memoryContext != "" {
 		memory = memory + "## Memory (injected)\n\n" + memoryContext
 	}
