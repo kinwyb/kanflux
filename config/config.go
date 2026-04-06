@@ -22,24 +22,36 @@ type ProviderConfig struct {
 	DefaultModel string `json:"default_model"`
 }
 
+// AgentType agent 类型
+type AgentType string
+
+const (
+	AgentTypeChatModel  AgentType = "chatmodel"  // 基础 ReAct 模式
+	AgentTypeDeep       AgentType = "deep"       // 预构建 agent（规划+文件系统+子agent）
+	AgentTypePlanExecute AgentType = "planexecute" // Plan-Execute-Replan 模式
+	AgentTypeSupervisor AgentType = "supervisor" // 监督者模式
+)
+
 // AgentConfig agent 配置
 type AgentConfig struct {
-	Name         string   `json:"name"`
-	Description  string   `json:"description"`   // Agent 描述，未配置时使用默认描述
-	Workspace    string   `json:"workspace"`     // 必须指定
-	SubAgents    []string `json:"sub_agents"`    // 子 agent 名称列表
-	Provider     string   `json:"provider"`      // 未指定使用 default_provider
-	Model        string   `json:"model"`         // 未指定使用供应商的 default_model
-	MaxIteration int      `json:"max_iteration"` // 默认 10
-	Streaming    bool     `json:"streaming"`     // 默认 true
+	Name         string    `json:"name"`
+	Type         AgentType `json:"type"`         // Agent 类型，默认 deep
+	Description  string    `json:"description"`  // Agent 描述，未配置时使用默认描述
+	Workspace    string    `json:"workspace"`    // 必须指定
+	SubAgents    []string  `json:"sub_agents"`   // 子 agent 名称列表
+	Provider     string    `json:"provider"`     // 未指定使用 default_provider
+	Model        string    `json:"model"`        // 未指定使用供应商的 default_model
+	MaxIteration int       `json:"max_iteration"` // 默认 10
+	Streaming    bool      `json:"streaming"`    // 默认 true
 }
 
 // ResolvedAgentConfig 解析后的 agent 配置（包含最终确定的值）
 type ResolvedAgentConfig struct {
 	Name         string
-	Description  string   // Agent 描述
+	Type         AgentType // Agent 类型
+	Description  string    // Agent 描述
 	Workspace    string
-	SubAgents    []string // 子 agent 名称列表
+	SubAgents    []string  // 子 agent 名称列表
 	Provider     string
 	Model        string
 	APIKey       string
@@ -152,8 +164,15 @@ func (c *Config) ResolveAgentConfig(name string) (*ResolvedAgentConfig, error) {
 		description = fmt.Sprintf("Agent %s for general tasks", name)
 	}
 
+	// 设置默认类型
+	agentType := agent.Type
+	if agentType == "" {
+		agentType = AgentTypeDeep // 默认使用 DeepAgent
+	}
+
 	return &ResolvedAgentConfig{
 		Name:         agent.Name,
+		Type:         agentType,
 		Description:  description,
 		Workspace:    agent.Workspace,
 		SubAgents:    agent.SubAgents,

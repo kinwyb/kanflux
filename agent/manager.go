@@ -155,6 +155,7 @@ func (m *Manager) RegisterAgentsFromConfig(ctx context.Context, cfg *config.Conf
 		// 创建 Agent 配置
 		agentConfig := &Config{
 			Name:          resolved.Name,
+			Type:          resolved.Type,
 			Description:   resolved.Description,
 			LLM:           llm,
 			Workspace:     resolved.Workspace,

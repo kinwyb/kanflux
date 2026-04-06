@@ -83,6 +83,7 @@ func createDefaultConfig(workspace string) *config.Config {
 		Agents: []*config.AgentConfig{
 			{
 				Name:        "main",
+				Type:        config.AgentTypeDeep, // 默认使用 deep agent
 				Description: "Main agent for general tasks",
 				Workspace:   workspace,
 			},

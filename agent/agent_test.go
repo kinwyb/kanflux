@@ -21,9 +21,9 @@ func TestNewAgent(t *testing.T) {
 		t.Fatal(err)
 	}
 	workSpace := "/Users/wangyingbin/Downloads/bodacli"
-	//cnt := NewContextBuilder(workSpace)
-	//t.Log(cnt.BuildSystemPrompt())
-	//return
+	cnt, _ := NewContextBuilder(workSpace)
+	t.Log(cnt.BuildSystemPrompt())
+	return
 	if err != nil {
 		t.Fatal(err)
 	}
