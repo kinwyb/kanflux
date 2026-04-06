@@ -11,6 +11,7 @@ import (
 	"github.com/kinwyb/kanflux/agent"
 	"github.com/kinwyb/kanflux/agent/tools"
 	"github.com/kinwyb/kanflux/bus"
+	"github.com/kinwyb/kanflux/config"
 	"github.com/kinwyb/kanflux/providers"
 	"github.com/kinwyb/kanflux/session"
 
@@ -159,13 +160,16 @@ func NewModel(ctx context.Context, cfg *Config) (*Model, error) {
 		// 创建工具注册器
 		toolRegistry := tools.NewRegistry()
 
+		// 获取默认 skills 目录
+		skillDirs := config.GetDefaultSkillDirs(workspace)
+
 		// 创建Agent配置
 		agentCfg := &agent.Config{
 			LLM:          llm,
 			Workspace:    workspace,
 			MaxIteration: cfg.MaxIteration,
 			ToolRegister: toolRegistry,
-			SkillDirs:    cfg.SkillDirs,
+			SkillDirs:    skillDirs,
 			Streaming:    true,
 		}
 

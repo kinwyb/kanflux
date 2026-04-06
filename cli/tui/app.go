@@ -16,7 +16,6 @@ type Config struct {
 	APIKey       string
 	APIBaseURL   string
 	MaxIteration int
-	SkillDirs    []string
 
 	// 多 agent 模式（有配置文件时使用）
 	AppConfig    *config.Config // 完整配置

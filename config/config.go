@@ -31,7 +31,6 @@ type AgentConfig struct {
 	Provider     string   `json:"provider"`      // 未指定使用 default_provider
 	Model        string   `json:"model"`         // 未指定使用供应商的 default_model
 	MaxIteration int      `json:"max_iteration"` // 默认 10
-	SkillDirs    []string `json:"skill_dirs"`
 	Streaming    bool     `json:"streaming"`     // 默认 true
 }
 
@@ -46,7 +45,6 @@ type ResolvedAgentConfig struct {
 	APIKey       string
 	APIBaseURL   string
 	MaxIteration int
-	SkillDirs    []string
 	Streaming    bool
 }
 
@@ -164,9 +162,28 @@ func (c *Config) ResolveAgentConfig(name string) (*ResolvedAgentConfig, error) {
 		APIKey:       provider.APIKey,
 		APIBaseURL:   provider.APIBaseURL,
 		MaxIteration: maxIteration,
-		SkillDirs:    agent.SkillDirs,
 		Streaming:    agent.Streaming,
 	}, nil
+}
+
+// GetDefaultSkillDirs 获取默认的 skills 目录
+// 优先级: 1. 工作区下的 skills 目录  2. 用户目录下的 ~/.kanflux/skills
+func GetDefaultSkillDirs(workspace string) []string {
+	var skillDirs []string
+
+	// 1. 工作区下的 skills 目录
+	workspaceSkills := filepath.Join(workspace, "skills")
+	if _, err := os.Stat(workspaceSkills); err == nil {
+		skillDirs = append(skillDirs, workspaceSkills)
+	}
+
+	// 2. 用户目录下的 ~/.kanflux/skills
+	userSkills := filepath.Join(homeDir(), ".kanflux", "skills")
+	if _, err := os.Stat(userSkills); err == nil {
+		skillDirs = append(skillDirs, userSkills)
+	}
+
+	return skillDirs
 }
 
 // GetDefaultAgentName 获取默认 agent 名称（第一个 agent）

@@ -149,6 +149,9 @@ func (m *Manager) RegisterAgentsFromConfig(ctx context.Context, cfg *config.Conf
 			}
 		}
 
+		// 获取默认 skills 目录
+		skillDirs := config.GetDefaultSkillDirs(resolved.Workspace)
+
 		// 创建 Agent 配置
 		agentConfig := &Config{
 			Name:          resolved.Name,
@@ -157,7 +160,7 @@ func (m *Manager) RegisterAgentsFromConfig(ctx context.Context, cfg *config.Conf
 			Workspace:     resolved.Workspace,
 			MaxIteration:  resolved.MaxIteration,
 			ToolRegister:  toolRegistry,
-			SkillDirs:     resolved.SkillDirs,
+			SkillDirs:     skillDirs,
 			SubAgents:     subAgents,
 			SubAgentNames: resolved.SubAgents,
 			Streaming:     true,
