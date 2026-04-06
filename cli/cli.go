@@ -28,6 +28,7 @@ func NewRootCmd() *cobra.Command {
 	// 添加子命令
 	rootCmd.AddCommand(cmd.NewTUICmd())
 	rootCmd.AddCommand(cmd.NewConfigCmd())
+	rootCmd.AddCommand(cmd.NewAgentCmd())
 
 	return rootCmd
 }
