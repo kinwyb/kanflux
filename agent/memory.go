@@ -15,7 +15,7 @@ type MemoryStore struct {
 
 // NewMemoryStore 创建记忆存储
 func NewMemoryStore(workspace string) (*MemoryStore, error) {
-	baseDir := filepath.Join(workspace, "memory")
+	baseDir := filepath.Join(workspace, ".kanflux", "memory")
 	if err := os.MkdirAll(baseDir, 0755); err != nil {
 		return nil, err
 	}

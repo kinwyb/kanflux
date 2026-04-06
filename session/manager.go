@@ -20,7 +20,7 @@ type Manager struct {
 
 // NewManager 创建会话管理器
 func NewManager(baseDir string) (*Manager, error) {
-	baseDir = filepath.Join(baseDir, "sessions")
+	baseDir = filepath.Join(baseDir, ".kanflux", "sessions")
 	// 确保目录存在
 	if err := os.MkdirAll(baseDir, 0755); err != nil {
 		return nil, err
