@@ -608,7 +608,7 @@ func (m *Model) updateViewports() {
 				chatContent.WriteString(m.styles.ThinkingMessage.Render(" [思考] "+msg.ThinkingContent) + "\n")
 			}
 			styledContent = m.styles.AssistantMessage.Render(" AI: " + msg.Content)
-			chatContent.WriteString(styledContent + "\n")
+			chatContent.WriteString(styledContent + "\n\n") // AI消息后加空行，分隔两次对话
 		default:
 			styledContent = msg.Content
 			chatContent.WriteString(styledContent + "\n")
