@@ -14,6 +14,7 @@ type Config struct {
 	APIKey       string
 	APIBaseURL   string
 	MaxIteration int
+	SkillDirs    []string
 }
 
 // App TUI应用

@@ -127,6 +127,7 @@ func NewModel(ctx context.Context, cfg *Config) (*Model, error) {
 		Workspace:    cfg.Workspace,
 		MaxIteration: cfg.MaxIteration,
 		ToolRegister: toolRegistry,
+		SkillDirs:    cfg.SkillDirs,
 		Streaming:    true,
 	}
 
