@@ -26,7 +26,16 @@ func NewMemoryStore(workspace string) (*MemoryStore, error) {
 
 // ReadToday 读取今日笔记
 func (m *MemoryStore) ReadToday() (string, error) {
-	path, _ := m.todyFilePath()
+	today := time.Now().Format("2006-01-02")
+	return m.ReadDay(today)
+}
+
+// ReadDay 读取指定日期的笔记
+func (m *MemoryStore) ReadDay(date string) (string, error) {
+	path, err := m.dayFilePath(date)
+	if err != nil {
+		return "", err
+	}
 
 	content, err := os.ReadFile(path)
 	if err != nil {
@@ -41,8 +50,13 @@ func (m *MemoryStore) ReadToday() (string, error) {
 
 // AppendToday 追加到今日笔记
 func (m *MemoryStore) AppendToday(content string) error {
-	// 确保目录存在
-	path, err := m.todyFilePath()
+	today := time.Now().Format("2006-01-02")
+	return m.AppendDay(today, content)
+}
+
+// AppendDay 追加到指定日期的笔记
+func (m *MemoryStore) AppendDay(date, content string) error {
+	path, err := m.dayFilePath(date)
 	if err != nil {
 		return err
 	}
@@ -68,16 +82,14 @@ func (m *MemoryStore) AppendToday(content string) error {
 	return nil
 }
 
-func (m *MemoryStore) todyFilePath() (string, error) {
+func (m *MemoryStore) dayFilePath(date string) (string, error) {
 	// 确保目录存在
 	memoryDir := filepath.Join(m.baseDIR, "days")
 	if err := os.MkdirAll(memoryDir, 0755); err != nil {
 		return "", err
 	}
 
-	// 追加内容
-	today := time.Now().Format("2006-01-02")
-	path := filepath.Join(memoryDir, today+".md")
+	path := filepath.Join(memoryDir, date+".md")
 	return path, nil
 }
 
@@ -134,7 +146,13 @@ func (m *MemoryStore) ReplaceLongTerm(content string) error {
 
 // ReplaceToday 替换今日笔记（覆盖整个文件）
 func (m *MemoryStore) ReplaceToday(content string) error {
-	path, err := m.todyFilePath()
+	today := time.Now().Format("2006-01-02")
+	return m.ReplaceDay(today, content)
+}
+
+// ReplaceDay 替换指定日期的笔记（覆盖整个文件）
+func (m *MemoryStore) ReplaceDay(date, content string) error {
+	path, err := m.dayFilePath(date)
 	if err != nil {
 		return err
 	}

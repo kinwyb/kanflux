@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"time"
 )
 
 //// MemoryTool memory 搜索工具
@@ -185,13 +186,15 @@ import (
 //	return "Memory added successfully", nil
 //}
 
-// MemoryTool 统一记忆工具，通过 type 参数区分长期记忆和今日笔记
+// MemoryTool 统一记忆工具，支持长期记忆和每日笔记的读写
 type MemoryTool struct {
 	memoryStore interface {
 		AppendLongTerm(content string) error
-		AppendToday(content string) error
+		AppendDay(date, content string) error
 		ReplaceLongTerm(content string) error
-		ReplaceToday(content string) error
+		ReplaceDay(date, content string) error
+		ReadLongTerm() (string, error)
+		ReadDay(date string) (string, error)
 	}
 	name string
 }
@@ -199,9 +202,11 @@ type MemoryTool struct {
 // NewMemoryTool 创建统一记忆工具
 func NewMemoryTool(memoryStore interface {
 	AppendLongTerm(content string) error
-	AppendToday(content string) error
+	AppendDay(date, content string) error
 	ReplaceLongTerm(content string) error
-	ReplaceToday(content string) error
+	ReplaceDay(date, content string) error
+	ReadLongTerm() (string, error)
+	ReadDay(date string) (string, error)
 }) *MemoryTool {
 	return &MemoryTool{
 		memoryStore: memoryStore,
@@ -216,7 +221,10 @@ func (t *MemoryTool) Name() string {
 
 // Description 返回工具描述
 func (t *MemoryTool) Description() string {
-	return "Manage memory content. IMPORTANT: The 'content' parameter is REQUIRED and must contain the actual content to be remembered. Without content, this tool cannot function. Use type='long' for long-term memory (MEMORY.md) or type='today' for today's notes. Use action='append' to add content, or action='replace' to overwrite the entire file."
+	return "Manage memory content. Supports long-term memory (MEMORY.md) and daily notes. " +
+		"Use action='read' to retrieve content, action='append' to add content, or action='replace' to overwrite. " +
+		"For daily notes, use type='day' with optional 'date' parameter (format: YYYY-MM-DD, defaults to today). " +
+		"IMPORTANT: When action is 'append' or 'replace', the 'content' parameter is REQUIRED."
 }
 
 // Parameters 返回参数定义
@@ -224,68 +232,135 @@ func (t *MemoryTool) Parameters() map[string]interface{} {
 	return map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
-			"content": map[string]interface{}{
+			"action": map[string]interface{}{
 				"type":        "string",
-				"description": "REQUIRED: The actual content to be remembered. This is the information you want to store in memory. DO NOT omit this parameter. Example: 'User prefers dark mode in the editor'",
+				"description": "Action to perform: 'read' to retrieve content, 'append' to add content, 'replace' to overwrite entire file",
+				"enum":        []string{"read", "append", "replace"},
+				"default":     "append",
 			},
 			"type": map[string]interface{}{
 				"type":        "string",
-				"description": "Memory type: 'long' for long-term memory (MEMORY.md), 'today' for today's notes",
-				"enum":        []string{"long", "today"},
+				"description": "Memory type: 'long' for long-term memory (MEMORY.md), 'day' for daily notes",
+				"enum":        []string{"long", "day"},
 				"default":     "long",
 			},
-			"action": map[string]interface{}{
+			"date": map[string]interface{}{
 				"type":        "string",
-				"description": "Action: 'append' to add content, 'replace' to overwrite entire file",
-				"enum":        []string{"append", "replace"},
-				"default":     "append",
+				"description": "Date for daily notes in YYYY-MM-DD format (e.g., '2026-04-07'). Only used when type='day'. Defaults to today if not specified.",
+			},
+			"content": map[string]interface{}{
+				"type":        "string",
+				"description": "REQUIRED for 'append' and 'replace' actions: The content to write to memory. Example: 'User prefers dark mode in the editor'. NOT needed for 'read' action.",
 			},
 		},
-		"required": []string{"content"},
+		"required": []string{},
 	}
 }
 
 // Execute 执行工具
 func (t *MemoryTool) Execute(ctx context.Context, params map[string]interface{}) (string, error) {
-	content, ok := params["content"].(string)
-	if !ok || content == "" {
-		return "", fmt.Errorf("content is required and must be a non-empty string")
-	}
-
-	memType := "long"
-	if typ, ok := params["type"].(string); ok {
-		memType = typ
-	}
-
 	action := "append"
-	if act, ok := params["action"].(string); ok {
+	if act, ok := params["action"].(string); ok && act != "" {
 		action = act
 	}
 
+	memType := "long"
+	if typ, ok := params["type"].(string); ok && typ != "" {
+		memType = typ
+	}
+
+	// 获取日期参数（仅用于 daily notes）
+	date := ""
+	if d, ok := params["date"].(string); ok && d != "" {
+		date = d
+	} else if memType == "day" {
+		date = time.Now().Format("2006-01-02")
+	}
+
+	content, _ := params["content"].(string)
+
 	switch memType {
-	case "today":
-		if action == "replace" {
-			if err := t.memoryStore.ReplaceToday(content); err != nil {
-				return "", fmt.Errorf("failed to replace today's notes: %w", err)
-			}
-			return "Replaced today's notes", nil
-		}
-		if err := t.memoryStore.AppendToday(content); err != nil {
-			return "", fmt.Errorf("failed to append to today's notes: %w", err)
-		}
-		return "Added to today's notes", nil
+	case "day":
+		return t.executeDayAction(action, date, content)
 	case "long":
 		fallthrough
 	default:
-		if action == "replace" {
-			if err := t.memoryStore.ReplaceLongTerm(content); err != nil {
-				return "", fmt.Errorf("failed to replace long-term memory: %w", err)
-			}
-			return "Replaced long-term memory", nil
+		return t.executeLongAction(action, content)
+	}
+}
+
+// executeDayAction 执行每日笔记操作
+func (t *MemoryTool) executeDayAction(action, date, content string) (string, error) {
+	if date == "" {
+		date = time.Now().Format("2006-01-02")
+	}
+
+	switch action {
+	case "read":
+		result, err := t.memoryStore.ReadDay(date)
+		if err != nil {
+			return "", fmt.Errorf("failed to read daily notes for %s: %w", date, err)
+		}
+		if result == "" {
+			return fmt.Sprintf("No notes found for %s", date), nil
+		}
+		return fmt.Sprintf("Notes for %s:\n\n%s", date, result), nil
+
+	case "replace":
+		if content == "" {
+			return "", fmt.Errorf("content is required for 'replace' action")
+		}
+		if err := t.memoryStore.ReplaceDay(date, content); err != nil {
+			return "", fmt.Errorf("failed to replace daily notes for %s: %w", date, err)
+		}
+		return fmt.Sprintf("Replaced daily notes for %s", date), nil
+
+	case "append":
+		if content == "" {
+			return "", fmt.Errorf("content is required for 'append' action")
+		}
+		if err := t.memoryStore.AppendDay(date, content); err != nil {
+			return "", fmt.Errorf("failed to append to daily notes for %s: %w", date, err)
+		}
+		return fmt.Sprintf("Added to daily notes for %s", date), nil
+
+	default:
+		return "", fmt.Errorf("unknown action: %s", action)
+	}
+}
+
+// executeLongAction 执行长期记忆操作
+func (t *MemoryTool) executeLongAction(action, content string) (string, error) {
+	switch action {
+	case "read":
+		result, err := t.memoryStore.ReadLongTerm()
+		if err != nil {
+			return "", fmt.Errorf("failed to read long-term memory: %w", err)
+		}
+		if result == "" {
+			return "Long-term memory is empty", nil
+		}
+		return fmt.Sprintf("Long-term memory:\n\n%s", result), nil
+
+	case "replace":
+		if content == "" {
+			return "", fmt.Errorf("content is required for 'replace' action")
+		}
+		if err := t.memoryStore.ReplaceLongTerm(content); err != nil {
+			return "", fmt.Errorf("failed to replace long-term memory: %w", err)
+		}
+		return "Replaced long-term memory", nil
+
+	case "append":
+		if content == "" {
+			return "", fmt.Errorf("content is required for 'append' action")
 		}
 		if err := t.memoryStore.AppendLongTerm(content); err != nil {
 			return "", fmt.Errorf("failed to append to long-term memory: %w", err)
 		}
 		return "Added to long-term memory", nil
+
+	default:
+		return "", fmt.Errorf("unknown action: %s", action)
 	}
 }
