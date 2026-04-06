@@ -678,12 +678,13 @@ func (m *Manager) handleInboundMessage(ctx context.Context, msg *bus.InboundMess
 
 	// 发布到总线
 	outbound := &bus.OutboundMessage{
-		Channel:   msg.Channel,
-		ChatID:    msg.ChatID,
-		Content:   response.Content,
-		Media:     responseMedia,
-		ReplyTo:   msg.ID,
-		Timestamp: time.Now(),
+		Channel:          msg.Channel,
+		ChatID:           msg.ChatID,
+		Content:          response.Content,
+		ReasoningContent: response.ReasoningContent, // 提取思考内容
+		Media:            responseMedia,
+		ReplyTo:          msg.ID,
+		Timestamp:        time.Now(),
 	}
 
 	if err = m.bus.PublishOutbound(ctx, outbound); err != nil {
