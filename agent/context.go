@@ -79,8 +79,8 @@ You have memory_tool to manage memory content.
 - **day**: Daily notes - for temporary notes, daily tasks
 
 **Memory Files**:
-- Long-term: %s/memory/MEMORY.md
-- Daily notes: %s/memory/days/YYYY-MM-DD.md
+- Long-term: %s/.kanflux/memory/MEMORY.md
+- Daily notes: %s/.kanflux/memory/days/YYYY-MM-DD.md
 
 **Actions**:
 - **read**: Get current memory content. Returns the actual file content, or empty if file doesn't exist.
@@ -108,10 +108,10 @@ You have memory_tool to manage memory content.
 - DON'T use "edit" to replace the "No notes" message - that's not file content
 
 **Additional Memory Files**:
-- %s/memory/SOUL.md - Your personality and behavioral guidelines
-- %s/memory/USER.md - User information for personalized assistance
-- %s/memory/IDENTITY.md - Core identity definition
-- %s/memory/AGENTS.md - Agent behavior guidelines
+- %s/.kanflux/memory/SOUL.md - Your personality and behavioral guidelines
+- %s/.kanflux/memory/USER.md - User information for personalized assistance
+- %s/.kanflux/memory/IDENTITY.md - Core identity definition
+- %s/.kanflux/memory/AGENTS.md - Agent behavior guidelines
 
 `, b.workspace, b.workspace, b.workspace, b.workspace, b.workspace, b.workspace)
 

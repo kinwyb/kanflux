@@ -268,7 +268,7 @@ This file defines the agent's personality, behavior patterns, and core principle
 
 ## File Location
 
-This file is located at: <workspace>/memory/SOUL.md
+This file is located at: <workspace>/.kanflux/memory/SOUL.md
 
 You can edit this file to update your personality and behavioral guidelines.
 
@@ -295,7 +295,7 @@ This file contains information about the user that helps you provide personalize
 
 ## File Location
 
-This file is located at: <workspace>/memory/USER.md
+This file is located at: <workspace>/.kanflux/memory/USER.md
 
 You can edit this file to store and update user-related information.
 
