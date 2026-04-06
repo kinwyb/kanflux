@@ -97,6 +97,8 @@ type Model struct {
 	currentThinking  string // 当前思考内容（流式）
 	currentToolInfo  string // 当前工具调用信息
 	currentAgentName string // 当前处理的 agent 名称
+	isThinkingLogged bool   // 是否已记录思考日志
+	isFinalLogged    bool   // 是否已记录完成日志
 
 	// 样式
 	styles Styles
@@ -353,11 +355,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = "就绪"
 		m.currentThinking = ""
 		m.currentToolInfo = ""
-		if m.currentAgentName != "" {
-			m.addLog("info", fmt.Sprintf("[%s] 响应完成", m.currentAgentName))
-		} else {
-			m.addLog("info", "响应完成")
-		}
+		// 不再重复记录"响应完成"日志（ChatEventStateFinal 已记录）
 		if msg.Error != nil {
 			m.currentAIMsg = fmt.Sprintf("错误: %v", msg.Error)
 			m.addMessage("assistant", m.currentAIMsg, false)
@@ -405,7 +403,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case bus.ChatEventStateThinking:
 			m.status = fmt.Sprintf("[%s] 思考中...", m.currentAgentName)
 			m.currentThinking += msg.Content // 累加思考内容
-			m.addLog("debug", fmt.Sprintf("[%s] 思考中", m.currentAgentName))
+			// 只在第一次思考时记录日志
+			if !m.isThinkingLogged {
+				m.addLog("debug", fmt.Sprintf("[%s] 思考中", m.currentAgentName))
+				m.isThinkingLogged = true
+			}
 		case bus.ChatEventStateDelta:
 			m.status = fmt.Sprintf("[%s] 生成中...", m.currentAgentName)
 			m.currentAIMsg += msg.Content
@@ -416,7 +418,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case bus.ChatEventStateFinal:
 			m.status = fmt.Sprintf("[%s] 完成", m.currentAgentName)
 			m.currentAIMsg = msg.Content
-			m.addLog("info", fmt.Sprintf("[%s] 响应完成", m.currentAgentName))
+			// 只在第一次完成时记录日志
+			if !m.isFinalLogged {
+				m.addLog("info", fmt.Sprintf("[%s] 响应完成", m.currentAgentName))
+				m.isFinalLogged = true
+			}
 		case bus.ChatEventStateError:
 			m.status = fmt.Sprintf("[%s] 错误", m.currentAgentName)
 			m.currentAIMsg = fmt.Sprintf("错误: %s", msg.Content)
@@ -501,6 +507,8 @@ func (m *Model) sendMessage() tea.Cmd {
 	m.currentThinking = ""
 	m.currentToolInfo = ""
 	m.currentAgentName = "" // 重置 agent 名称，等待 ChatEvent 更新
+	m.isThinkingLogged = false // 重置思考日志标志
+	m.isFinalLogged = false    // 重置完成日志标志
 
 	// 添加用户消息
 	m.addMessage("user", content, false)
