@@ -57,8 +57,9 @@ type (
 	}
 	// ChatEventMsg 聊天事件消息
 	ChatEventMsg struct {
-		State   string // delta, thinking, tool, final, error, interrupt
-		Content string
+		AgentName string // Agent 名称
+		State     string // delta, thinking, tool, final, error, interrupt
+		Content   string
 	}
 )
 
@@ -91,10 +92,11 @@ type Model struct {
 	err    error
 
 	// 当前对话
-	currentUserMsg  string
-	currentAIMsg    string
-	currentThinking string // 当前思考内容（流式）
-	currentToolInfo string // 当前工具调用信息
+	currentUserMsg   string
+	currentAIMsg     string
+	currentThinking  string // 当前思考内容（流式）
+	currentToolInfo  string // 当前工具调用信息
+	currentAgentName string // 当前处理的 agent 名称
 
 	// 样式
 	styles Styles
@@ -281,8 +283,9 @@ func (m *Model) listenChatEvents() tea.Cmd {
 					continue
 				}
 				return ChatEventMsg{
-					State:   event.State,
-					Content: event.Content,
+					AgentName: event.AgentName,
+					State:     event.State,
+					Content:   event.Content,
 				}
 			}
 		}
@@ -350,7 +353,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = "就绪"
 		m.currentThinking = ""
 		m.currentToolInfo = ""
-		m.addLog("info", "响应完成")
+		if m.currentAgentName != "" {
+			m.addLog("info", fmt.Sprintf("[%s] 响应完成", m.currentAgentName))
+		} else {
+			m.addLog("info", "响应完成")
+		}
 		if msg.Error != nil {
 			m.currentAIMsg = fmt.Sprintf("错误: %v", msg.Error)
 			m.addMessage("assistant", m.currentAIMsg, false)
@@ -389,25 +396,35 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.listenLogs()
 
 	case ChatEventMsg:
+		// 更新当前 agent 名称
+		if msg.AgentName != "" {
+			m.currentAgentName = msg.AgentName
+		}
+
 		switch msg.State {
 		case bus.ChatEventStateThinking:
-			m.status = "思考中..."
+			m.status = fmt.Sprintf("[%s] 思考中...", m.currentAgentName)
 			m.currentThinking += msg.Content // 累加思考内容
+			m.addLog("debug", fmt.Sprintf("[%s] 思考中", m.currentAgentName))
 		case bus.ChatEventStateDelta:
-			m.status = "生成中..."
+			m.status = fmt.Sprintf("[%s] 生成中...", m.currentAgentName)
 			m.currentAIMsg += msg.Content
 		case bus.ChatEventStateTool:
-			m.status = "工具调用..."
+			m.status = fmt.Sprintf("[%s] 工具调用...", m.currentAgentName)
 			m.currentToolInfo = msg.Content
+			m.addLog("info", fmt.Sprintf("[%s] 工具: %s", m.currentAgentName, msg.Content))
 		case bus.ChatEventStateFinal:
-			m.status = "完成"
+			m.status = fmt.Sprintf("[%s] 完成", m.currentAgentName)
 			m.currentAIMsg = msg.Content
+			m.addLog("info", fmt.Sprintf("[%s] 响应完成", m.currentAgentName))
 		case bus.ChatEventStateError:
-			m.status = "错误"
+			m.status = fmt.Sprintf("[%s] 错误", m.currentAgentName)
 			m.currentAIMsg = fmt.Sprintf("错误: %s", msg.Content)
+			m.addLog("error", fmt.Sprintf("[%s] 错误: %s", m.currentAgentName, msg.Content))
 		case bus.ChatEventStateInterrupt:
-			m.status = "等待确认"
+			m.status = fmt.Sprintf("[%s] 等待确认", m.currentAgentName)
 			m.currentToolInfo = msg.Content
+			m.addLog("warn", fmt.Sprintf("[%s] 等待确认: %s", m.currentAgentName, msg.Content))
 		}
 		m.updateViewports()
 		return m, m.listenChatEvents()
@@ -483,6 +500,7 @@ func (m *Model) sendMessage() tea.Cmd {
 	m.currentAIMsg = ""
 	m.currentThinking = ""
 	m.currentToolInfo = ""
+	m.currentAgentName = "" // 重置 agent 名称，等待 ChatEvent 更新
 
 	// 添加用户消息
 	m.addMessage("user", content, false)
