@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"reflect"
+	"strings"
 	"sync"
 
 	"github.com/cloudwego/eino/adk/middlewares/filesystem"
@@ -341,11 +342,17 @@ func NewSupervisorAgent(ctx context.Context, cfg *Config) (*Agent, error) {
 		}
 	}
 
+	// 构建包含子 agent 信息的系统提示词
+	systemPrompt := prompt.BuildSystemPrompt()
+	if len(subAgents) > 0 {
+		systemPrompt += buildSubAgentPrompt(ctx, subAgents)
+	}
+
 	// 创建 supervisor agent（使用 ChatModelAgent 作为 supervisor）
 	supervisorConfig := &adk.ChatModelAgentConfig{
 		Name:          cfg.Name,
 		Description:   description,
-		Instruction:   prompt.BuildSystemPrompt(),
+		Instruction:   systemPrompt,
 		Model:         cfg.LLM,
 		MaxIterations: cfg.MaxIteration,
 		Handlers: []adk.ChatModelAgentMiddleware{
@@ -383,6 +390,31 @@ func NewSupervisorAgent(ctx context.Context, cfg *Config) (*Agent, error) {
 		cfg:    cfg,
 		cancel: cancel,
 	}, nil
+}
+
+// buildSubAgentPrompt 构建子 agent 描述提示词
+func buildSubAgentPrompt(ctx context.Context, subAgents []adk.Agent) string {
+	if len(subAgents) == 0 {
+		return ""
+	}
+
+	var prompt strings.Builder
+	prompt.WriteString("\n\n---\n\n## 子 Agent 任务分配\n\n")
+	prompt.WriteString("你是监督者 Agent，负责协调多个子 Agent 来完成任务。")
+	prompt.WriteString("你可以将任务分配给以下子 Agent 处理：\n\n")
+
+	for _, agent := range subAgents {
+		name := agent.Name(ctx)
+		desc := agent.Description(ctx)
+		prompt.WriteString(fmt.Sprintf("- **%s**: %s\n", name, desc))
+	}
+
+	prompt.WriteString("\n### 任务分配指导\n\n")
+	prompt.WriteString("根据任务类型和子 Agent 的能力描述，将合适的任务分配给对应的子 Agent。\n")
+	prompt.WriteString("分配任务时，请提供清晰的任务描述和期望的输出格式。\n")
+	prompt.WriteString("子 Agent 完成任务后会返回结果，你需要整合结果并决定下一步行动。\n")
+
+	return prompt.String()
 }
 
 // buildBuiltinAgentMiddlewares 生成文件操作及shell执行中间件
