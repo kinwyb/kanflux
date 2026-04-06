@@ -44,13 +44,21 @@ func (t *MemoryTool) Name() string {
 func (t *MemoryTool) Description() string {
 	return `Manage memory content (long-term memory or daily notes).
 
-Actions:
-- read: Get current memory content
-- append: Add content to the end
-- edit: Replace specific text (requires old_text and new_text)
-- write: Overwrite entire memory with new content
+**Actions**:
+- read: Get current memory content. Returns actual file content or empty.
+- append: Add content to the end. REQUIRES "content" parameter.
+- edit: Replace specific text in existing content. REQUIRES "old_text" (must exist) and "new_text". FAILS if file is empty.
+- write: Overwrite entire memory. REQUIRES "content" parameter.
 
-For daily notes, use type='day' with optional 'date' (YYYY-MM-DD, defaults to today).`
+**Parameters**:
+- action: Required (read/append/edit/write)
+- type: "long" or "day" (default: "long")
+- date: For daily notes (YYYY-MM-DD, defaults to today)
+- content: Required for append/write
+- old_text: Required for edit (must match existing text)
+- new_text: Required for edit
+
+**Important**: Use "append" or "write" (not "edit") when file is empty or doesn't exist yet.`
 }
 
 // Parameters 返回参数定义
@@ -60,30 +68,30 @@ func (t *MemoryTool) Parameters() map[string]interface{} {
 		"properties": map[string]interface{}{
 			"action": map[string]interface{}{
 				"type":        "string",
-				"description": "Action: 'read', 'append', 'edit', or 'write'",
+				"description": "Required. Action: 'read', 'append', 'edit', or 'write'",
 				"enum":        []string{"read", "append", "edit", "write"},
 			},
 			"type": map[string]interface{}{
 				"type":        "string",
-				"description": "Memory type: 'long' or 'day'",
+				"description": "Memory type: 'long' or 'day' (default: 'long')",
 				"enum":        []string{"long", "day"},
 				"default":     "long",
 			},
 			"date": map[string]interface{}{
 				"type":        "string",
-				"description": "Date for daily notes (YYYY-MM-DD). Only for type='day'. Defaults to today.",
+				"description": "Date for daily notes (YYYY-MM-DD format). Only used when type='day'. Defaults to today.",
 			},
 			"content": map[string]interface{}{
 				"type":        "string",
-				"description": "Content for 'append' or 'write' action",
+				"description": "Required for 'append' and 'write'. The text content to write.",
 			},
 			"old_text": map[string]interface{}{
 				"type":        "string",
-				"description": "Text to replace (for 'edit' action)",
+				"description": "Required for 'edit'. Must match existing text in file exactly. Edit fails if text not found.",
 			},
 			"new_text": map[string]interface{}{
 				"type":        "string",
-				"description": "New text (for 'edit' action)",
+				"description": "Required for 'edit'. The replacement text.",
 			},
 		},
 		"required": []string{"action"},

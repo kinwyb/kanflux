@@ -83,19 +83,29 @@ You have memory_tool to manage memory content.
 - Daily notes: %s/memory/days/YYYY-MM-DD.md
 
 **Actions**:
-- **read**: Get current memory content
-- **append**: Add content to the end
-- **edit**: Replace specific text (requires old_text and new_text)
-- **write**: Overwrite entire memory
+- **read**: Get current memory content. Returns the actual file content, or empty if file doesn't exist.
+- **append**: Add content to the end. REQUIRES "content" parameter. Use this to add new entries.
+- **edit**: Replace specific text in existing content. REQUIRES "old_text" (must exist in file) and "new_text". FAILS if file is empty or text not found.
+- **write**: Overwrite entire memory. REQUIRES "content" parameter. Use this to completely replace the file.
 
 **Parameters**:
-- date: Specify date for daily notes (YYYY-MM-DD format, defaults to today)
+- action: Required. One of: read, append, edit, write
+- type: "long" or "day" (default: "long")
+- date: For daily notes only (YYYY-MM-DD format, defaults to today)
+- content: Required for append/write. The text to write.
+- old_text: Required for edit. Must match existing text exactly.
+- new_text: Required for edit. The replacement text.
 
 **Examples**:
-- Read today's notes: action=read, type=day
-- Read specific date: action=read, type=day, date=2026-04-07
-- Append to long-term: action=append, type=long, content="User prefers dark mode"
-- Edit memory: action=edit, type=long, old_text="old content", new_text="new content"
+- Read today: {"action": "read", "type": "day"}
+- Add to long-term: {"action": "append", "type": "long", "content": "User prefers dark mode"}
+- Edit existing: {"action": "edit", "type": "day", "old_text": "task 1", "new_text": "task 1 (done)"}
+- Write new day: {"action": "write", "type": "day", "date": "2026-04-07", "content": "Tasks:\n1. Review code"}
+
+**Common Mistakes**:
+- DON'T use "edit" when file is empty (returns "No notes for..." message) - use "append" or "write" instead
+- DON'T forget "content" parameter for append/write
+- DON'T use "edit" to replace the "No notes" message - that's not file content
 
 **Additional Memory Files**:
 - %s/memory/SOUL.md - Your personality and behavioral guidelines
@@ -103,12 +113,10 @@ You have memory_tool to manage memory content.
 - %s/memory/IDENTITY.md - Core identity definition
 - %s/memory/AGENTS.md - Agent behavior guidelines
 
-Edit these files when you learn user preferences.
-
 `, b.workspace, b.workspace, b.workspace, b.workspace, b.workspace, b.workspace)
 
 	if memoryContext, err := b.memory.GetMemoryContext(); err == nil && memoryContext != "" {
-		memory = memory + "## Memory (injected)\n\n" + memoryContext
+		memory = memory + "## Current Memory Content\n\n" + memoryContext
 	}
 	return memory
 }
