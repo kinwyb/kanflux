@@ -109,39 +109,8 @@ type Message struct {
 
 // NewModel 创建新模型
 func NewModel(ctx context.Context, cfg *Config) (*Model, error) {
-	// 创建LLM
-	llm, err := providers.NewOpenAI(ctx, cfg.APIBaseURL, cfg.Model, cfg.APIKey)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create LLM: %w", err)
-	}
-
-	// 创建工具注册器
-	toolRegistry := tools.NewRegistry()
-	toolRegistry.NeedApprove("read_file")
-	toolRegistry.NeedApprove("write_file")
-	toolRegistry.NeedApprove("ls")
-
-	// 创建Agent配置
-	agentCfg := &agent.Config{
-		LLM:          llm,
-		Workspace:    cfg.Workspace,
-		MaxIteration: cfg.MaxIteration,
-		ToolRegister: toolRegistry,
-		SkillDirs:    cfg.SkillDirs,
-		Streaming:    true,
-	}
-
-	// 创建Agent
-	ag, err := agent.NewAgent(ctx, agentCfg)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create agent: %w", err)
-	}
-
-	// 创建会话管理器
-	sessionMgr, err := session.NewManager(cfg.Workspace)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create session manager: %w", err)
-	}
+	var manager *agent.Manager
+	var workspace string
 
 	// 创建消息总线
 	msgBus := bus.NewMessageBus(10)
@@ -149,9 +118,75 @@ func NewModel(ctx context.Context, cfg *Config) (*Model, error) {
 	// 设置 slog 默认 logger 使用 bus handler
 	bus.SetupDefaultLogger(msgBus, slog.LevelDebug, bus.ChannelTUI)
 
-	// 创建Agent管理器
-	manager := agent.NewManager(msgBus, sessionMgr)
-	manager.RegisterAgent("default", ag, true)
+	if cfg.AppConfig != nil && len(cfg.AppConfig.Agents) > 0 {
+		// 多 agent 模式：从配置文件自动注册所有 agent
+		workspace = cfg.Workspace
+		if workspace == "" {
+			// 使用默认 agent 的 workspace
+			defaultName := cfg.AppConfig.GetDefaultAgentName()
+			if resolved, err := cfg.AppConfig.ResolveAgentConfig(defaultName); err == nil {
+				workspace = resolved.Workspace
+			}
+		}
+
+		// 创建会话管理器
+		sessionMgr, err := session.NewManager(workspace)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create session manager: %w", err)
+		}
+
+		// 创建 Manager
+		manager = agent.NewManager(msgBus, sessionMgr)
+
+		// 自动注册所有 agent
+		if err := manager.RegisterAgentsFromConfig(ctx, cfg.AppConfig, nil); err != nil {
+			return nil, fmt.Errorf("failed to register agents from config: %w", err)
+		}
+
+	} else {
+		// 单 agent 模式：手动创建单个 agent
+		workspace = cfg.Workspace
+		if workspace == "" {
+			workspace = "."
+		}
+
+		// 创建LLM
+		llm, err := providers.NewOpenAI(ctx, cfg.APIBaseURL, cfg.Model, cfg.APIKey)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create LLM: %w", err)
+		}
+
+		// 创建工具注册器
+		toolRegistry := tools.NewRegistry()
+
+		// 创建Agent配置
+		agentCfg := &agent.Config{
+			LLM:          llm,
+			Workspace:    workspace,
+			MaxIteration: cfg.MaxIteration,
+			ToolRegister: toolRegistry,
+			SkillDirs:    cfg.SkillDirs,
+			Streaming:    true,
+		}
+
+		// 创建Agent
+		ag, err := agent.NewAgent(ctx, agentCfg)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create agent: %w", err)
+		}
+
+		// 创建会话管理器
+		sessionMgr, err := session.NewManager(workspace)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create session manager: %w", err)
+		}
+
+		// 创建Agent管理器
+		manager = agent.NewManager(msgBus, sessionMgr)
+		manager.RegisterAgent("default", ag, true)
+	}
+
+	// 启动 Manager
 	manager.Start(ctx)
 
 	// 创建输入框
@@ -178,7 +213,7 @@ func NewModel(ctx context.Context, cfg *Config) (*Model, error) {
 		cfg:             cfg,
 		manager:         manager,
 		bus:             msgBus,
-		sessionMgr:      sessionMgr,
+		sessionMgr:      manager.GetSessionManager(),
 		chatID:          chatID,
 		input:           ti,
 		chatViewport:    chatVP,

@@ -25,7 +25,9 @@ type ProviderConfig struct {
 // AgentConfig agent 配置
 type AgentConfig struct {
 	Name         string   `json:"name"`
+	Description  string   `json:"description"`   // Agent 描述，未配置时使用默认描述
 	Workspace    string   `json:"workspace"`     // 必须指定
+	SubAgents    []string `json:"sub_agents"`    // 子 agent 名称列表
 	Provider     string   `json:"provider"`      // 未指定使用 default_provider
 	Model        string   `json:"model"`         // 未指定使用供应商的 default_model
 	MaxIteration int      `json:"max_iteration"` // 默认 10
@@ -36,7 +38,9 @@ type AgentConfig struct {
 // ResolvedAgentConfig 解析后的 agent 配置（包含最终确定的值）
 type ResolvedAgentConfig struct {
 	Name         string
+	Description  string   // Agent 描述
 	Workspace    string
+	SubAgents    []string // 子 agent 名称列表
 	Provider     string
 	Model        string
 	APIKey       string
@@ -144,24 +148,40 @@ func (c *Config) ResolveAgentConfig(name string) (*ResolvedAgentConfig, error) {
 		maxIteration = 10
 	}
 
+	// 设置默认描述
+	description := agent.Description
+	if description == "" {
+		description = fmt.Sprintf("Agent %s for general tasks", name)
+	}
+
 	return &ResolvedAgentConfig{
 		Name:         agent.Name,
+		Description:  description,
 		Workspace:    agent.Workspace,
+		SubAgents:    agent.SubAgents,
 		Provider:     providerName,
 		Model:        model,
 		APIKey:       provider.APIKey,
 		APIBaseURL:   provider.APIBaseURL,
 		MaxIteration: maxIteration,
 		SkillDirs:    agent.SkillDirs,
-		Streaming:    agent.Streaming, // false 默认值保持 false，true 默认值需要单独处理
+		Streaming:    agent.Streaming,
 	}, nil
 }
 
-// SetDefaults 设置默认值（用于配置未提供时）
-func (r *ResolvedAgentConfig) SetDefaults() {
-	if r.MaxIteration == 0 {
-		r.MaxIteration = 10
+// GetDefaultAgentName 获取默认 agent 名称（第一个 agent）
+func (c *Config) GetDefaultAgentName() string {
+	if len(c.Agents) == 0 {
+		return ""
 	}
-	// Streaming 默认为 true（JSON 解析时 false 会保持 false）
-	// 这个需要在调用方处理，因为 bool 的零值是 false
+	return c.Agents[0].Name
+}
+
+// GetAllAgentNames 获取所有 agent 名称
+func (c *Config) GetAllAgentNames() []string {
+	names := make([]string, 0, len(c.Agents))
+	for _, agent := range c.Agents {
+		names = append(names, agent.Name)
+	}
+	return names
 }

@@ -4,15 +4,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/kinwyb/kanflux/agent/tools"
-	"github.com/kinwyb/kanflux/bus"
-	"github.com/kinwyb/kanflux/session"
 	"reflect"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/kinwyb/kanflux/agent/tools"
+	"github.com/kinwyb/kanflux/bus"
+	"github.com/kinwyb/kanflux/config"
+	"github.com/kinwyb/kanflux/providers"
+	"github.com/kinwyb/kanflux/session"
+
 	"github.com/cloudwego/eino/adk"
+	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/schema"
 )
@@ -23,14 +27,14 @@ type ResumeParamConverter func(msg *bus.InboundMessage, interruptInfo *Interrupt
 
 // Manager 管理多个 Agent 实例
 type Manager struct {
-	agents           map[string]*Agent            // agentID -> Agent
-	defaultAgent     *Agent                       // 默认 Agent
+	agents           map[string]*Agent // agentID -> Agent
+	defaultAgent     *Agent            // 默认 Agent
 	bus              *bus.MessageBus
 	sessionMgr       *session.Manager
 	mu               sync.RWMutex
 	resumeConverters map[reflect.Type]ResumeParamConverter // 按恢复参数类型注册转换器
 	converterMu      sync.RWMutex
-	commands         map[string]CommandHandler    // 命令注册表
+	commands         map[string]CommandHandler // 命令注册表
 	commandsMu       sync.RWMutex
 }
 
@@ -91,6 +95,145 @@ func (m *Manager) RegisterAgent(agentID string, agent *Agent, isDefault bool) {
 	}
 }
 
+// RegisterAgentsFromConfig 根据配置自动注册所有 agent
+// 处理子 agent 依赖关系，确保子 agent 先于父 agent 创建
+func (m *Manager) RegisterAgentsFromConfig(ctx context.Context, cfg *config.Config, providerFactory func(ctx context.Context, apiBaseURL, model, apiKey string) (model.ToolCallingChatModel, error)) error {
+	if cfg == nil || len(cfg.Agents) == 0 {
+		return errors.New("no agents in config")
+	}
+
+	// 解析所有 agent 配置
+	resolvedConfigs := make(map[string]*config.ResolvedAgentConfig)
+	for _, agentCfg := range cfg.Agents {
+		resolved, err := cfg.ResolveAgentConfig(agentCfg.Name)
+		if err != nil {
+			return fmt.Errorf("failed to resolve agent '%s': %w", agentCfg.Name, err)
+		}
+		resolvedConfigs[resolved.Name] = resolved
+	}
+
+	// 构建依赖图并拓扑排序
+	agentNames := cfg.GetAllAgentNames()
+	sortedNames, err := m.topologicalSortAgents(agentNames, resolvedConfigs)
+	if err != nil {
+		return fmt.Errorf("failed to sort agents by dependencies: %w", err)
+	}
+
+	// 按顺序创建和注册 agent
+	createdAgents := make(map[string]*Agent)
+	defaultAgentName := cfg.GetDefaultAgentName()
+
+	for _, name := range sortedNames {
+		resolved := resolvedConfigs[name]
+
+		// 创建 LLM
+		var llm model.ToolCallingChatModel
+		var err error
+		if providerFactory != nil {
+			llm, err = providerFactory(ctx, resolved.APIBaseURL, resolved.Model, resolved.APIKey)
+		} else {
+			llm, err = providers.NewOpenAI(ctx, resolved.APIBaseURL, resolved.Model, resolved.APIKey)
+		}
+		if err != nil {
+			return fmt.Errorf("failed to create LLM for agent '%s': %w", name, err)
+		}
+
+		// 创建工具注册器
+		toolRegistry := tools.NewRegistry()
+
+		// 获取已创建的子 agent
+		var subAgents []*Agent
+		for _, subName := range resolved.SubAgents {
+			if subAg, ok := createdAgents[subName]; ok {
+				subAgents = append(subAgents, subAg)
+			}
+		}
+
+		// 创建 Agent 配置
+		agentConfig := &Config{
+			Name:          resolved.Name,
+			Description:   resolved.Description,
+			LLM:           llm,
+			Workspace:     resolved.Workspace,
+			MaxIteration:  resolved.MaxIteration,
+			ToolRegister:  toolRegistry,
+			SkillDirs:     resolved.SkillDirs,
+			SubAgents:     subAgents,
+			SubAgentNames: resolved.SubAgents,
+			Streaming:     true,
+		}
+
+		// 创建 Agent
+		ag, err := NewAgent(ctx, agentConfig)
+		if err != nil {
+			return fmt.Errorf("failed to create agent '%s': %w", name, err)
+		}
+
+		createdAgents[name] = ag
+
+		// 注册到 Manager
+		isDefault := name == defaultAgentName
+		m.RegisterAgent(name, ag, isDefault)
+
+		m.log(ctx, bus.LogLevelInfo, "manager", fmt.Sprintf("Agent '%s' registered (default=%v)", name, isDefault))
+	}
+
+	return nil
+}
+
+// topologicalSortAgents 拓扑排序 agent，确保子 agent 在父 agent 之前
+func (m *Manager) topologicalSortAgents(agentNames []string, resolvedConfigs map[string]*config.ResolvedAgentConfig) ([]string, error) {
+	// 构建依赖图
+	graph := make(map[string][]string) // agent -> dependencies (sub_agents)
+	inDegree := make(map[string]int)
+
+	for _, name := range agentNames {
+		inDegree[name] = 0
+		graph[name] = []string{}
+	}
+
+	// 子 agent 是父 agent 的依赖（子 agent 必须先创建）
+	for _, name := range agentNames {
+		resolved := resolvedConfigs[name]
+		for _, subName := range resolved.SubAgents {
+			// subName 是 name 的依赖，name 依赖 subName
+			if _, exists := resolvedConfigs[subName]; exists {
+				graph[subName] = append(graph[subName], name)
+				inDegree[name]++
+			}
+		}
+	}
+
+	// Kahn 算法拓扑排序
+	queue := []string{}
+	for _, name := range agentNames {
+		if inDegree[name] == 0 {
+			queue = append(queue, name)
+		}
+	}
+
+	result := []string{}
+	for len(queue) > 0 {
+		curr := queue[0]
+		queue = queue[1:]
+		result = append(result, curr)
+
+		for _, neighbor := range graph[curr] {
+			inDegree[neighbor]--
+			if inDegree[neighbor] == 0 {
+				queue = append(queue, neighbor)
+			}
+		}
+	}
+
+	// 检查是否有环
+	if len(result) != len(agentNames) {
+		return nil, errors.New("circular dependency detected in agent sub_agents")
+	}
+
+	return result, nil
+}
+
 // GetAgent 获取 Agent
 func (m *Manager) GetAgent(agentID string) (*Agent, bool) {
 	m.mu.RLock()
@@ -105,6 +248,11 @@ func (m *Manager) GetDefaultAgent() *Agent {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.defaultAgent
+}
+
+// GetSessionManager 获取会话管理器
+func (m *Manager) GetSessionManager() *session.Manager {
+	return m.sessionMgr
 }
 
 // RegisterResumeConverter 注册恢复参数转换器
@@ -218,8 +366,8 @@ func (m *Manager) registerDefaultCommands() {
 		// 生成新的 chatID
 		newChatID := fmt.Sprintf("NEW_%d", time.Now().UnixNano())
 		return &CommandResult{
-			Content:   fmt.Sprintf("已开始新会话: %s", newChatID),
-			SkipAgent: true,
+			Content:     fmt.Sprintf("已开始新会话: %s", newChatID),
+			SkipAgent:   true,
 			ShouldReply: true,
 			Metadata: map[string]interface{}{
 				MetadataKeyNewChatID: newChatID,

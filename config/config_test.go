@@ -111,7 +111,9 @@ func TestResolveAgentConfig(t *testing.T) {
   "agents": [
     {
       "name": "explicit",
+      "description": "Explicit agent description",
       "workspace": "/ws/explicit",
+      "sub_agents": ["research", "code"],
       "provider": "openai",
       "model": "gpt-4"
     },
@@ -136,7 +138,7 @@ func TestResolveAgentConfig(t *testing.T) {
 		t.Fatalf("Load failed: %v", err)
 	}
 
-	// 测试完全指定的 agent
+	// 测试完全指定的 agent（包括描述和子 agent）
 	explicit, err := cfg.ResolveAgentConfig("explicit")
 	if err != nil {
 		t.Fatalf("ResolveAgentConfig failed: %v", err)
@@ -150,8 +152,17 @@ func TestResolveAgentConfig(t *testing.T) {
 	if explicit.APIKey != "sk-openai" {
 		t.Errorf("expected APIKey 'sk-openai', got '%s'", explicit.APIKey)
 	}
+	if explicit.Description != "Explicit agent description" {
+		t.Errorf("expected Description 'Explicit agent description', got '%s'", explicit.Description)
+	}
+	if len(explicit.SubAgents) != 2 {
+		t.Errorf("expected 2 sub_agents, got %d", len(explicit.SubAgents))
+	}
+	if explicit.SubAgents[0] != "research" || explicit.SubAgents[1] != "code" {
+		t.Errorf("expected sub_agents ['research', 'code'], got %v", explicit.SubAgents)
+	}
 
-	// 测试使用默认值的 agent
+	// 测试使用默认值的 agent（包括默认描述）
 	defaults, err := cfg.ResolveAgentConfig("defaults")
 	if err != nil {
 		t.Fatalf("ResolveAgentConfig failed: %v", err)
@@ -164,6 +175,13 @@ func TestResolveAgentConfig(t *testing.T) {
 	}
 	if defaults.APIKey != "sk-qwen" {
 		t.Errorf("expected APIKey 'sk-qwen', got '%s'", defaults.APIKey)
+	}
+	// 测试默认描述
+	if defaults.Description != "Agent defaults for general tasks" {
+		t.Errorf("expected default Description, got '%s'", defaults.Description)
+	}
+	if len(defaults.SubAgents) != 0 {
+		t.Errorf("expected 0 sub_agents, got %d", len(defaults.SubAgents))
 	}
 
 	// 测试部分指定的 agent
@@ -285,5 +303,39 @@ func TestMaxIterationDefault(t *testing.T) {
 
 	if resolved.MaxIteration != 10 {
 		t.Errorf("expected default MaxIteration 10, got %d", resolved.MaxIteration)
+	}
+}
+
+func TestGetDefaultAgentName(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "test.json")
+
+	configContent := `{
+  "providers": {"p": {"api_key": "k", "default_model": "m"}},
+  "default_provider": "p",
+  "agents": [{"name": "first", "workspace": "/ws1"}, {"name": "second", "workspace": "/ws2"}]
+}`
+
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	// 默认 agent 应该是第一个
+	if cfg.GetDefaultAgentName() != "first" {
+		t.Errorf("expected default agent name 'first', got '%s'", cfg.GetDefaultAgentName())
+	}
+
+	// 获取所有 agent 名称
+	names := cfg.GetAllAgentNames()
+	if len(names) != 2 {
+		t.Errorf("expected 2 agent names, got %d", len(names))
+	}
+	if names[0] != "first" || names[1] != "second" {
+		t.Errorf("expected names ['first', 'second'], got %v", names)
 	}
 }

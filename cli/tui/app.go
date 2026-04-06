@@ -5,16 +5,22 @@ import (
 	"os"
 
 	"github.com/charmbracelet/bubbletea"
+	"github.com/kinwyb/kanflux/config"
 )
 
 // Config TUI配置
 type Config struct {
+	// 单 agent 模式（无配置文件时使用）
 	Workspace    string
 	Model        string
 	APIKey       string
 	APIBaseURL   string
 	MaxIteration int
 	SkillDirs    []string
+
+	// 多 agent 模式（有配置文件时使用）
+	AppConfig    *config.Config // 完整配置
+	DefaultAgent string         // 默认 agent 名称
 }
 
 // App TUI应用

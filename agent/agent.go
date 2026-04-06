@@ -30,11 +30,14 @@ type Agent struct {
 
 type Config struct {
 	Name         string
+	Description  string      // Agent 描述
 	LLM          model.ToolCallingChatModel
 	Workspace    string
 	MaxIteration int
 	ToolRegister *tools.Registry
-	SkillDirs    []string // 支持多个 skill 目录
+	SkillDirs    []string    // 支持多个 skill 目录
+	SubAgents    []*Agent    // 子 agent 实例
+	SubAgentNames []string   // 子 agent 名称（用于配置引用）
 	Streaming    bool
 }
 
@@ -42,6 +45,11 @@ type Config struct {
 func NewAgent(ctx context.Context, cfg *Config) (*Agent, error) {
 	if cfg.Name == "" {
 		cfg.Name = "main"
+	}
+	// 设置默认描述
+	description := cfg.Description
+	if description == "" {
+		description = fmt.Sprintf("Agent %s for general tasks", cfg.Name)
 	}
 	prompt, err := NewContextBuilder(cfg.Workspace)
 	if err != nil {
@@ -55,12 +63,21 @@ func NewAgent(ctx context.Context, cfg *Config) (*Agent, error) {
 	if err != nil {
 		return nil, fmt.Errorf("文件工具创建失败: %w", err)
 	}
+
+	// 构建子 agent 列表（adk.Agent 接口）
+	subAgents := make([]adk.Agent, 0, len(cfg.SubAgents))
+	for _, subAg := range cfg.SubAgents {
+		if subAg.loop != nil && subAg.loop.agent != nil {
+			subAgents = append(subAgents, subAg.loop.agent)
+		}
+	}
+
 	agentConfig := &deep.Config{
 		Name:                         cfg.Name,
-		Description:                  "You are a friendly and empathetic partner who transcends simple conversation; you are a Deep Agent who anticipates needs, strategically deconstructs complex goals, and takes autonomous action to turn visions into reality.",
+		Description:                  description,
 		ChatModel:                    cfg.LLM,
 		Instruction:                  prompt.BuildSystemPrompt(),
-		SubAgents:                    nil,
+		SubAgents:                    subAgents,
 		MaxIteration:                 cfg.MaxIteration,
 		Backend:                      backend,
 		Shell:                        backend,
