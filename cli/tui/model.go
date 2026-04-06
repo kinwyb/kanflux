@@ -28,7 +28,7 @@ type SessionState int
 const (
 	StateIdle SessionState = iota
 	StateProcessing
-	StateWaitingApproval
+	StateWaitingApproval // 等待工具审批确认
 )
 
 // 消息类型
@@ -58,9 +58,10 @@ type (
 	}
 	// ChatEventMsg 聊天事件消息
 	ChatEventMsg struct {
-		AgentName string // Agent 名称
-		State     string // delta, thinking, tool, final, error, interrupt
-		Content   string
+		AgentName string                 // Agent 名称
+		State     string                 // delta, thinking, tool, final, error, interrupt
+		Content   string                 // 事件内容
+		Metadata  map[string]interface{} // 元数据
 	}
 )
 
@@ -100,6 +101,10 @@ type Model struct {
 	currentAgentName string // 当前处理的 agent 名称
 	isThinkingLogged bool   // 是否已记录思考日志
 	isFinalLogged    bool   // 是否已记录完成日志
+
+	// 中断确认
+	interruptType    string // 当前中断类型 (yes_no, select)
+	interruptContent string // 中断提示内容
 
 	// 样式
 	styles Styles
@@ -285,10 +290,18 @@ func (m *Model) listenChatEvents() tea.Cmd {
 				if event.ChatID != m.chatID {
 					continue
 				}
+				// 转换 Metadata
+				var metadata map[string]interface{}
+				if event.Metadata != nil {
+					if md, ok := event.Metadata.(map[string]interface{}); ok {
+						metadata = md
+					}
+				}
 				return ChatEventMsg{
 					AgentName: event.AgentName,
 					State:     event.State,
 					Content:   event.Content,
+					Metadata:  metadata,
 				}
 			}
 		}
@@ -303,6 +316,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.Type {
 		case tea.KeyCtrlC, tea.KeyEsc:
+			// 如果在等待确认状态，ESC 取消确认
+			if m.state == StateWaitingApproval {
+				m.state = StateIdle
+				m.status = "就绪"
+				m.interruptType = ""
+				m.interruptContent = ""
+				m.updateViewports()
+				return m, nil
+			}
 			return m, tea.Quit
 		case tea.KeyEnter:
 			if m.state == StateIdle && m.input.Value() != "" {
@@ -320,6 +342,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case tea.KeyRight:
 			m.logViewport.ScrollRight(1)
 			m.chatViewport.ScrollRight(1)
+		default:
+			// 处理 Y/N 键确认
+			if m.state == StateWaitingApproval && m.interruptType == bus.InterruptTypeYesNo {
+				key := strings.ToLower(msg.String())
+				if key == "y" || key == "n" {
+					return m, m.sendApproval(key == "y")
+				}
+			}
 		}
 
 	case tea.WindowSizeMsg:
@@ -449,6 +479,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = fmt.Sprintf("[%s] 等待确认", m.currentAgentName)
 			m.currentToolInfo = msg.Content
 			m.addLog("warn", fmt.Sprintf("[%s] 等待确认: %s", m.currentAgentName, msg.Content))
+			// 检查中断类型
+			if msg.Metadata != nil {
+				if interruptType, ok := msg.Metadata["interrupt_type"].(string); ok {
+					m.interruptType = interruptType
+					m.interruptContent = msg.Content
+					// yes_no 类型进入等待确认状态
+					if interruptType == bus.InterruptTypeYesNo {
+						m.state = StateWaitingApproval
+					}
+				}
+			}
 		}
 		m.updateViewports()
 		return m, m.listenChatEvents()
@@ -485,6 +526,8 @@ func (m *Model) View() string {
 	statusBar := m.styles.Status.Render(fmt.Sprintf(" [%s] ", m.status))
 	if m.state == StateProcessing {
 		statusBar = m.styles.StatusProcessing.Render(fmt.Sprintf(" [%s] ", m.status))
+	} else if m.state == StateWaitingApproval {
+		statusBar = m.styles.StatusProcessing.Render(fmt.Sprintf(" [%s] ", m.status))
 	}
 
 	// 左侧：对话 | 右侧：系统日志
@@ -494,11 +537,17 @@ func (m *Model) View() string {
 	// 左右并排布局
 	contentRow := lipgloss.JoinHorizontal(lipgloss.Top, chatArea, " ", logArea)
 
-	// 输入框
-	inputBox := m.styles.Input.Render(" 输入: " + m.input.View())
-
-	// 帮助提示
-	help := m.styles.Help.Render(" Ctrl+C退出 | Enter发送 | ↑↓对话 | ←→日志 | /help 查看命令")
+	// 输入框/确认框
+	var inputBox, help string
+	if m.state == StateWaitingApproval && m.interruptType == bus.InterruptTypeYesNo {
+		// 显示确认框
+		confirmBox := m.styles.ConfirmBox.Render(fmt.Sprintf("\n  %s\n\n  按 Y 确认 / 按 N 拒绝 / ESC 取消\n", m.interruptContent))
+		inputBox = confirmBox
+		help = m.styles.Help.Render(" Y=确认 | N=拒绝 | ESC=取消")
+	} else {
+		inputBox = m.styles.Input.Render(" 输入: " + m.input.View())
+		help = m.styles.Help.Render(" Ctrl+C退出 | Enter发送 | ↑↓对话 | ←→日志 | /help 查看命令")
+	}
 
 	// 组合界面
 	return lipgloss.JoinVertical(lipgloss.Left,
@@ -531,6 +580,51 @@ func (m *Model) sendMessage() tea.Cmd {
 	// 添加用户消息
 	m.addMessage("user", content, "")
 	m.addLog("info", "发送: "+content)
+	m.updateViewports()
+
+	// 发送到Agent
+	return func() tea.Msg {
+		inMsg := bus.InboundMessage{
+			ID:        fmt.Sprintf("%d", time.Now().UnixNano()),
+			Channel:   bus.ChannelTUI,
+			AccountID: bus.ChannelTUI,
+			SenderID:  "",
+			ChatID:    m.chatID,
+			Content:   content,
+			Media:     nil,
+			Metadata:  nil,
+			Timestamp: time.Now(),
+		}
+
+		err := m.bus.PublishInbound(m.ctx, &inMsg)
+		if err != nil {
+			return AgentResponseMsg{Error: err}
+		}
+
+		resp, err := m.bus.ConsumeOutboundFiltered(m.ctx, []string{bus.ChannelTUI})
+		if err != nil {
+			return AgentResponseMsg{Error: err}
+		}
+
+		return AgentResponseMsg{Content: resp.Content, ReasoningContent: resp.ReasoningContent, Metadata: resp.Metadata}
+	}
+}
+
+// sendApproval 发送审批确认（Y/N）
+func (m *Model) sendApproval(approved bool) tea.Cmd {
+	content := "Y"
+	if !approved {
+		content = "N"
+	}
+
+	// 重置状态
+	m.state = StateProcessing
+	m.status = "处理中..."
+	m.interruptType = ""
+	m.interruptContent = ""
+
+	// 添加用户响应日志
+	m.addLog("info", fmt.Sprintf("审批响应: %s", content))
 	m.updateViewports()
 
 	// 发送到Agent

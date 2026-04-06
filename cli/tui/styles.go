@@ -13,6 +13,7 @@ type Styles struct {
 	LogViewport      lipgloss.Style
 	ChatBox          lipgloss.Style
 	LogBox           lipgloss.Style
+	ConfirmBox       lipgloss.Style // 确认框样式
 	UserMessage      lipgloss.Style
 	AssistantMessage lipgloss.Style
 	ThinkingMessage  lipgloss.Style
@@ -47,6 +48,12 @@ func NewStyles() Styles {
 			BorderForeground(lipgloss.Color("63")),
 		ChatBox: lipgloss.NewStyle(),
 		LogBox:  lipgloss.NewStyle(),
+		ConfirmBox: lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("214")).
+			Background(lipgloss.Color("235")).
+			Foreground(lipgloss.Color("15")).
+			Padding(0, 2),
 		UserMessage: lipgloss.NewStyle().
 			Foreground(lipgloss.Color("86")),
 		AssistantMessage: lipgloss.NewStyle().
