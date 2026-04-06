@@ -754,12 +754,16 @@ func (m *Manager) handleAgentEvent(ctx context.Context, msg *bus.InboundMessage,
 			m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateTool, fmt.Sprintf("%v", toolInfo), seq)
 		}
 	case EventInterrupt:
-		m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateInterrupt, event.Message.Content, seq)
+		m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateInterrupt, event.Message.Content, seq, event.Metadata)
 	}
 }
 
 // publishChatEvent 发布聊天事件到总线
-func (m *Manager) publishChatEvent(ctx context.Context, channel, chatID, agentName, state string, content string, seq int) {
+func (m *Manager) publishChatEvent(ctx context.Context, channel, chatID, agentName, state string, content string, seq int, metadata ...interface{}) {
+	var meta interface{}
+	if len(metadata) > 0 {
+		meta = metadata[0]
+	}
 	event := &bus.ChatEvent{
 		Channel:   channel,
 		ChatID:    chatID,
@@ -768,6 +772,7 @@ func (m *Manager) publishChatEvent(ctx context.Context, channel, chatID, agentNa
 		Content:   content,
 		Seq:       seq,
 		Timestamp: time.Now(),
+		Metadata:  meta,
 	}
 
 	_ = m.bus.PublishChatEvent(ctx, event)

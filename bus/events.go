@@ -105,3 +105,15 @@ const (
 	LogLevelWarn  = "warn"
 	LogLevelError = "error"
 )
+
+// 中断类型常量
+const (
+	InterruptTypeYesNo  = "yes_no" // 是/否类型
+	InterruptTypeSelect = "select" // 列表选择类型
+)
+
+// InterruptTypeProvider 定义获取中断类型的接口
+// 中断信息类型可以实现此接口来声明中断类型
+type InterruptTypeProvider interface {
+	InterruptType() string
+}

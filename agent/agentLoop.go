@@ -13,6 +13,7 @@ import (
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/schema"
+	"github.com/kinwyb/kanflux/bus"
 )
 
 type looper struct {
@@ -280,7 +281,7 @@ func (o *looper) handleInterrupt(event *adk.AgentEvent, messages []adk.Message, 
 		for _, point := range event.Action.Interrupted.InterruptContexts {
 			// 获取端点参数类型
 			var endpointParamType, resumeParamType reflect.Type
-			var interruptReason string
+			var interruptReason, interruptType string
 			if point.Info != nil {
 				endpointParamType = reflect.TypeOf(point.Info)
 				// 如果中断信息实现了 ResumeParamTypeProvider 接口，获取恢复参数类型
@@ -289,6 +290,9 @@ func (o *looper) handleInterrupt(event *adk.AgentEvent, messages []adk.Message, 
 				}
 				if provider, ok := point.Info.(InterruptReasonProvider); ok {
 					interruptReason = provider.InterruptReason()
+				}
+				if provider, ok := point.Info.(bus.InterruptTypeProvider); ok {
+					interruptType = provider.InterruptType()
 				}
 			}
 			if interruptReason == "" {
@@ -303,11 +307,16 @@ func (o *looper) handleInterrupt(event *adk.AgentEvent, messages []adk.Message, 
 				Messages:          messages,
 			}
 
+			// 构建 metadata
+			metadata := map[string]interface{}{
+				"interrupt_type": interruptType,
+			}
+
 			// 发送中断事件
 			o.emit(NewEvent(EventInterrupt).WithMessage(&schema.Message{
 				Role:    schema.Assistant,
 				Content: interruptReason,
-			}))
+			}).WithMetadata(metadata))
 			sb.WriteString(interruptReason + "\n")
 		}
 	}

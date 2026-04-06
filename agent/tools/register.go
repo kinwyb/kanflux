@@ -14,6 +14,7 @@ import (
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
 	"github.com/eino-contrib/jsonschema"
+	"github.com/kinwyb/kanflux/bus"
 )
 
 // Registry 工具注册表
@@ -174,6 +175,11 @@ type ApprovalInfo struct {
 type ApprovalResult struct {
 	Approved         bool
 	DisapproveReason *string
+}
+
+// InterruptType 返回中断类型
+func (ai *ApprovalInfo) InterruptType() string {
+	return bus.InterruptTypeYesNo
 }
 
 func (ai *ApprovalInfo) InterruptReason() string {
