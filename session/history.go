@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -192,7 +193,7 @@ func (h *ConversationHistory) clearCache() {
 	h.dayContents = make(map[string]string)
 }
 
-// Search 搜索历史对话（两层检索）
+// Search 搜索历史对话（向量检索 + 关键词匹配）
 func (h *ConversationHistory) Search(ctx context.Context, query string, topK int) (string, error) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
@@ -201,25 +202,28 @@ func (h *ConversationHistory) Search(ctx context.Context, query string, topK int
 		return "History search is not available (no embedder).", nil
 	}
 
-	// 生成查询向量
-	queryVectors, err := h.embedder.EmbedStrings(ctx, []string{query})
-	if err != nil {
-		return "", fmt.Errorf("failed to embed query: %w", err)
-	}
-	if len(queryVectors) == 0 {
-		return "Failed to generate query vector.", nil
-	}
-	queryVector := queryVectors[0]
-
 	var allResults []SearchResult
 
-	// 第一层：搜索每日问答总结
-	layer1Results := h.searchLayer1(ctx, queryVector)
-	allResults = append(allResults, layer1Results...)
+	// 1. 向量检索
+	queryVectors, err := h.embedder.EmbedStrings(ctx, []string{query})
+	if err == nil && len(queryVectors) > 0 {
+		queryVector := queryVectors[0]
 
-	// 第二层：搜索原始问答索引
-	layer2Results := h.searchLayer2(queryVector)
-	allResults = append(allResults, layer2Results...)
+		// 第一层：搜索每日问答总结
+		layer1Results := h.searchLayer1(ctx, queryVector)
+		allResults = append(allResults, layer1Results...)
+
+		// 第二层：搜索原始问答索引
+		layer2Results := h.searchLayer2(queryVector)
+		allResults = append(allResults, layer2Results...)
+	}
+
+	// 2. 关键词匹配（作为补充，提高召回率）
+	keywordResults := h.searchByKeyword(query)
+	allResults = append(allResults, keywordResults...)
+
+	// 去重（按日期去重，保留最高分）
+	allResults = deduplicateResults(allResults)
 
 	if len(allResults) == 0 {
 		return "No relevant conversation history found.", nil
@@ -235,6 +239,125 @@ func (h *ConversationHistory) Search(ctx context.Context, query string, topK int
 
 	// 格式化输出
 	return h.formatResults(allResults), nil
+}
+
+// searchByKeyword 关键词匹配
+func (h *ConversationHistory) searchByKeyword(query string) []SearchResult {
+	var results []SearchResult
+
+	days, err := h.ListDays()
+	if err != nil {
+		return results
+	}
+
+	sortDaysDesc(days)
+
+	queryLower := strings.ToLower(query)
+
+	for _, date := range days {
+		dayContent, err := h.GetDaySummary(date)
+		if err != nil || dayContent == "" {
+			continue
+		}
+
+		// 检查是否包含关键词
+		if strings.Contains(strings.ToLower(dayContent), queryLower) {
+			// 计算关键词出现次数作为分数
+			count := strings.Count(strings.ToLower(dayContent), queryLower)
+			score := 0.6 + float64(count)*0.05 // 基础分 0.6，每次出现加 0.05
+			if score > 0.95 {
+				score = 0.95
+			}
+
+			// 提取所有包含关键词的问答片段
+			excerpts := extractQAWithKeyword(dayContent, query)
+
+			if len(excerpts) > 0 {
+				// 合并所有片段
+				content := strings.Join(excerpts, "\n\n---\n\n")
+				if len(content) > 1000 {
+					content = content[:1000] + "..."
+				}
+
+				results = append(results, SearchResult{
+					Layer:   1,
+					Date:    date,
+					Content: content,
+					Score:   score,
+					Source:  fmt.Sprintf("日期: %s (关键词匹配)", date),
+				})
+			}
+		}
+	}
+
+	return results
+}
+
+// extractQAWithKeyword 提取包含关键词的问答片段（去重，保留最新回答）
+func extractQAWithKeyword(content, keyword string) []string {
+	lowerKeyword := strings.ToLower(keyword)
+
+	// 用于去重：问题文本 -> 最新的问答内容
+	qaMap := make(map[string]string)
+	var questionOrder []string // 保持问题顺序
+
+	// 按 ### Q 分割（问答对）
+	qaBlocks := strings.Split(content, "### Q")
+	for i, block := range qaBlocks {
+		if i == 0 {
+			continue // 跳过第一个空部分
+		}
+
+		qa := "### Q" + block
+		if strings.Contains(strings.ToLower(qa), lowerKeyword) {
+			// 提取问题文本作为去重 key（取第一行）
+			lines := strings.Split(qa, "\n")
+			questionKey := ""
+			if len(lines) > 0 {
+				questionKey = strings.TrimSpace(lines[0])
+			}
+
+			// 截断过长的回答
+			if len(qa) > 500 {
+				qa = qa[:500] + "..."
+			}
+
+			// 如果是新问题，记录顺序
+			if _, exists := qaMap[questionKey]; !exists {
+				questionOrder = append(questionOrder, questionKey)
+			}
+			// 覆盖为最新的回答
+			qaMap[questionKey] = qa
+		}
+	}
+
+	// 按原始顺序返回（保留最新的回答）
+	var excerpts []string
+	for _, q := range questionOrder {
+		excerpts = append(excerpts, qaMap[q])
+	}
+
+	return excerpts
+}
+
+// deduplicateResults 按内容去重，保留分数最高的结果
+func deduplicateResults(results []SearchResult) []SearchResult {
+	// 按日期分组，保留每个日期分数最高的结果
+	bestByDate := make(map[string]SearchResult)
+
+	for _, r := range results {
+		key := r.Date // 按日期去重
+		if existing, ok := bestByDate[key]; !ok || r.Score > existing.Score {
+			bestByDate[key] = r
+		}
+	}
+
+	unique := make([]SearchResult, 0, len(bestByDate))
+	for _, r := range bestByDate {
+		unique = append(unique, r)
+	}
+
+	return unique
 }
 
 // searchLayer1 搜索第一层：每日问答总结
@@ -274,7 +397,8 @@ func (h *ConversationHistory) searchLayer1(ctx context.Context, queryVector []fl
 		}
 
 		score := cosineSimilarity(queryVector, dayVector)
-		if score > 0.4 { // 第一层阈值
+
+		if score > 0.3 { // 降低第一层阈值到 0.3
 			results = append(results, SearchResult{
 				Layer:   1,
 				Date:    date,
@@ -294,7 +418,7 @@ func (h *ConversationHistory) searchLayer2(queryVector []float64) []SearchResult
 
 	for chunkID, vector := range h.vectors {
 		score := cosineSimilarity(queryVector, vector)
-		if score > 0.5 { // 第二层阈值，精确匹配
+		if score > 0.35 { // 降低第二层阈值到 0.35
 			content, ok := h.chunkContent[chunkID]
 			if !ok {
 				continue
@@ -588,7 +712,7 @@ func cosineSimilarity(a, b []float64) float64 {
 		return 0
 	}
 
-	return dotProduct / (sqrt(normA) * sqrt(normB))
+	return dotProduct / (math.Sqrt(normA) * math.Sqrt(normB))
 }
 
 // truncateText 截断文本
@@ -597,18 +721,6 @@ func truncateText(text string, maxLen int) string {
 		return text
 	}
 	return text[:maxLen] + "..."
-}
-
-// sqrt 简单平方根
-func sqrt(x float64) float64 {
-	if x <= 0 {
-		return 0
-	}
-	z := x
-	for i := 0; i < 10; i++ {
-		z = z - (z*z-x)/(2*z)
-	}
-	return z
 }
 
 // sortDaysDesc 按日期倒序排列
