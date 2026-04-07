@@ -18,36 +18,32 @@ import (
 
 // SearchResult 搜索结果
 type SearchResult struct {
-	Layer   int     `json:"layer"`   // 层级: 1, 2, 3
-	Date    string  `json:"date"`     // 日期
-	Content string  `json:"content"`  // 内容
-	Score   float64 `json:"score"`    // 相关性分数
-	Source  string  `json:"source"`   // 来源描述
+	Layer   int     `json:"layer"`   // 层级: 1=每日总结, 2=具体问答
+	Date    string  `json:"date"`    // 日期
+	Content string  `json:"content"` // 内容
+	Score   float64 `json:"score"`   // 相关性分数
+	Source  string  `json:"source"`  // 来源描述
 }
 
 // ConversationHistory 历史对话管理器
-// 三层结构：
-// - 第一层：关键信息摘要 (key_info.md) - 整体摘要
-// - 第二层：每日问答总结 (days/YYYY-MM-DD.md) - 按日聚合
-// - 第三层：原始 session 向量索引 (index.json) - 精确问答对
+// 两层结构：
+// - 第一层：每日问答总结 (days/YYYY-MM-DD.md) - 按日聚合，阈值 0.4
+// - 第二层：原始 session 向量索引 (index.json) - 精确问答对，阈值 0.5
 type ConversationHistory struct {
-	baseDir   string
-	indexPath string
-	embedder  embedding.Embedder
+	baseDir    string
+	indexPath  string
+	embedder   embedding.Embedder
 	sessionDir string // session 文件目录
-	mu        sync.RWMutex
+	mu         sync.RWMutex
 
-	// 第三层：原始问答向量索引
+	// 第二层：原始问答向量索引
 	vectors      map[string][]float64              // chunkID -> vector
 	chunkContent map[string]string                 // chunkID -> content
 	chunkMeta    map[string]map[string]interface{} // chunkID -> metadata
 
-	// 缓存：第一层和第二层的向量
-	keyInfoVector  []float64 // 第一层向量
-	keyInfoContent string    // 第一层内容（用于检测变化）
-
-	dayVectors  map[string][]float64 // 第二层：日期 -> 向量
-	dayContents map[string]string    // 第二层：日期 -> 内容（用于检测变化）
+	// 缓存：第一层的向量
+	dayVectors  map[string][]float64 // 日期 -> 向量
+	dayContents map[string]string    // 日期 -> 内容（用于检测变化）
 }
 
 // NewConversationHistory 创建历史对话管理器
@@ -164,19 +160,14 @@ func (h *ConversationHistory) ProcessSession(ctx context.Context, session *Sessi
 		slog.Warn("[History] Failed to save day summary", "error", err)
 	}
 
-	// 4. 生成向量并存储到索引（第三层）
+	// 4. 生成向量并存储到索引（第二层）
 	if h.embedder != nil {
 		if err := h.indexQAPairs(ctx, date, session.Key, qaPairs); err != nil {
 			slog.Warn("[History] Failed to index QA pairs", "error", err)
 		}
 	}
 
-	// 5. 更新顶层摘要
-	if err := h.GenerateSummary(); err != nil {
-		slog.Warn("[History] Failed to generate summary", "error", err)
-	}
-
-	// 6. 清除缓存（下次搜索时会重新生成）
+	// 5. 清除缓存（下次搜索时会重新生成）
 	h.clearCache()
 
 	return h.saveIndex()
@@ -184,13 +175,11 @@ func (h *ConversationHistory) ProcessSession(ctx context.Context, session *Sessi
 
 // clearCache 清除向量缓存
 func (h *ConversationHistory) clearCache() {
-	h.keyInfoVector = nil
-	h.keyInfoContent = ""
 	h.dayVectors = make(map[string][]float64)
 	h.dayContents = make(map[string]string)
 }
 
-// Search 搜索历史对话（三层检索）
+// Search 搜索历史对话（两层检索）
 func (h *ConversationHistory) Search(ctx context.Context, query string, topK int) (string, error) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
@@ -211,17 +200,13 @@ func (h *ConversationHistory) Search(ctx context.Context, query string, topK int
 
 	var allResults []SearchResult
 
-	// 第一层：搜索关键信息摘要
+	// 第一层：搜索每日问答总结
 	layer1Results := h.searchLayer1(ctx, queryVector)
 	allResults = append(allResults, layer1Results...)
 
-	// 第二层：搜索每日问答总结
-	layer2Results := h.searchLayer2(ctx, queryVector)
+	// 第二层：搜索原始问答索引
+	layer2Results := h.searchLayer2(queryVector)
 	allResults = append(allResults, layer2Results...)
-
-	// 第三层：搜索原始问答索引
-	layer3Results := h.searchLayer3(queryVector)
-	allResults = append(allResults, layer3Results...)
 
 	if len(allResults) == 0 {
 		return "No relevant conversation history found.", nil
@@ -239,44 +224,8 @@ func (h *ConversationHistory) Search(ctx context.Context, query string, topK int
 	return h.formatResults(allResults), nil
 }
 
-// searchLayer1 搜索第一层：关键信息摘要
+// searchLayer1 搜索第一层：每日问答总结
 func (h *ConversationHistory) searchLayer1(ctx context.Context, queryVector []float64) []SearchResult {
-	var results []SearchResult
-
-	// 读取第一层内容
-	keyInfo, err := h.GetKeyInfo()
-	if err != nil || keyInfo == "" {
-		return results
-	}
-
-	// 检查缓存
-	if h.keyInfoContent != keyInfo || h.keyInfoVector == nil {
-		// 生成向量
-		vectors, err := h.embedder.EmbedStrings(ctx, []string{keyInfo})
-		if err != nil || len(vectors) == 0 {
-			return results
-		}
-		h.keyInfoVector = vectors[0]
-		h.keyInfoContent = keyInfo
-	}
-
-	// 计算相似度
-	score := cosineSimilarity(queryVector, h.keyInfoVector)
-	if score > 0.3 { // 第一层阈值较低，更容易匹配
-		results = append(results, SearchResult{
-			Layer:   1,
-			Date:    "",
-			Content: truncateText(keyInfo, 500),
-			Score:   score,
-			Source:  "关键信息摘要",
-		})
-	}
-
-	return results
-}
-
-// searchLayer2 搜索第二层：每日问答总结
-func (h *ConversationHistory) searchLayer2(ctx context.Context, queryVector []float64) []SearchResult {
 	var results []SearchResult
 
 	days, err := h.ListDays()
@@ -312,9 +261,9 @@ func (h *ConversationHistory) searchLayer2(ctx context.Context, queryVector []fl
 		}
 
 		score := cosineSimilarity(queryVector, dayVector)
-		if score > 0.4 { // 第二层阈值
+		if score > 0.4 { // 第一层阈值
 			results = append(results, SearchResult{
-				Layer:   2,
+				Layer:   1,
 				Date:    date,
 				Content: truncateText(dayContent, 800),
 				Score:   score,
@@ -326,13 +275,13 @@ func (h *ConversationHistory) searchLayer2(ctx context.Context, queryVector []fl
 	return results
 }
 
-// searchLayer3 搜索第三层：原始问答索引
-func (h *ConversationHistory) searchLayer3(queryVector []float64) []SearchResult {
+// searchLayer2 搜索第二层：原始问答索引
+func (h *ConversationHistory) searchLayer2(queryVector []float64) []SearchResult {
 	var results []SearchResult
 
 	for chunkID, vector := range h.vectors {
 		score := cosineSimilarity(queryVector, vector)
-		if score > 0.5 { // 第三层阈值最高，精确匹配
+		if score > 0.5 { // 第二层阈值，精确匹配
 			content, ok := h.chunkContent[chunkID]
 			if !ok {
 				continue
@@ -344,7 +293,7 @@ func (h *ConversationHistory) searchLayer3(queryVector []float64) []SearchResult
 			}
 
 			results = append(results, SearchResult{
-				Layer:   3,
+				Layer:   2,
 				Date:    date,
 				Content: content,
 				Score:   score,
@@ -377,10 +326,8 @@ func (h *ConversationHistory) formatResults(results []SearchResult) string {
 func getLayerName(layer int) string {
 	switch layer {
 	case 1:
-		return "关键信息摘要"
-	case 2:
 		return "每日总结"
-	case 3:
+	case 2:
 		return "具体问答"
 	default:
 		return "未知来源"
@@ -519,63 +466,6 @@ func (h *ConversationHistory) indexQAPairs(ctx context.Context, date, sessionKey
 	}
 
 	return nil
-}
-
-// GetKeyInfo 获取关键信息摘要
-func (h *ConversationHistory) GetKeyInfo() (string, error) {
-	keyFile := filepath.Join(h.baseDir, "key_info.md")
-	data, err := os.ReadFile(keyFile)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return "", nil
-		}
-		return "", err
-	}
-	return string(data), nil
-}
-
-// GenerateSummary 从每日总结生成顶层摘要
-func (h *ConversationHistory) GenerateSummary() error {
-	days, err := h.ListDays()
-	if err != nil {
-		return err
-	}
-
-	if len(days) == 0 {
-		return nil
-	}
-
-	sortDaysDesc(days)
-
-	var sb strings.Builder
-	sb.WriteString("# 对话历史摘要\n\n")
-	sb.WriteString(fmt.Sprintf("最近更新：%s\n\n", days[0]))
-	sb.WriteString("此文件自动生成，记录每天的对话数量。\n\n")
-
-	monthMap := make(map[string][]string)
-	for _, day := range days {
-		parts := strings.Split(day, "-")
-		if len(parts) >= 2 {
-			month := fmt.Sprintf("%s年%s月", parts[0], parts[1])
-			monthMap[month] = append(monthMap[month], day)
-		}
-	}
-
-	for _, month := range getSortedMonths(monthMap) {
-		sb.WriteString(fmt.Sprintf("## %s\n", month))
-		for _, day := range monthMap[month] {
-			dayContent, err := h.GetDaySummary(day)
-			sessionCount := 0
-			if err == nil {
-				sessionCount = strings.Count(dayContent, "## Session:")
-			}
-			sb.WriteString(fmt.Sprintf("- %s: %d 个会话\n", day[5:], sessionCount))
-		}
-		sb.WriteString("\n")
-	}
-
-	keyFile := filepath.Join(h.baseDir, "key_info.md")
-	return os.WriteFile(keyFile, []byte(sb.String()), 0644)
 }
 
 // GetDaySummary 获取指定日期的问答总结
@@ -718,23 +608,6 @@ func sortDaysDesc(days []string) {
 			}
 		}
 	}
-}
-
-// getSortedMonths 获取排序后的月份列表
-func getSortedMonths(monthMap map[string][]string) []string {
-	months := make([]string, 0, len(monthMap))
-	for m := range monthMap {
-		months = append(months, m)
-	}
-	n := len(months)
-	for i := 0; i < n-1; i++ {
-		for j := 0; j < n-i-1; j++ {
-			if months[j] < months[j+1] {
-				months[j], months[j+1] = months[j+1], months[j]
-			}
-		}
-	}
-	return months
 }
 
 // loadSession 加载 session 文件
