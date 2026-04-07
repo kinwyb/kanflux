@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/components/embedding"
@@ -33,6 +34,7 @@ type ConversationHistory struct {
 	baseDir   string
 	indexPath string
 	embedder  embedding.Embedder
+	sessionDir string // session 文件目录
 	mu        sync.RWMutex
 
 	// 第三层：原始问答向量索引
@@ -64,6 +66,7 @@ func NewConversationHistory(sessionDir string, embedder embedding.Embedder) (*Co
 		baseDir:      baseDir,
 		indexPath:    filepath.Join(baseDir, "index.json"),
 		embedder:     embedder,
+		sessionDir:   filepath.Dir(baseDir), // session 文件目录
 		vectors:      make(map[string][]float64),
 		chunkContent: make(map[string]string),
 		chunkMeta:    make(map[string]map[string]interface{}),
@@ -77,6 +80,63 @@ func NewConversationHistory(sessionDir string, embedder embedding.Embedder) (*Co
 	}
 
 	return history, nil
+}
+
+// InitializeAsync 异步初始化：处理已有的 session 文件生成历史记录
+func (h *ConversationHistory) InitializeAsync() {
+	if h.sessionDir == "" {
+		return
+	}
+
+	go func() {
+		ctx := context.Background()
+		slog.Info("[History] Starting async initialization, processing existing sessions...")
+
+		// 列出所有 session 文件
+		entries, err := os.ReadDir(h.sessionDir)
+		if err != nil {
+			if !os.IsNotExist(err) {
+				slog.Warn("[History] Failed to read session directory", "error", err)
+			}
+			return
+		}
+
+		var sessionFiles []string
+		for _, entry := range entries {
+			if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".jsonl") {
+				sessionFiles = append(sessionFiles, entry.Name())
+			}
+		}
+
+		if len(sessionFiles) == 0 {
+			slog.Info("[History] No existing sessions to process")
+			return
+		}
+
+		slog.Info("[History] Found existing sessions", "count", len(sessionFiles))
+
+		processed := 0
+		for _, filename := range sessionFiles {
+			sessionKey := strings.TrimSuffix(filename, ".jsonl")
+			session, err := h.loadSession(sessionKey)
+			if err != nil {
+				slog.Warn("[History] Failed to load session", "key", sessionKey, "error", err)
+				continue
+			}
+
+			if len(session.Messages) == 0 {
+				continue
+			}
+
+			if err := h.ProcessSession(ctx, session); err != nil {
+				slog.Warn("[History] Failed to process session", "key", sessionKey, "error", err)
+				continue
+			}
+			processed++
+		}
+
+		slog.Info("[History] Finished processing existing sessions", "processed", processed, "total", len(sessionFiles))
+	}()
 }
 
 // ProcessSession 处理 session，生成历史记录
@@ -675,4 +735,62 @@ func getSortedMonths(monthMap map[string][]string) []string {
 		}
 	}
 	return months
+}
+
+// loadSession 加载 session 文件
+func (h *ConversationHistory) loadSession(key string) (*Session, error) {
+	// 将 key 中的特殊字符替换为下划线（与 manager.go sessionPath 保持一致）
+	safeKey := strings.Map(func(r rune) rune {
+		if r == '/' || r == '\\' || r == ':' || r == '*' || r == '?' || r == '"' || r == '<' || r == '>' || r == '|' {
+			return '_'
+		}
+		return r
+	}, key)
+
+	filePath := filepath.Join(h.sessionDir, safeKey+".jsonl")
+
+	file, err := os.Open(filePath)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	session := &Session{
+		Key:       key,
+		Messages:  []adk.Message{},
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+		Metadata:  make(map[string]interface{}),
+	}
+
+	decoder := json.NewDecoder(file)
+	for decoder.More() {
+		var raw map[string]interface{}
+		if err := decoder.Decode(&raw); err != nil {
+			return nil, err
+		}
+
+		// 检查是否为元数据行
+		if msgType, ok := raw["_type"].(string); ok && msgType == "metadata" {
+			if createdAt, ok := raw["created_at"].(string); ok {
+				session.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+			}
+			if updatedAt, ok := raw["updated_at"].(string); ok {
+				session.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
+			}
+			if metadata, ok := raw["metadata"].(map[string]interface{}); ok {
+				session.Metadata = metadata
+			}
+		} else {
+			// 消息行
+			data, _ := json.Marshal(raw)
+			var msg adk.Message
+			if err := json.Unmarshal(data, &msg); err != nil {
+				return nil, err
+			}
+			session.Messages = append(session.Messages, msg)
+		}
+	}
+
+	return session, nil
 }

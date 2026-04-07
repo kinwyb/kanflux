@@ -44,6 +44,8 @@ func (m *Manager) SetEmbedder(embedder embedding.Embedder) error {
 		return err
 	}
 	m.history = history
+	// 异步处理已有的 session 文件
+	history.InitializeAsync()
 	return nil
 }
 

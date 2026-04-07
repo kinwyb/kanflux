@@ -213,6 +213,11 @@ func NewDeepAgent(ctx context.Context, cfg *Config) (*Agent, error) {
 		}
 	}
 
+	// 注册历史对话检索工具
+	if cfg.SessionManager != nil && cfg.SessionManager.GetHistory() != nil {
+		cfg.ToolRegister.Register(session.NewHistorySearchTool(cfg.SessionManager.GetHistory()))
+	}
+
 	// 应用工具配置
 	applyToolConfig(cfg)
 
