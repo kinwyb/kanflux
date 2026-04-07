@@ -39,15 +39,15 @@ func (m *InboundMessage) SessionKey() string {
 
 // OutboundMessage 出站消息
 type OutboundMessage struct {
-	ID              string                 `json:"id"`
-	Channel         string                 `json:"channel"`         // 使用 Channel* 常量
-	ChatID          string                 `json:"chat_id"`         // 聊天ID
-	Content         string                 `json:"content"`         // 消息内容
-	ReasoningContent string                `json:"reasoning_content"` // 思考/推理内容
-	Media           []Media                `json:"media"`           // 媒体文件
-	ReplyTo         string                 `json:"reply_to"`        // 回复的消息ID
-	Metadata        map[string]interface{} `json:"metadata"`        // 元数据
-	Timestamp       time.Time              `json:"timestamp"`
+	ID               string                 `json:"id"`
+	Channel          string                 `json:"channel"`           // 使用 Channel* 常量
+	ChatID           string                 `json:"chat_id"`           // 聊天ID
+	Content          string                 `json:"content"`           // 消息内容
+	ReasoningContent string                 `json:"reasoning_content"` // 思考/推理内容
+	Media            []Media                `json:"media"`             // 媒体文件
+	ReplyTo          string                 `json:"reply_to"`          // 回复的消息ID
+	Metadata         map[string]interface{} `json:"metadata"`          // 元数据
+	Timestamp        time.Time              `json:"timestamp"`
 }
 
 // SystemMessage 系统消息（用于子代理结果通知）
@@ -86,7 +86,7 @@ const (
 	ChatEventStateTool      = "tool"      // 工具调用
 	ChatEventStateFinal     = "final"     // 最终完成
 	ChatEventStateError     = "error"     // 错误
-	ChatEventStateInterrupt = "interrupt" //中断
+	ChatEventStateInterrupt = "interrupt" // 中断
 )
 
 // LogEvent 日志事件（用于系统日志输出）

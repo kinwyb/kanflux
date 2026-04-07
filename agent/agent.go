@@ -45,19 +45,19 @@ type Agent struct {
 }
 
 type Config struct {
-	Name           string
-	Type           AgentType // Agent 类型
-	Description    string    // Agent 描述
-	LLM            model.ToolCallingChatModel
-	Workspace      string
-	MaxIteration   int
-	ToolRegister   *tools.Registry
-	SkillDirs      []string // 支持多个 skill 目录
-	SubAgents      []*Agent // 子 agent 实例
-	SubAgentNames  []string // 子 agent 名称（用于配置引用）
-	Streaming      bool
-	Tools          []string // 允许使用的工具列表，空表示所有工具可用
-	ToolsApproval  []string // 需要审批的工具列表
+	Name          string
+	Type          AgentType // Agent 类型
+	Description   string    // Agent 描述
+	LLM           model.ToolCallingChatModel
+	Workspace     string
+	MaxIteration  int
+	ToolRegister  *tools.Registry
+	SkillDirs     []string // 支持多个 skill 目录
+	SubAgents     []*Agent // 子 agent 实例
+	SubAgentNames []string // 子 agent 名称（用于配置引用）
+	Streaming     bool
+	Tools         []string // 允许使用的工具列表，空表示所有工具可用
+	ToolsApproval []string // 需要审批的工具列表
 }
 
 // applyToolConfig 应用工具配置到 Registry
@@ -504,7 +504,7 @@ func (a *Agent) RegisterCallback(cb EventCallback) int64 {
 // UnregisterCallback 注销事件回调
 func (a *Agent) UnregisterCallback(id int64) {
 	if a.loop != nil {
-		a.loop.UnregisterCallback(id)
+		a.loop.emit(NewEvent(EventUnregisterCallback).WithMetadata(map[string]interface{}{"id": id}))
 	}
 }
 

@@ -83,6 +83,13 @@ func (o *looper) eventLoop() {
 			if event == nil {
 				continue
 			}
+			if event.Type == EventUnregisterCallback {
+				id := event.Metadata["id"].(int64)
+				if id > 0 {
+					o.UnregisterCallback(id)
+				}
+				continue
+			}
 			o.callbackMu.RLock()
 			callbacks := make([]EventCallback, 0, len(o.callbacks))
 			for _, cb := range o.callbacks {
@@ -241,6 +248,12 @@ func (o *looper) emit(event *Event) {
 	select {
 	case o.eventChan <- event:
 	default:
+		if event.Type == EventUnregisterCallback {
+			id := event.Metadata["id"].(int64)
+			if id > 0 {
+				o.UnregisterCallback(id)
+			}
+		}
 		slog.Debug("Event channel full, dropping event")
 	}
 }

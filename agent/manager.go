@@ -587,6 +587,9 @@ func (m *Manager) handleInboundMessage(ctx context.Context, msg *bus.InboundMess
 		m.handleAgentEvent(ctx, msg, agentName, event, eventSeq)
 	})
 
+	// 注销回调
+	defer agent.UnregisterCallback(cbID)
+
 	var responses []adk.Message
 	var historyLen int // 记录历史消息数量，用于区分新增消息
 
@@ -632,9 +635,6 @@ func (m *Manager) handleInboundMessage(ctx context.Context, msg *bus.InboundMess
 
 	}
 
-	// 注销回调
-	agent.UnregisterCallback(cbID)
-
 	if err != nil {
 		if info, ok := compose.IsInterruptRerunError(err); ok {
 			// 发布到总线
@@ -650,6 +650,7 @@ func (m *Manager) handleInboundMessage(ctx context.Context, msg *bus.InboundMess
 			}
 			return nil
 		}
+
 		// 发布错误事件
 		m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateError, err.Error(), eventSeq)
 		// 同时发布 OutboundMessage，确保调用方能收到响应不会卡住

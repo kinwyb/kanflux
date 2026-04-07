@@ -36,7 +36,7 @@ type (
 	// AgentResponseMsg Agent响应消息
 	AgentResponseMsg struct {
 		Content          string
-		ReasoningContent string                 // 思考/推理内容
+		ReasoningContent string // 思考/推理内容
 		Error            error
 		Metadata         map[string]interface{} // 元数据，可携带命令返回的信息如新 chatID
 	}
@@ -382,6 +382,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case AgentResponseMsg:
+		// 如果当前处于等待确认状态，不要重置状态
+		// 中断时 manager 会发送 OutboundMessage，但我们已经通过 ChatEventMsg 处理了
+		if m.state == StateWaitingApproval {
+			return m, m.waitForResponse()
+		}
 		m.state = StateIdle
 		m.status = "就绪"
 		// 使用流式累积的思考内容，或从响应中获取
@@ -573,7 +578,7 @@ func (m *Model) sendMessage() tea.Cmd {
 	m.currentAIMsg = ""
 	m.currentThinking = ""
 	m.currentToolInfo = ""
-	m.currentAgentName = "" // 重置 agent 名称，等待 ChatEvent 更新
+	m.currentAgentName = ""    // 重置 agent 名称，等待 ChatEvent 更新
 	m.isThinkingLogged = false // 重置思考日志标志
 	m.isFinalLogged = false    // 重置完成日志标志
 

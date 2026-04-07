@@ -9,12 +9,13 @@ import (
 type EventType string
 
 const (
-	EventMessageStart  EventType = "message_start"
-	EventMessageUpdate EventType = "message_update"
-	EventMessageEnd    EventType = "message_end"
-	EventToolStart     EventType = "tool_start"
-	EventToolEnd       EventType = "tool_end"
-	EventInterrupt     EventType = "interrupt"
+	EventMessageStart       EventType = "message_start"
+	EventMessageUpdate      EventType = "message_update"
+	EventMessageEnd         EventType = "message_end"
+	EventToolStart          EventType = "tool_start"
+	EventToolEnd            EventType = "tool_end"
+	EventInterrupt          EventType = "interrupt"
+	EventUnregisterCallback EventType = "unregister_callback"
 )
 
 type Event struct {
