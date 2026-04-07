@@ -131,24 +131,68 @@ func NewManager(ctx context.Context, cfg *Config) (*RAGManager, error) {
 	return mgr, nil
 }
 
+// LogFunc 日志回调函数类型
+type LogFunc func(level, source, message string)
+
+// InitializeAsync 异步初始化，不阻塞调用方
+// 日志通过回调函数输出，便于调用方控制日志目的地
+func (m *RAGManager) InitializeAsync(log LogFunc) {
+	go func() {
+		initCtx := context.Background()
+
+		if log != nil {
+			log("info", "rag", "[RAG] Starting async initialization...")
+		}
+
+		if err := m.Initialize(initCtx); err != nil {
+			if log != nil {
+				log("error", "rag", fmt.Sprintf("[RAG] Failed to initialize: %v", err))
+			}
+			return
+		}
+
+		stats := m.GetStats()
+		if log != nil {
+			log("info", "rag", fmt.Sprintf("[RAG] Initialized: %d documents, %d chunks",
+				stats.TotalDocuments, stats.TotalChunks))
+		}
+
+		// 启动文件监控
+		if m.watcher != nil {
+			if err := m.StartWatcher(initCtx); err != nil {
+				if log != nil {
+					log("warn", "rag", fmt.Sprintf("[RAG] Failed to start watcher: %v", err))
+				}
+			} else if log != nil {
+				log("info", "rag", "[RAG] File watcher started")
+			}
+		}
+	}()
+}
+
 // Initialize 初始化
 func (m *RAGManager) Initialize(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if m.initialized {
+		slog.Info("[RAG] Already initialized, skip")
 		return nil
 	}
 
+	slog.Info("[RAG] Loading existing index...")
 	// 加载已有索引
 	if err := m.store.Load(); err != nil && !isNotExist(err) {
 		return fmt.Errorf("failed to load store: %w", err)
 	}
+	slog.Info("[RAG] Index loaded", "existing_docs", m.store.GetStats().TotalDocuments)
 
 	// 添加配置的知识库路径
-	for _, kp := range m.config.KnowledgePaths {
+	slog.Info("[RAG] Processing knowledge paths...", "count", len(m.config.KnowledgePaths))
+	for i, kp := range m.config.KnowledgePaths {
+		slog.Info("[RAG] Processing path", "index", i+1, "path", kp.Path)
 		if err := m.addPathInternal(ctx, &kp); err != nil {
-			slog.Warn("Failed to add knowledge path", "path", kp.Path, "error", err)
+			slog.Warn("[RAG] Failed to add knowledge path", "path", kp.Path, "error", err)
 		}
 	}
 
@@ -159,7 +203,7 @@ func (m *RAGManager) Initialize(ctx context.Context) error {
 	m.store.SetMetadata(metadata)
 
 	m.initialized = true
-	slog.Info("RAG manager initialized", "documents", m.store.GetStats().TotalDocuments)
+	slog.Info("[RAG] Initialization completed", "documents", m.store.GetStats().TotalDocuments, "chunks", m.store.GetStats().TotalChunks)
 	return nil
 }
 
@@ -180,26 +224,39 @@ func (m *RAGManager) addPathInternal(ctx context.Context, kp *KnowledgePath) err
 
 	// 检查是否已添加
 	if _, exists := m.paths[absPath]; exists {
+		slog.Info("[RAG] Path already added, skip", "path", absPath)
 		return nil // 已存在，忽略
 	}
 
 	// 扫描文件
+	slog.Info("[RAG] Scanning directory...", "path", absPath, "recursive", kp.Recursive)
 	scanner := NewFileScanner(m.parser, kp.Extensions, kp.Exclude)
 	files, err := scanner.ScanDir(absPath, kp.Recursive)
 	if err != nil {
 		return fmt.Errorf("failed to scan directory: %w", err)
 	}
+	slog.Info("[RAG] Scan completed", "path", absPath, "files_found", len(files))
 
-	// 解析并索引文件
-	docs, err := m.parser.ParseFiles(files)
-	if err != nil {
-		slog.Warn("Some files failed to parse", "error", err)
+	if len(files) == 0 {
+		slog.Info("[RAG] No files to index", "path", absPath)
+		m.paths[absPath] = kp
+		return nil
 	}
 
+	// 解析文件
+	slog.Info("[RAG] Parsing files...", "count", len(files))
+	docs, err := m.parser.ParseFiles(files)
+	if err != nil {
+		slog.Warn("[RAG] Some files failed to parse", "error", err)
+	}
+	slog.Info("[RAG] Parse completed", "docs_parsed", len(docs))
+
 	if len(docs) > 0 {
+		slog.Info("[RAG] Indexing documents...", "count", len(docs))
 		if err := m.indexer.IndexDocuments(ctx, docs); err != nil {
 			return fmt.Errorf("failed to index documents: %w", err)
 		}
+		slog.Info("[RAG] Index completed", "path", absPath)
 	}
 
 	// 记录路径
@@ -208,11 +265,11 @@ func (m *RAGManager) addPathInternal(ctx context.Context, kp *KnowledgePath) err
 	// 添加到监控
 	if m.watcher != nil {
 		if err := m.watcher.AddPath(kp); err != nil {
-			slog.Warn("Failed to add path to watcher", "path", absPath, "error", err)
+			slog.Warn("[RAG] Failed to add path to watcher", "path", absPath, "error", err)
 		}
 	}
 
-	slog.Info("Knowledge path added", "path", absPath, "files", len(files))
+	slog.Info("[RAG] Knowledge path added", "path", absPath, "files", len(files))
 	return nil
 }
 

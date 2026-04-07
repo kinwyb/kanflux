@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -156,14 +155,20 @@ func (m *Manager) RegisterAgentsFromConfig(ctx context.Context, cfg *config.Conf
 		// 获取默认 skills 目录
 		skillDirs := config.GetDefaultSkillDirs(resolved.Workspace)
 
-		// 创建 RAG Manager（如果配置了知识库路径）
+		// 创建 RAG Manager（如果配置了知识库路径）- 异步初始化
 		var ragManager *rag.RAGManager
 		if len(resolved.KnowledgePaths) > 0 {
+			m.log(ctx, bus.LogLevelInfo, "manager", fmt.Sprintf("Creating RAG manager for agent '%s'...", name))
+
 			ragMgr, err := m.createRAGManager(ctx, resolved)
 			if err != nil {
 				m.log(ctx, bus.LogLevelWarn, "manager", fmt.Sprintf("Failed to create RAG manager for agent '%s': %v", name, err))
 			} else {
 				ragManager = ragMgr
+				// 使用 rag 包的异步初始化方法
+				ragMgr.InitializeAsync(func(level, source, message string) {
+					m.log(context.Background(), level, source, fmt.Sprintf("[%s] %s", name, message))
+				})
 			}
 		}
 
@@ -894,13 +899,16 @@ func (m *Manager) GetToolsInfo() (map[string]interface{}, error) {
 	return result, nil
 }
 
-// createRAGManager 创建 RAG Manager
+// createRAGManager 创建 RAG Manager（不执行初始化，由调用方异步执行）
 func (m *Manager) createRAGManager(ctx context.Context, resolved *config.ResolvedAgentConfig) (*rag.RAGManager, error) {
+	m.log(ctx, bus.LogLevelInfo, "manager", "[RAG] Creating embedder...")
+
 	// 创建 Embedder
 	embedder, err := m.createEmbedder(ctx, resolved)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create embedder: %w", err)
 	}
+	m.log(ctx, bus.LogLevelInfo, "manager", "[RAG] Embedder created successfully")
 
 	// 转换知识库路径配置
 	var knowledgePaths []rag.KnowledgePath
@@ -917,6 +925,7 @@ func (m *Manager) createRAGManager(ctx context.Context, resolved *config.Resolve
 			Exclude:    kp.Exclude,
 		})
 	}
+	m.log(ctx, bus.LogLevelInfo, "manager", fmt.Sprintf("[RAG] %d knowledge paths configured", len(knowledgePaths)))
 
 	// 创建 RAG 配置
 	ragConfig := rag.DefaultConfig()
@@ -938,19 +947,7 @@ func (m *Manager) createRAGManager(ctx context.Context, resolved *config.Resolve
 		return nil, fmt.Errorf("failed to create RAG manager: %w", err)
 	}
 
-	// 初始化
-	if err := ragMgr.Initialize(ctx); err != nil {
-		return nil, fmt.Errorf("failed to initialize RAG manager: %w", err)
-	}
-
-	// 启动文件监控
-	if ragConfig.EnableWatcher {
-		if err := ragMgr.StartWatcher(ctx); err != nil {
-			slog.Warn("Failed to start RAG file watcher", "error", err)
-		}
-	}
-
-	m.log(ctx, bus.LogLevelInfo, "manager", fmt.Sprintf("RAG manager created for agent '%s' with %d knowledge paths", resolved.Name, len(knowledgePaths)))
+	m.log(ctx, bus.LogLevelInfo, "manager", "[RAG] Manager created, initialization will run async")
 	return ragMgr, nil
 }
 
