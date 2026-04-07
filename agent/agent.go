@@ -113,6 +113,9 @@ func NewChatModelAgent(ctx context.Context, cfg *Config) (*Agent, error) {
 	if err != nil {
 		return nil, fmt.Errorf("上下文初始化失败: %w", err)
 	}
+	if cfg.RAGManager != nil {
+		prompt.SetRAGManager(cfg.RAGManager)
+	}
 	if cfg.ToolRegister == nil {
 		cfg.ToolRegister = tools.NewRegistry()
 	}
@@ -178,6 +181,9 @@ func NewDeepAgent(ctx context.Context, cfg *Config) (*Agent, error) {
 	prompt, err := NewContextBuilder(cfg.Workspace)
 	if err != nil {
 		return nil, fmt.Errorf("上下文初始化失败: %w", err)
+	}
+	if cfg.RAGManager != nil {
+		prompt.SetRAGManager(cfg.RAGManager)
 	}
 	if cfg.ToolRegister == nil {
 		cfg.ToolRegister = tools.NewRegistry()
@@ -282,6 +288,9 @@ func NewPlanExecuteAgent(ctx context.Context, cfg *Config) (*Agent, error) {
 	if err != nil {
 		return nil, fmt.Errorf("上下文初始化失败: %w", err)
 	}
+	if cfg.RAGManager != nil {
+		prompt.SetRAGManager(cfg.RAGManager)
+	}
 	if cfg.ToolRegister == nil {
 		cfg.ToolRegister = tools.NewRegistry()
 	}
@@ -364,6 +373,9 @@ func NewSupervisorAgent(ctx context.Context, cfg *Config) (*Agent, error) {
 	prompt, err := NewContextBuilder(cfg.Workspace)
 	if err != nil {
 		return nil, fmt.Errorf("上下文初始化失败: %w", err)
+	}
+	if cfg.RAGManager != nil {
+		prompt.SetRAGManager(cfg.RAGManager)
 	}
 	if cfg.ToolRegister == nil {
 		cfg.ToolRegister = tools.NewRegistry()

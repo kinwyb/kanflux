@@ -35,18 +35,22 @@ func (t *KnowledgeTool) Name() string {
 
 // Description 返回工具描述
 func (t *KnowledgeTool) Description() string {
-	return `Search the knowledge base for relevant information.
+	return `Search the knowledge base for relevant information from indexed documents.
 
-**Usage**:
-- Use this tool to find relevant documentation, code examples, or knowledge from indexed files.
-- Returns top-K most relevant chunks based on semantic similarity.
-- Supports filtering by source path patterns.
+**When to use this tool** (IMPORTANT - use proactively):
+- When the user asks questions about project-specific topics, APIs, configurations
+- When you need information about code patterns, conventions, or best practices used in this project
+- When answering questions that might be documented in README, docs, or other indexed files
+- Before making assumptions about how things work in this specific project
+- When the user's question could be answered by documentation you might have indexed
 
 **Parameters**:
-- query: Required. The search query in natural language.
+- query: Required. Natural language search query describing what you're looking for.
 - top_k: Optional. Number of results to return (default: 5).
-- source_filter: Optional. Filter results by source path pattern (e.g., "docs/", "*.go").
-- score_threshold: Optional. Minimum relevance score (default: 0.5).`
+- source_filter: Optional. Filter by source path pattern (e.g., "docs/", "*.go").
+- score_threshold: Optional. Minimum relevance score 0-1 (default: 0.5).
+
+**Returns**: Top-K most relevant text chunks with source paths and relevance scores.`
 }
 
 // Parameters 返回参数定义

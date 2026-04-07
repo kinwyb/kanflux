@@ -16,6 +16,7 @@ import (
 type RAGManagerInterface interface {
 	Close() error
 	GetKnowledgeTool() tools.Tool
+	GetStats() *Stats
 }
 
 // Manager RAG 管理器接口

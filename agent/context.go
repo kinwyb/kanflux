@@ -3,12 +3,15 @@ package agent
 import (
 	"fmt"
 	"time"
+
+	"github.com/kinwyb/kanflux/agent/rag"
 )
 
 // ContextBuilder 上下文构建器
 type ContextBuilder struct {
-	memory    *MemoryStore
-	workspace string
+	memory     *MemoryStore
+	workspace  string
+	ragManager rag.RAGManagerInterface
 }
 
 // NewContextBuilder 创建上下文构建器
@@ -25,6 +28,11 @@ func NewContextBuilder(workspace string) (*ContextBuilder, error) {
 	return ret, nil
 }
 
+// SetRAGManager 设置 RAG 管理器
+func (b *ContextBuilder) SetRAGManager(mgr rag.RAGManagerInterface) {
+	b.ragManager = mgr
+}
+
 // BuildSystemPrompt 构建系统提示词
 func (b *ContextBuilder) BuildSystemPrompt() string {
 	var parts []string
@@ -35,10 +43,15 @@ func (b *ContextBuilder) BuildSystemPrompt() string {
 	// 2. Memory 上下文
 	parts = append(parts, b.buildMemory())
 
-	// 3. 安全提示
+	// 3. 知识库上下文
+	if b.ragManager != nil {
+		parts = append(parts, b.buildKnowledge())
+	}
+
+	// 4. 安全提示
 	parts = append(parts, b.buildSafety())
 
-	// 4. 错误处理指导
+	// 5. 错误处理指导
 	parts = append(parts, b.buildErrorHandling())
 
 	return fmt.Sprintf("%s\n\n", joinNonEmpty(parts, "\n\n---\n\n"))
@@ -119,6 +132,42 @@ You have memory_tool to manage memory content.
 		memory = memory + "## Current Memory Content\n\n" + memoryContext
 	}
 	return memory
+}
+
+// buildKnowledge 构建知识库上下文
+func (b *ContextBuilder) buildKnowledge() string {
+	if b.ragManager == nil {
+		return ""
+	}
+
+	stats := b.ragManager.GetStats()
+	if stats.TotalDocuments == 0 {
+		return ""
+	}
+
+	return fmt.Sprintf(`## Knowledge Base
+
+You have access to a knowledge base with %d documents and %d text chunks. Use the **knowledge_search** tool to find relevant information.
+
+**When to use knowledge_search**:
+- When answering questions about project-specific topics, APIs, or documentation
+- When looking for code examples, patterns, or best practices from indexed files
+- When you need context from documentation, README files, or technical specs
+- When the user asks about something that might be documented in the workspace
+- Before making assumptions about project-specific conventions or configurations
+
+**How to use**:
+- Use natural language queries describing what you're looking for
+- Start with broader queries, then refine if needed
+- The tool returns the most relevant text chunks with source paths
+
+**Example queries**:
+- "How to configure the database connection"
+- "API authentication flow"
+- "Error handling patterns in this project"
+- "Configuration file format"
+
+**Important**: Always search the knowledge base first when the user asks questions that might be answered by project documentation or indexed files, rather than making assumptions or giving generic answers.`, stats.TotalDocuments, stats.TotalChunks)
 }
 
 // buildSafety 构建安全提示
