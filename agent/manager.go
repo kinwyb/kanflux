@@ -156,7 +156,7 @@ func (m *Manager) RegisterAgentsFromConfig(ctx context.Context, cfg *config.Conf
 		skillDirs := config.GetDefaultSkillDirs(resolved.Workspace)
 
 		// 创建 RAG Manager（如果配置了知识库路径）- 异步初始化
-		var ragManager *rag.RAGManager
+		var ragManager rag.RAGManagerInterface
 		if len(resolved.KnowledgePaths) > 0 {
 			m.log(ctx, bus.LogLevelInfo, "manager", fmt.Sprintf("Creating RAG manager for agent '%s'...", name))
 
