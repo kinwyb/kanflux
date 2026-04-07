@@ -956,18 +956,30 @@ func (m *Manager) createRAGManager(ctx context.Context, resolved *config.Resolve
 
 // createEmbedder 创建 Embedder
 func (m *Manager) createEmbedder(ctx context.Context, resolved *config.ResolvedAgentConfig) (embedding.Embedder, error) {
-	// 默认使用 OpenAI Embedding
-	providerType := providers.EmbeddingProviderOpenAI
+	// 确定 embedding provider 类型
+	providerType := providers.EmbeddingProviderOpenAI // 默认 OpenAI
+	if resolved.EmbeddingProvider != "" {
+		// 根据配置的 provider 名称推断类型
+		providerLower := strings.ToLower(resolved.EmbeddingProvider)
+		if strings.Contains(providerLower, "ollama") {
+			providerType = providers.EmbeddingProviderOllama
+		}
+		// 其他情况默认使用 OpenAI 兼容接口
+	}
+
 	model := resolved.EmbeddingModel
 	if model == "" {
 		model = "text-embedding-3-small"
+		if providerType == providers.EmbeddingProviderOllama {
+			model = "nomic-embed-text"
+		}
 	}
 
 	// 创建 Embedder
 	return providers.NewEmbedder(ctx, &providers.EmbeddingConfig{
 		Provider:   providerType,
 		Model:      model,
-		APIKey:     resolved.APIKey,
-		APIBaseURL: resolved.APIBaseURL,
+		APIKey:     resolved.EmbeddingAPIKey,
+		APIBaseURL: resolved.EmbeddingAPIBaseURL,
 	})
 }

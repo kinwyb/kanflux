@@ -14,6 +14,23 @@ type Config struct {
 	DefaultProvider string                     `json:"default_provider"`
 	Agents          []*AgentConfig             `json:"agents"`
 	Tools           *ToolsConfig               `json:"tools"` // 工具配置
+	// 公共知识库配置
+	KnowledgeBases map[string]*KnowledgeBaseConfig `json:"knowledge_bases"` // 公共知识库，多个 agent 可共用
+}
+
+// KnowledgeBaseConfig 公共知识库配置
+type KnowledgeBaseConfig struct {
+	Paths         []KnowledgePathConfig `json:"paths"`          // 知识库路径列表
+	Embedding     *EmbeddingConfig      `json:"embedding"`      // Embedding 配置
+	RAGConfig     *RAGConfigOptions     `json:"rag_config"`     // RAG 详细配置
+}
+
+// EmbeddingConfig Embedding 配置
+type EmbeddingConfig struct {
+	Provider   string `json:"provider"`    // Provider 名称，为空时使用 default_provider
+	Model      string `json:"model"`       // Embedding 模型名称
+	APIKey     string `json:"api_key"`     // 可选，为空时使用 provider 的 api_key
+	APIBaseURL string `json:"api_base_url"`// 可选，为空时使用 provider 的 api_base_url
 }
 
 // ToolsConfig 工具配置
@@ -52,9 +69,10 @@ type AgentConfig struct {
 	Tools          []string            `json:"tools"`          // 允许使用的工具列表，空表示所有工具可用
 	ToolsApproval  []string            `json:"tools_approval"` // 需要审批的工具列表，继承全局配置并追加
 	// RAG 配置
-	KnowledgePaths []KnowledgePathConfig `json:"knowledge_paths"` // 知识库路径配置
-	EmbeddingModel string                `json:"embedding_model"` // Embedding 模型名称
-	RAGConfig      *RAGConfigOptions     `json:"rag_config"`      // RAG 详细配置
+	KnowledgePaths     []KnowledgePathConfig `json:"knowledge_paths"`     // 私有知识库路径配置
+	KnowledgeBaseRefs  []string              `json:"knowledge_base_refs"` // 引用公共知识库名称列表
+	Embedding          *EmbeddingConfig      `json:"embedding"`           // Embedding 配置（可独立于 agent provider）
+	RAGConfig          *RAGConfigOptions     `json:"rag_config"`          // RAG 详细配置
 }
 
 // KnowledgePathConfig 知识库路径配置
@@ -92,9 +110,13 @@ type ResolvedAgentConfig struct {
 	Tools          []string  // 允许使用的工具列表，空表示所有工具可用
 	ToolsApproval  []string  // 需要审批的工具列表
 	// RAG 配置
-	KnowledgePaths []KnowledgePathConfig // 知识库路径配置
-	EmbeddingModel string                // Embedding 模型名称
-	RAGConfig      *RAGConfigOptions     // RAG 详细配置
+	KnowledgePaths      []KnowledgePathConfig // 知识库路径配置（私有 + 公共）
+	RAGConfig           *RAGConfigOptions     // RAG 详细配置
+	// Embedding 配置
+	EmbeddingProvider   string // Embedding provider 名称
+	EmbeddingModel      string // Embedding 模型名称
+	EmbeddingAPIKey     string // Embedding API Key
+	EmbeddingAPIBaseURL string // Embedding API Base URL
 }
 
 // Load 从指定路径加载配置文件
@@ -216,25 +238,132 @@ func (c *Config) ResolveAgentConfig(name string) (*ResolvedAgentConfig, error) {
 		toolsApproval = mergeStringLists(c.Tools.Approval, toolsApproval)
 	}
 
+	// 合并知识库路径：私有路径 + 引用的公共知识库路径
+	knowledgePaths := make([]KnowledgePathConfig, 0)
+	// 1. 添加私有知识库路径
+	knowledgePaths = append(knowledgePaths, agent.KnowledgePaths...)
+	// 2. 添加引用的公共知识库路径
+	for _, ref := range agent.KnowledgeBaseRefs {
+		if kb, ok := c.KnowledgeBases[ref]; ok {
+			knowledgePaths = append(knowledgePaths, kb.Paths...)
+		}
+	}
+
+	// 解析 Embedding 配置
+	embeddingProvider, embeddingModel, embeddingAPIKey, embeddingAPIBaseURL := c.resolveEmbeddingConfig(agent, providerName, provider)
+
 	return &ResolvedAgentConfig{
-		Name:           agent.Name,
-		Type:           agentType,
-		Description:    description,
-		Workspace:      agent.Workspace,
-		SubAgents:      agent.SubAgents,
-		Provider:       providerName,
-		Model:          model,
-		APIKey:         provider.APIKey,
-		APIBaseURL:     provider.APIBaseURL,
-		MaxIteration:   maxIteration,
-		Streaming:      agent.Streaming,
-		Tools:          tools,
-		ToolsApproval:  toolsApproval,
-		// RAG 配置
-		KnowledgePaths: agent.KnowledgePaths,
-		EmbeddingModel: agent.EmbeddingModel,
-		RAGConfig:      resolveRAGConfig(agent.RAGConfig),
+		Name:                agent.Name,
+		Type:                agentType,
+		Description:         description,
+		Workspace:           agent.Workspace,
+		SubAgents:           agent.SubAgents,
+		Provider:            providerName,
+		Model:               model,
+		APIKey:              provider.APIKey,
+		APIBaseURL:          provider.APIBaseURL,
+		MaxIteration:        maxIteration,
+		Streaming:           agent.Streaming,
+		Tools:               tools,
+		ToolsApproval:       toolsApproval,
+		KnowledgePaths:      knowledgePaths,
+		RAGConfig:           c.resolveFinalRAGConfig(agent),
+		EmbeddingProvider:   embeddingProvider,
+		EmbeddingModel:      embeddingModel,
+		EmbeddingAPIKey:     embeddingAPIKey,
+		EmbeddingAPIBaseURL: embeddingAPIBaseURL,
 	}, nil
+}
+
+// resolveEmbeddingConfig 解析 Embedding 配置
+// 优先级：agent.Embedding > 公共知识库.Embedding > agent.Provider
+func (c *Config) resolveEmbeddingConfig(agent *AgentConfig, agentProviderName string, agentProvider *ProviderConfig) (provider, model, apiKey, apiBaseURL string) {
+	// 默认使用 agent 的 provider
+	provider = agentProviderName
+	apiKey = agentProvider.APIKey
+	apiBaseURL = agentProvider.APIBaseURL
+	model = "" // 将在下面确定
+
+	// 检查是否有公共知识库的 embedding 配置
+	var kbEmbedding *EmbeddingConfig
+	for _, ref := range agent.KnowledgeBaseRefs {
+		if kb, ok := c.KnowledgeBases[ref]; ok && kb.Embedding != nil {
+			kbEmbedding = kb.Embedding
+			break
+		}
+	}
+
+	// 优先级：agent.Embedding > kbEmbedding > agentProvider
+	if agent.Embedding != nil {
+		// agent 级别的 embedding 配置
+		if agent.Embedding.Provider != "" {
+			provider = agent.Embedding.Provider
+			if p, ok := c.Providers[provider]; ok {
+				apiKey = p.APIKey
+				apiBaseURL = p.APIBaseURL
+			}
+		}
+		if agent.Embedding.Model != "" {
+			model = agent.Embedding.Model
+		}
+		if agent.Embedding.APIKey != "" {
+			apiKey = agent.Embedding.APIKey
+		}
+		if agent.Embedding.APIBaseURL != "" {
+			apiBaseURL = agent.Embedding.APIBaseURL
+		}
+	} else if kbEmbedding != nil {
+		// 公共知识库的 embedding 配置
+		if kbEmbedding.Provider != "" {
+			provider = kbEmbedding.Provider
+			if p, ok := c.Providers[provider]; ok {
+				apiKey = p.APIKey
+				apiBaseURL = p.APIBaseURL
+			}
+		}
+		if kbEmbedding.Model != "" {
+			model = kbEmbedding.Model
+		}
+		if kbEmbedding.APIKey != "" {
+			apiKey = kbEmbedding.APIKey
+		}
+		if kbEmbedding.APIBaseURL != "" {
+			apiBaseURL = kbEmbedding.APIBaseURL
+		}
+	}
+
+	// 设置默认模型
+	if model == "" {
+		model = "text-embedding-3-small" // OpenAI 默认 embedding 模型
+	}
+
+	return
+}
+
+// resolveFinalRAGConfig 解析最终的 RAG 配置
+// 优先级：agent.RAGConfig > 公共知识库.RAGConfig > 默认值
+func (c *Config) resolveFinalRAGConfig(agent *AgentConfig) *RAGConfigOptions {
+	// 检查公共知识库的 RAG 配置
+	var kbRAGConfig *RAGConfigOptions
+	for _, ref := range agent.KnowledgeBaseRefs {
+		if kb, ok := c.KnowledgeBases[ref]; ok && kb.RAGConfig != nil {
+			kbRAGConfig = kb.RAGConfig
+			break
+		}
+	}
+
+	// 合并配置
+	cfg := resolveRAGConfig(nil) // 默认值
+
+	if kbRAGConfig != nil {
+		cfg = resolveRAGConfig(kbRAGConfig)
+	}
+
+	if agent.RAGConfig != nil {
+		cfg = resolveRAGConfig(agent.RAGConfig)
+	}
+
+	return cfg
 }
 
 // GetDefaultSkillDirs 获取默认的 skills 目录
