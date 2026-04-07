@@ -18,7 +18,6 @@ import (
 	"github.com/kinwyb/kanflux/session"
 
 	"github.com/cloudwego/eino/adk"
-	"github.com/cloudwego/eino/components/embedding"
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/schema"
@@ -174,7 +173,12 @@ func (m *Manager) RegisterAgentsFromConfig(ctx context.Context, cfg *config.Conf
 
 		// 初始化长期记忆（需要 embedder）
 		if resolved.EmbeddingModel != "" {
-			embedder, err := m.createEmbedder(ctx, resolved)
+			embedder, err := rag.CreateEmbedder(ctx, &rag.EmbedderConfig{
+				Provider:   resolved.EmbeddingProvider,
+				Model:      resolved.EmbeddingModel,
+				APIKey:     resolved.EmbeddingAPIKey,
+				APIBaseURL: resolved.EmbeddingAPIBaseURL,
+			})
 			if err != nil {
 				m.log(ctx, bus.LogLevelWarn, "manager", fmt.Sprintf("Failed to create embedder for long-term memory: %v", err))
 			} else if err := m.sessionMgr.SetEmbedder(embedder); err != nil {
@@ -915,7 +919,12 @@ func (m *Manager) createRAGManager(ctx context.Context, resolved *config.Resolve
 	m.log(ctx, bus.LogLevelInfo, "manager", "[RAG] Creating embedder...")
 
 	// 创建 Embedder
-	embedder, err := m.createEmbedder(ctx, resolved)
+	embedder, err := rag.CreateEmbedder(ctx, &rag.EmbedderConfig{
+		Provider:   resolved.EmbeddingProvider,
+		Model:      resolved.EmbeddingModel,
+		APIKey:     resolved.EmbeddingAPIKey,
+		APIBaseURL: resolved.EmbeddingAPIBaseURL,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create embedder: %w", err)
 	}
@@ -960,34 +969,4 @@ func (m *Manager) createRAGManager(ctx context.Context, resolved *config.Resolve
 
 	m.log(ctx, bus.LogLevelInfo, "manager", "[RAG] Manager created, initialization will run async")
 	return ragMgr, nil
-}
-
-// createEmbedder 创建 Embedder
-func (m *Manager) createEmbedder(ctx context.Context, resolved *config.ResolvedAgentConfig) (embedding.Embedder, error) {
-	// 确定 embedding provider 类型
-	providerType := providers.EmbeddingProviderOpenAI // 默认 OpenAI
-	if resolved.EmbeddingProvider != "" {
-		// 根据配置的 provider 名称推断类型
-		providerLower := strings.ToLower(resolved.EmbeddingProvider)
-		if strings.Contains(providerLower, "ollama") {
-			providerType = providers.EmbeddingProviderOllama
-		}
-		// 其他情况默认使用 OpenAI 兼容接口
-	}
-
-	model := resolved.EmbeddingModel
-	if model == "" {
-		model = "text-embedding-3-small"
-		if providerType == providers.EmbeddingProviderOllama {
-			model = "nomic-embed-text"
-		}
-	}
-
-	// 创建 Embedder
-	return providers.NewEmbedder(ctx, &providers.EmbeddingConfig{
-		Provider:   providerType,
-		Model:      model,
-		APIKey:     resolved.EmbeddingAPIKey,
-		APIBaseURL: resolved.EmbeddingAPIBaseURL,
-	})
 }
