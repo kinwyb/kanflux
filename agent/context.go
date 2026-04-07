@@ -12,6 +12,7 @@ type ContextBuilder struct {
 	memory     *MemoryStore
 	workspace  string
 	ragManager rag.RAGManagerInterface
+	hasHistory bool
 }
 
 // NewContextBuilder 创建上下文构建器
@@ -33,6 +34,11 @@ func (b *ContextBuilder) SetRAGManager(mgr rag.RAGManagerInterface) {
 	b.ragManager = mgr
 }
 
+// SetHasHistory 设置是否有历史对话检索
+func (b *ContextBuilder) SetHasHistory(has bool) {
+	b.hasHistory = has
+}
+
 // BuildSystemPrompt 构建系统提示词
 func (b *ContextBuilder) BuildSystemPrompt() string {
 	var parts []string
@@ -48,10 +54,15 @@ func (b *ContextBuilder) BuildSystemPrompt() string {
 		parts = append(parts, b.buildKnowledge())
 	}
 
-	// 4. 安全提示
+	// 4. 历史对话上下文
+	if b.hasHistory {
+		parts = append(parts, b.buildHistory())
+	}
+
+	// 5. 安全提示
 	parts = append(parts, b.buildSafety())
 
-	// 5. 错误处理指导
+	// 6. 错误处理指导
 	parts = append(parts, b.buildErrorHandling())
 
 	return fmt.Sprintf("%s\n\n", joinNonEmpty(parts, "\n\n---\n\n"))
@@ -168,6 +179,25 @@ You have access to a knowledge base with %d documents and %d text chunks. Use th
 - "Configuration file format"
 
 **Important**: Always search the knowledge base first when the user asks questions that might be answered by project documentation or indexed files, rather than making assumptions or giving generic answers.`, stats.TotalDocuments, stats.TotalChunks)
+}
+
+// buildHistory 构建历史对话上下文
+func (b *ContextBuilder) buildHistory() string {
+	return `## Conversation History
+
+You have access to past conversations. Use the **history_search** tool to find relevant information.
+
+**When to use history_search**:
+- When the user asks about something discussed in previous sessions
+- To recall user preferences, decisions, or information shared before
+- To avoid asking the user to repeat information they've already provided
+- When you need context from past conversations
+
+**How to use**:
+- Use natural language queries describing what you're looking for
+- The tool searches through conversation history with semantic matching
+
+**Important**: Always search history first when the user refers to past discussions or preferences. For important information you want to remember permanently, use memory_tool.`
 }
 
 // buildSafety 构建安全提示

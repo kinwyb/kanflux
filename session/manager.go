@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -9,13 +10,16 @@ import (
 	"time"
 
 	"github.com/cloudwego/eino/adk"
+	"github.com/cloudwego/eino/components/embedding"
 )
 
 // Manager 会话管理器
 type Manager struct {
-	sessions map[string]*Session
-	mu       sync.RWMutex
-	baseDir  string
+	sessions  map[string]*Session
+	mu        sync.RWMutex
+	baseDir   string
+	history   *ConversationHistory
+	embedder  embedding.Embedder
 }
 
 // NewManager 创建会话管理器
@@ -29,6 +33,23 @@ func NewManager(baseDir string) (*Manager, error) {
 		sessions: make(map[string]*Session),
 		baseDir:  baseDir,
 	}, nil
+}
+
+// SetEmbedder 设置 embedder，用于历史对话检索
+func (m *Manager) SetEmbedder(embedder embedding.Embedder) error {
+	m.embedder = embedder
+	// 初始化历史对话管理器
+	history, err := NewConversationHistory(filepath.Dir(filepath.Dir(m.baseDir)), embedder)
+	if err != nil {
+		return err
+	}
+	m.history = history
+	return nil
+}
+
+// GetHistory 获取历史对话管理器
+func (m *Manager) GetHistory() *ConversationHistory {
+	return m.history
 }
 
 // GetOrCreate 获取或创建会话
@@ -64,6 +85,11 @@ func (m *Manager) GetOrCreate(key string) (*Session, error) {
 
 // Save 保存会话
 func (m *Manager) Save(session *Session) error {
+	return m.SaveWithContext(context.Background(), session)
+}
+
+// SaveWithContext 保存会话（带上下文，用于长期记忆处理）
+func (m *Manager) SaveWithContext(ctx context.Context, session *Session) error {
 	session.mu.RLock()
 	defer session.mu.RUnlock()
 
@@ -100,6 +126,24 @@ func (m *Manager) Save(session *Session) error {
 	// 原子性重命名
 	if err := os.Rename(tmpPath, filePath); err != nil {
 		return err
+	}
+
+	// 异步处理历史对话（不阻塞保存）
+	if m.history != nil {
+		go func() {
+			// 创建 session 副本用于处理
+			sessionCopy := &Session{
+				Key:       session.Key,
+				Messages:  make([]adk.Message, len(session.Messages)),
+				CreatedAt: session.CreatedAt,
+				UpdatedAt: session.UpdatedAt,
+			}
+			copy(sessionCopy.Messages, session.Messages)
+
+			if err := m.history.ProcessSession(ctx, sessionCopy); err != nil {
+				// 静默失败，不影响主流程
+			}
+		}()
 	}
 
 	return nil

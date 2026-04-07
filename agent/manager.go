@@ -172,6 +172,16 @@ func (m *Manager) RegisterAgentsFromConfig(ctx context.Context, cfg *config.Conf
 			}
 		}
 
+		// 初始化长期记忆（需要 embedder）
+		if resolved.EmbeddingModel != "" {
+			embedder, err := m.createEmbedder(ctx, resolved)
+			if err != nil {
+				m.log(ctx, bus.LogLevelWarn, "manager", fmt.Sprintf("Failed to create embedder for long-term memory: %v", err))
+			} else if err := m.sessionMgr.SetEmbedder(embedder); err != nil {
+				m.log(ctx, bus.LogLevelWarn, "manager", fmt.Sprintf("Failed to set embedder for session manager: %v", err))
+			}
+		}
+
 		// 创建 Agent 配置
 		agentConfig := &Config{
 			Name:          resolved.Name,
@@ -188,6 +198,7 @@ func (m *Manager) RegisterAgentsFromConfig(ctx context.Context, cfg *config.Conf
 			Tools:         resolved.Tools,
 			ToolsApproval: resolved.ToolsApproval,
 			RAGManager:    ragManager,
+			SessionManager: m.sessionMgr,
 		}
 
 		// 创建 Agent
@@ -716,7 +727,7 @@ func (m *Manager) handleInboundMessage(ctx context.Context, msg *bus.InboundMess
 	}
 
 	// 保存 session
-	m.sessionMgr.Save(sess)
+	m.sessionMgr.SaveWithContext(ctx, sess)
 
 	response := responses[len(responses)-1]
 

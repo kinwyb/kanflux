@@ -14,6 +14,7 @@ import (
 	"github.com/kinwyb/kanflux/agent/rag"
 	"github.com/kinwyb/kanflux/agent/tools"
 	"github.com/kinwyb/kanflux/config"
+	"github.com/kinwyb/kanflux/session"
 
 	localbk "github.com/cloudwego/eino-ext/adk/backend/local"
 	"github.com/cloudwego/eino/adk"
@@ -61,6 +62,8 @@ type Config struct {
 	ToolsApproval []string // 需要审批的工具列表
 	// RAG 配置
 	RAGManager rag.RAGManagerInterface // RAG 管理器接口
+	// Session 配置
+	SessionManager *session.Manager // Session 管理器（用于长期记忆）
 }
 
 // applyToolConfig 应用工具配置到 Registry
@@ -116,10 +119,19 @@ func NewChatModelAgent(ctx context.Context, cfg *Config) (*Agent, error) {
 	if cfg.RAGManager != nil {
 		prompt.SetRAGManager(cfg.RAGManager)
 	}
+	// 设置长期记忆可用标志
+	if cfg.SessionManager != nil && cfg.SessionManager.GetHistory() != nil {
+		prompt.SetHasHistory(true)
+	}
 	if cfg.ToolRegister == nil {
 		cfg.ToolRegister = tools.NewRegistry()
 	}
 	cfg.ToolRegister.Register(tools.NewMemoryTool(prompt.memory))
+
+	// 注册历史对话检索工具
+	if cfg.SessionManager != nil && cfg.SessionManager.GetHistory() != nil {
+		cfg.ToolRegister.Register(session.NewHistorySearchTool(cfg.SessionManager.GetHistory()))
+	}
 
 	// 应用工具配置
 	applyToolConfig(cfg)
@@ -184,6 +196,10 @@ func NewDeepAgent(ctx context.Context, cfg *Config) (*Agent, error) {
 	}
 	if cfg.RAGManager != nil {
 		prompt.SetRAGManager(cfg.RAGManager)
+	}
+	// 设置长期记忆可用标志
+	if cfg.SessionManager != nil && cfg.SessionManager.GetHistory() != nil {
+		prompt.SetHasHistory(true)
 	}
 	if cfg.ToolRegister == nil {
 		cfg.ToolRegister = tools.NewRegistry()
@@ -291,10 +307,19 @@ func NewPlanExecuteAgent(ctx context.Context, cfg *Config) (*Agent, error) {
 	if cfg.RAGManager != nil {
 		prompt.SetRAGManager(cfg.RAGManager)
 	}
+	// 设置长期记忆可用标志
+	if cfg.SessionManager != nil && cfg.SessionManager.GetHistory() != nil {
+		prompt.SetHasHistory(true)
+	}
 	if cfg.ToolRegister == nil {
 		cfg.ToolRegister = tools.NewRegistry()
 	}
 	cfg.ToolRegister.Register(tools.NewMemoryTool(prompt.memory))
+
+	// 注册历史对话检索工具
+	if cfg.SessionManager != nil && cfg.SessionManager.GetHistory() != nil {
+		cfg.ToolRegister.Register(session.NewHistorySearchTool(cfg.SessionManager.GetHistory()))
+	}
 
 	// 应用工具配置
 	applyToolConfig(cfg)
@@ -377,10 +402,19 @@ func NewSupervisorAgent(ctx context.Context, cfg *Config) (*Agent, error) {
 	if cfg.RAGManager != nil {
 		prompt.SetRAGManager(cfg.RAGManager)
 	}
+	// 设置长期记忆可用标志
+	if cfg.SessionManager != nil && cfg.SessionManager.GetHistory() != nil {
+		prompt.SetHasHistory(true)
+	}
 	if cfg.ToolRegister == nil {
 		cfg.ToolRegister = tools.NewRegistry()
 	}
 	cfg.ToolRegister.Register(tools.NewMemoryTool(prompt.memory))
+
+	// 注册历史对话检索工具
+	if cfg.SessionManager != nil && cfg.SessionManager.GetHistory() != nil {
+		cfg.ToolRegister.Register(session.NewHistorySearchTool(cfg.SessionManager.GetHistory()))
+	}
 
 	// 应用工具配置
 	applyToolConfig(cfg)
