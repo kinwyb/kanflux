@@ -17,6 +17,14 @@ type Tool interface {
 	Execute(ctx context.Context, params map[string]interface{}) (string, error)
 }
 
+// ApprovalPrompter 工具审批提示接口
+// 工具可实现此接口来自定义审批提示内容
+type ApprovalPrompter interface {
+	// ApprovalPrompt 返回审批提示内容
+	// argsJSON 是工具调用的 JSON 参数
+	ApprovalPrompt(argsJSON string) string
+}
+
 // BaseTool 基础工具
 type BaseTool struct {
 	name        string

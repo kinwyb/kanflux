@@ -23,6 +23,7 @@ type Registry struct {
 	tools           map[string]Tool
 	mu              sync.RWMutex
 	needApproveTool []string
+	prompters       map[string]ApprovalPrompter // 按工具名称注册的审批提示器
 }
 
 func init() {
@@ -32,7 +33,8 @@ func init() {
 // NewRegistry 创建工具注册表
 func NewRegistry() *Registry {
 	return &Registry{
-		tools: make(map[string]Tool),
+		tools:     make(map[string]Tool),
+		prompters: make(map[string]ApprovalPrompter),
 	}
 }
 
@@ -116,6 +118,37 @@ func (r *Registry) GetToolNames() []string {
 	return names
 }
 
+// RegisterApprovalPrompter 注册工具的审批提示器
+// 允许为工具单独设置审批提示，即使工具本身未实现 ApprovalPrompter 接口
+func (r *Registry) RegisterApprovalPrompter(toolName string, prompter ApprovalPrompter) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.prompters[toolName] = prompter
+}
+
+// getApprovalPrompt 获取工具的审批提示
+// 优先使用注册的 ApprovalPrompter，如果没有则检查工具是否实现了 ApprovalPrompter 接口
+func (r *Registry) getApprovalPrompt(toolName, argsJSON string) string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	// 优先检查注册的 ApprovalPrompter
+	if prompter, ok := r.prompters[toolName]; ok {
+		return prompter.ApprovalPrompt(argsJSON)
+	}
+
+	// 然后检查工具本身是否实现了 ApprovalPrompter
+	tool, ok := r.tools[toolName]
+	if !ok {
+		return ""
+	}
+
+	if prompter, ok := tool.(ApprovalPrompter); ok {
+		return prompter.ApprovalPrompt(argsJSON)
+	}
+	return ""
+}
+
 func (r *Registry) WrapInvokableToolCall(
 	_ context.Context,
 	endpoint adk.InvokableToolCallEndpoint,
@@ -133,6 +166,7 @@ func (r *Registry) WrapInvokableToolCall(
 			return "", tool.StatefulInterrupt(ctx, &ApprovalInfo{
 				ToolName:        tCtx.Name,
 				ArgumentsInJSON: args,
+				customPrompt:    r.getApprovalPrompt(tCtx.Name, args),
 			}, args)
 		}
 
@@ -151,6 +185,7 @@ func (r *Registry) WrapInvokableToolCall(
 		return "", tool.StatefulInterrupt(ctx, &ApprovalInfo{
 			ToolName:        tCtx.Name,
 			ArgumentsInJSON: storedArgs,
+			customPrompt:    r.getApprovalPrompt(tCtx.Name, storedArgs),
 		}, storedArgs)
 	}, nil
 }
@@ -170,6 +205,7 @@ func (r *Registry) WrapStreamableToolCall(
 			return nil, tool.StatefulInterrupt(ctx, &ApprovalInfo{
 				ToolName:        tCtx.Name,
 				ArgumentsInJSON: args,
+				customPrompt:    r.getApprovalPrompt(tCtx.Name, args),
 			}, args)
 		}
 
@@ -189,6 +225,7 @@ func (r *Registry) WrapStreamableToolCall(
 			return nil, tool.StatefulInterrupt(ctx, &ApprovalInfo{
 				ToolName:        tCtx.Name,
 				ArgumentsInJSON: storedArgs,
+				customPrompt:    r.getApprovalPrompt(tCtx.Name, storedArgs),
 			}, storedArgs)
 		}
 
@@ -206,6 +243,7 @@ func singleChunkReader(msg string) *schema.StreamReader[string] {
 type ApprovalInfo struct {
 	ToolName        string
 	ArgumentsInJSON string
+	customPrompt    string // 自定义提示内容，由工具实现 ApprovalPrompter 接口时设置
 }
 
 type ApprovalResult struct {
@@ -223,6 +261,9 @@ func (ai *ApprovalInfo) InterruptReason() string {
 }
 
 func (ai *ApprovalInfo) String() string {
+	if ai.customPrompt != "" {
+		return ai.customPrompt
+	}
 	return fmt.Sprintf("tool '%s' interrupted with arguments '%s', waiting for your approval, "+
 		"please answer with Y/N",
 		ai.ToolName, ai.ArgumentsInJSON)
