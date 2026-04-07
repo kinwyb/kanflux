@@ -34,21 +34,24 @@ func (i *Indexer) IndexDocument(ctx context.Context, doc *DocumentInfo) error {
 	// 检查是否已存在且未修改
 	existingDoc, exists := i.store.GetDocumentByPath(doc.SourcePath)
 	if exists && existingDoc.ModTime == doc.ModTime {
-		slog.Debug("Document unchanged, skip indexing", "path", doc.SourcePath)
+		slog.Debug("[RAG] Document unchanged, skip indexing", "path", doc.SourcePath)
 		return nil
 	}
 
 	// 如果文档已存在但已修改，先删除旧的
 	if exists {
+		slog.Debug("[RAG] Document modified, re-indexing", "path", doc.SourcePath)
 		i.store.RemoveDocument(existingDoc.ID)
 	}
 
 	// 分块
+	slog.Debug("[RAG] Chunking document", "path", doc.SourcePath)
 	chunks := i.chunker.ChunkWithDocID(doc.Content, doc.ID)
 	if len(chunks) == 0 {
-		slog.Debug("Document has no content chunks", "path", doc.SourcePath)
+		slog.Debug("[RAG] Document has no content chunks", "path", doc.SourcePath)
 		return nil
 	}
+	slog.Debug("[RAG] Document chunked", "path", doc.SourcePath, "chunks", len(chunks))
 
 	// 设置分块的元数据
 	for _, chunk := range chunks {
@@ -78,18 +81,20 @@ func (i *Indexer) IndexDocument(ctx context.Context, doc *DocumentInfo) error {
 	}
 
 	// 批量 Embedding
+	slog.Debug("[RAG] Generating embeddings...", "path", doc.SourcePath, "chunks", len(chunks))
 	vectors, err := i.batchEmbed(ctx, chunkContents)
 	if err != nil {
-		slog.Error("Failed to embed chunks", "path", doc.SourcePath, "error", err)
+		slog.Error("[RAG] Failed to embed chunks", "path", doc.SourcePath, "error", err)
 		return fmt.Errorf("failed to embed document chunks: %w", err)
 	}
+	slog.Debug("[RAG] Embeddings generated", "path", doc.SourcePath, "vectors", len(vectors))
 
 	// 存储向量
 	for idx, vector := range vectors {
 		i.store.SetVector(chunks[idx].ID, vector)
 	}
 
-	slog.Info("Document indexed", "path", doc.SourcePath, "chunks", len(chunks))
+	slog.Info("[RAG] Document indexed", "path", doc.SourcePath, "chunks", len(chunks))
 	return nil
 }
 
@@ -99,11 +104,13 @@ func (i *Indexer) batchEmbed(ctx context.Context, texts []string) ([][]float64, 
 		return nil, nil
 	}
 
+	slog.Debug("[RAG] Calling embedding API...", "text_count", len(texts))
 	// Eino Embedding 接口调用
 	embeddings, err := i.embedder.EmbedStrings(ctx, texts)
 	if err != nil {
 		return nil, fmt.Errorf("embedding failed: %w", err)
 	}
+	slog.Debug("[RAG] Embedding API completed", "vectors_returned", len(embeddings))
 
 	// 转换为 [][]float64
 	vectors := make([][]float64, len(embeddings))
@@ -120,14 +127,16 @@ func (i *Indexer) RemoveDocument(docID string) error {
 	defer i.mu.Unlock()
 
 	i.store.RemoveDocument(docID)
-	slog.Info("Document removed from index", "doc_id", docID)
+	slog.Info("[RAG] Document removed from index", "doc_id", docID)
 	return nil
 }
 
 // IndexDocuments 批量索引文档
 func (i *Indexer) IndexDocuments(ctx context.Context, docs []*DocumentInfo) error {
+	slog.Info("[RAG] Starting batch index", "doc_count", len(docs))
 	var errors []string
-	for _, doc := range docs {
+	for idx, doc := range docs {
+		slog.Debug("[RAG] Indexing document", "progress", fmt.Sprintf("%d/%d", idx+1, len(docs)), "path", doc.SourcePath)
 		if err := i.IndexDocument(ctx, doc); err != nil {
 			errors = append(errors, fmt.Sprintf("%s: %v", doc.SourcePath, err))
 		}
@@ -138,7 +147,12 @@ func (i *Indexer) IndexDocuments(ctx context.Context, docs []*DocumentInfo) erro
 	}
 
 	// 保存索引
-	return i.store.Save()
+	slog.Info("[RAG] Saving index to disk...")
+	if err := i.store.Save(); err != nil {
+		return fmt.Errorf("failed to save index: %w", err)
+	}
+	slog.Info("[RAG] Batch index completed", "total_docs", len(docs))
+	return nil
 }
 
 // ReindexAll 重新索引所有文档
