@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/cloudwego/eino/adk/middlewares/filesystem"
+	"github.com/kinwyb/kanflux/agent/rag"
 	"github.com/kinwyb/kanflux/agent/tools"
 	"github.com/kinwyb/kanflux/config"
 
@@ -58,6 +59,8 @@ type Config struct {
 	Streaming     bool
 	Tools         []string // 允许使用的工具列表，空表示所有工具可用
 	ToolsApproval []string // 需要审批的工具列表
+	// RAG 配置
+	RAGManager rag.RAGManagerInterface // RAG 管理器接口
 }
 
 // applyToolConfig 应用工具配置到 Registry
@@ -180,6 +183,13 @@ func NewDeepAgent(ctx context.Context, cfg *Config) (*Agent, error) {
 		cfg.ToolRegister = tools.NewRegistry()
 	}
 	cfg.ToolRegister.Register(tools.NewMemoryTool(prompt.memory))
+
+	// 注册 RAG 知识检索工具
+	if cfg.RAGManager != nil {
+		if kt := cfg.RAGManager.GetKnowledgeTool(); kt != nil {
+			cfg.ToolRegister.Register(kt)
+		}
+	}
 
 	// 应用工具配置
 	applyToolConfig(cfg)

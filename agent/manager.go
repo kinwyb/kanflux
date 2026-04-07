@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/kinwyb/kanflux/agent/rag"
 	"github.com/kinwyb/kanflux/agent/tools"
 	"github.com/kinwyb/kanflux/bus"
 	"github.com/kinwyb/kanflux/config"
@@ -16,6 +19,7 @@ import (
 	"github.com/kinwyb/kanflux/session"
 
 	"github.com/cloudwego/eino/adk"
+	"github.com/cloudwego/eino/components/embedding"
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/schema"
@@ -152,6 +156,17 @@ func (m *Manager) RegisterAgentsFromConfig(ctx context.Context, cfg *config.Conf
 		// 获取默认 skills 目录
 		skillDirs := config.GetDefaultSkillDirs(resolved.Workspace)
 
+		// 创建 RAG Manager（如果配置了知识库路径）
+		var ragManager *rag.RAGManager
+		if len(resolved.KnowledgePaths) > 0 {
+			ragMgr, err := m.createRAGManager(ctx, resolved)
+			if err != nil {
+				m.log(ctx, bus.LogLevelWarn, "manager", fmt.Sprintf("Failed to create RAG manager for agent '%s': %v", name, err))
+			} else {
+				ragManager = ragMgr
+			}
+		}
+
 		// 创建 Agent 配置
 		agentConfig := &Config{
 			Name:          resolved.Name,
@@ -167,6 +182,7 @@ func (m *Manager) RegisterAgentsFromConfig(ctx context.Context, cfg *config.Conf
 			Streaming:     true,
 			Tools:         resolved.Tools,
 			ToolsApproval: resolved.ToolsApproval,
+			RAGManager:    ragManager,
 		}
 
 		// 创建 Agent
@@ -876,4 +892,82 @@ func (m *Manager) GetToolsInfo() (map[string]interface{}, error) {
 	result["manager"] = "AgentManager"
 	result["agents"] = m.ListAgents()
 	return result, nil
+}
+
+// createRAGManager 创建 RAG Manager
+func (m *Manager) createRAGManager(ctx context.Context, resolved *config.ResolvedAgentConfig) (*rag.RAGManager, error) {
+	// 创建 Embedder
+	embedder, err := m.createEmbedder(ctx, resolved)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create embedder: %w", err)
+	}
+
+	// 转换知识库路径配置
+	var knowledgePaths []rag.KnowledgePath
+	for _, kp := range resolved.KnowledgePaths {
+		// 处理相对路径
+		path := kp.Path
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(resolved.Workspace, path)
+		}
+		knowledgePaths = append(knowledgePaths, rag.KnowledgePath{
+			Path:       path,
+			Extensions: kp.Extensions,
+			Recursive:  kp.Recursive,
+			Exclude:    kp.Exclude,
+		})
+	}
+
+	// 创建 RAG 配置
+	ragConfig := rag.DefaultConfig()
+	ragConfig.Workspace = resolved.Workspace
+	ragConfig.KnowledgePaths = knowledgePaths
+	ragConfig.Embedder = embedder
+
+	if resolved.RAGConfig != nil {
+		ragConfig.ChunkSize = resolved.RAGConfig.ChunkSize
+		ragConfig.ChunkOverlap = resolved.RAGConfig.ChunkOverlap
+		ragConfig.TopK = resolved.RAGConfig.TopK
+		ragConfig.ScoreThreshold = resolved.RAGConfig.ScoreThreshold
+		ragConfig.EnableWatcher = resolved.RAGConfig.EnableWatcher
+	}
+
+	// 创建 RAG Manager
+	ragMgr, err := rag.NewManager(ctx, ragConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create RAG manager: %w", err)
+	}
+
+	// 初始化
+	if err := ragMgr.Initialize(ctx); err != nil {
+		return nil, fmt.Errorf("failed to initialize RAG manager: %w", err)
+	}
+
+	// 启动文件监控
+	if ragConfig.EnableWatcher {
+		if err := ragMgr.StartWatcher(ctx); err != nil {
+			slog.Warn("Failed to start RAG file watcher", "error", err)
+		}
+	}
+
+	m.log(ctx, bus.LogLevelInfo, "manager", fmt.Sprintf("RAG manager created for agent '%s' with %d knowledge paths", resolved.Name, len(knowledgePaths)))
+	return ragMgr, nil
+}
+
+// createEmbedder 创建 Embedder
+func (m *Manager) createEmbedder(ctx context.Context, resolved *config.ResolvedAgentConfig) (embedding.Embedder, error) {
+	// 默认使用 OpenAI Embedding
+	providerType := providers.EmbeddingProviderOpenAI
+	model := resolved.EmbeddingModel
+	if model == "" {
+		model = "text-embedding-3-small"
+	}
+
+	// 创建 Embedder
+	return providers.NewEmbedder(ctx, &providers.EmbeddingConfig{
+		Provider:   providerType,
+		Model:      model,
+		APIKey:     resolved.APIKey,
+		APIBaseURL: resolved.APIBaseURL,
+	})
 }

@@ -40,17 +40,40 @@ const (
 
 // AgentConfig agent 配置
 type AgentConfig struct {
-	Name          string    `json:"name"`
-	Type          AgentType `json:"type"`          // Agent 类型，默认 deep
-	Description   string    `json:"description"`   // Agent 描述，未配置时使用默认描述
-	Workspace     string    `json:"workspace"`     // 必须指定
-	SubAgents     []string  `json:"sub_agents"`    // 子 agent 名称列表
-	Provider      string    `json:"provider"`      // 未指定使用 default_provider
-	Model         string    `json:"model"`         // 未指定使用供应商的 default_model
-	MaxIteration  int       `json:"max_iteration"` // 默认 10
-	Streaming     bool      `json:"streaming"`     // 默认 true
-	Tools         []string  `json:"tools"`         // 允许使用的工具列表，空表示所有工具可用
-	ToolsApproval []string  `json:"tools_approval"` // 需要审批的工具列表，继承全局配置并追加
+	Name           string              `json:"name"`
+	Type           AgentType           `json:"type"`           // Agent 类型，默认 deep
+	Description    string              `json:"description"`    // Agent 描述，未配置时使用默认描述
+	Workspace      string              `json:"workspace"`      // 必须指定
+	SubAgents      []string            `json:"sub_agents"`     // 子 agent 名称列表
+	Provider       string              `json:"provider"`       // 未指定使用 default_provider
+	Model          string              `json:"model"`          // 未指定使用供应商的 default_model
+	MaxIteration   int                 `json:"max_iteration"`  // 默认 10
+	Streaming      bool                `json:"streaming"`      // 默认 true
+	Tools          []string            `json:"tools"`          // 允许使用的工具列表，空表示所有工具可用
+	ToolsApproval  []string            `json:"tools_approval"` // 需要审批的工具列表，继承全局配置并追加
+	// RAG 配置
+	KnowledgePaths []KnowledgePathConfig `json:"knowledge_paths"` // 知识库路径配置
+	EmbeddingModel string                `json:"embedding_model"` // Embedding 模型名称
+	RAGConfig      *RAGConfigOptions     `json:"rag_config"`      // RAG 详细配置
+}
+
+// KnowledgePathConfig 知识库路径配置
+type KnowledgePathConfig struct {
+	Path       string   `json:"path"`       // 路径（相对于 workspace 或绝对路径）
+	Extensions []string `json:"extensions"` // 文件扩展名过滤，如 ["md", "txt", "go"]
+	Recursive  bool     `json:"recursive"`  // 是否递归子目录
+	Exclude    []string `json:"exclude"`    // 排除模式，如 ["*.tmp", "test_*"]
+}
+
+// RAGConfigOptions RAG 详细配置选项
+type RAGConfigOptions struct {
+	ChunkSize      int            `json:"chunk_size"`      // 分块大小，默认 500
+	ChunkOverlap   int            `json:"chunk_overlap"`   // 分块重叠，默认 50
+	TopK           int            `json:"top_k"`           // 检索数量，默认 5
+	ScoreThreshold float64        `json:"score_threshold"` // 相关性阈值，默认 0.5
+	EnableWatcher  bool           `json:"enable_watcher"`  // 启用文件监控，默认 true
+	StoreType      string         `json:"store_type"`      // 存储类型: json, redis, milvus
+	StoreOptions   map[string]any `json:"store_options"`   // 存储额外配置
 }
 
 // ResolvedAgentConfig 解析后的 agent 配置（包含最终确定的值）
@@ -68,6 +91,10 @@ type ResolvedAgentConfig struct {
 	Streaming      bool
 	Tools          []string  // 允许使用的工具列表，空表示所有工具可用
 	ToolsApproval  []string  // 需要审批的工具列表
+	// RAG 配置
+	KnowledgePaths []KnowledgePathConfig // 知识库路径配置
+	EmbeddingModel string                // Embedding 模型名称
+	RAGConfig      *RAGConfigOptions     // RAG 详细配置
 }
 
 // Load 从指定路径加载配置文件
@@ -190,19 +217,23 @@ func (c *Config) ResolveAgentConfig(name string) (*ResolvedAgentConfig, error) {
 	}
 
 	return &ResolvedAgentConfig{
-		Name:          agent.Name,
-		Type:          agentType,
-		Description:   description,
-		Workspace:     agent.Workspace,
-		SubAgents:     agent.SubAgents,
-		Provider:      providerName,
-		Model:         model,
-		APIKey:        provider.APIKey,
-		APIBaseURL:    provider.APIBaseURL,
-		MaxIteration:  maxIteration,
-		Streaming:     agent.Streaming,
-		Tools:         tools,
-		ToolsApproval: toolsApproval,
+		Name:           agent.Name,
+		Type:           agentType,
+		Description:    description,
+		Workspace:      agent.Workspace,
+		SubAgents:      agent.SubAgents,
+		Provider:       providerName,
+		Model:          model,
+		APIKey:         provider.APIKey,
+		APIBaseURL:     provider.APIBaseURL,
+		MaxIteration:   maxIteration,
+		Streaming:      agent.Streaming,
+		Tools:          tools,
+		ToolsApproval:  toolsApproval,
+		// RAG 配置
+		KnowledgePaths: agent.KnowledgePaths,
+		EmbeddingModel: agent.EmbeddingModel,
+		RAGConfig:      resolveRAGConfig(agent.RAGConfig),
 	}, nil
 }
 
@@ -263,4 +294,33 @@ func mergeStringLists(list1, list2 []string) []string {
 	}
 
 	return result
+}
+
+// resolveRAGConfig 解析 RAG 配置，设置默认值
+func resolveRAGConfig(cfg *RAGConfigOptions) *RAGConfigOptions {
+	if cfg == nil {
+		return &RAGConfigOptions{
+			ChunkSize:      500,
+			ChunkOverlap:   50,
+			TopK:           5,
+			ScoreThreshold: 0.5,
+			EnableWatcher:  true,
+		}
+	}
+
+	// 设置默认值
+	if cfg.ChunkSize <= 0 {
+		cfg.ChunkSize = 500
+	}
+	if cfg.ChunkOverlap < 0 {
+		cfg.ChunkOverlap = 0
+	}
+	if cfg.TopK <= 0 {
+		cfg.TopK = 5
+	}
+	if cfg.ScoreThreshold <= 0 || cfg.ScoreThreshold > 1 {
+		cfg.ScoreThreshold = 0.5
+	}
+
+	return cfg
 }
