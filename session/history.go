@@ -86,53 +86,66 @@ func (h *ConversationHistory) InitializeAsync() {
 
 	go func() {
 		ctx := context.Background()
-		slog.Info("[History] Starting async initialization, processing existing sessions...")
-
-		// 列出所有 session 文件
-		entries, err := os.ReadDir(h.sessionDir)
-		if err != nil {
-			if !os.IsNotExist(err) {
-				slog.Warn("[History] Failed to read session directory", "error", err)
-			}
-			return
+		if err := h.Initialize(ctx); err != nil {
+			slog.Warn("[History] Failed to initialize", "error", err)
 		}
-
-		var sessionFiles []string
-		for _, entry := range entries {
-			if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".jsonl") {
-				sessionFiles = append(sessionFiles, entry.Name())
-			}
-		}
-
-		if len(sessionFiles) == 0 {
-			slog.Info("[History] No existing sessions to process")
-			return
-		}
-
-		slog.Info("[History] Found existing sessions", "count", len(sessionFiles))
-
-		processed := 0
-		for _, filename := range sessionFiles {
-			sessionKey := strings.TrimSuffix(filename, ".jsonl")
-			session, err := h.loadSession(sessionKey)
-			if err != nil {
-				slog.Warn("[History] Failed to load session", "key", sessionKey, "error", err)
-				continue
-			}
-
-			if len(session.Messages) == 0 {
-				continue
-			}
-
-			if err := h.ProcessSession(ctx, session); err != nil {
-				slog.Warn("[History] Failed to process session", "key", sessionKey, "error", err)
-				continue
-			}
-			processed++
-		}
-
-		slog.Info("[History] Finished processing existing sessions", "processed", processed, "total", len(sessionFiles))
 	}()
+}
+
+// Initialize 同步初始化：处理已有的 session 文件生成历史记录
+func (h *ConversationHistory) Initialize(ctx context.Context) error {
+	if h.sessionDir == "" {
+		return nil
+	}
+
+	slog.Info("[History] Starting initialization, processing existing sessions...")
+
+	// 列出所有 session 文件
+	entries, err := os.ReadDir(h.sessionDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			slog.Info("[History] No existing sessions directory")
+			return nil
+		}
+		return err
+	}
+
+	var sessionFiles []string
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".jsonl") {
+			sessionFiles = append(sessionFiles, entry.Name())
+		}
+	}
+
+	if len(sessionFiles) == 0 {
+		slog.Info("[History] No existing sessions to process")
+		return nil
+	}
+
+	slog.Info("[History] Found existing sessions", "count", len(sessionFiles))
+
+	processed := 0
+	for _, filename := range sessionFiles {
+		sessionKey := strings.TrimSuffix(filename, ".jsonl")
+		session, err := h.loadSession(sessionKey)
+		if err != nil {
+			slog.Warn("[History] Failed to load session", "key", sessionKey, "error", err)
+			continue
+		}
+
+		if len(session.Messages) == 0 {
+			continue
+		}
+
+		if err := h.ProcessSession(ctx, session); err != nil {
+			slog.Warn("[History] Failed to process session", "key", sessionKey, "error", err)
+			continue
+		}
+		processed++
+	}
+
+	slog.Info("[History] Finished processing existing sessions", "processed", processed, "total", len(sessionFiles))
+	return nil
 }
 
 // ProcessSession 处理 session，生成历史记录

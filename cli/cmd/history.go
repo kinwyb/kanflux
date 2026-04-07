@@ -72,9 +72,10 @@ func NewHistoryCmd() *cobra.Command {
 				return fmt.Errorf("创建Session Manager失败: %w", err)
 			}
 
-			// 设置 embedder 并初始化历史记录
-			if err := sessionMgr.SetEmbedder(embedder); err != nil {
-				return fmt.Errorf("设置Embedder失败: %w", err)
+			// 设置 embedder 并同步初始化历史记录
+			fmt.Println("正在初始化历史记录索引...")
+			if err := sessionMgr.SetEmbedderSync(ctx, embedder); err != nil {
+				return fmt.Errorf("初始化历史记录失败: %w", err)
 			}
 
 			// 获取历史记录管理器
