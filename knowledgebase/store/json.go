@@ -1,4 +1,4 @@
-package knowledgebase
+package store
 
 import (
 	"context"
@@ -9,13 +9,14 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/kinwyb/kanflux/knowledgebase/types"
 )
 
-// JSONStore implements Store using JSON files.
-// It's a simple implementation suitable for small-scale usage or testing.
+// JSONStore implements types.Store using JSON files.
 type JSONStore struct {
 	basePath string
-	embedder Embedder
+	embedder types.Embedder
 
 	mu      sync.RWMutex
 	storage *jsonStorage
@@ -36,10 +37,10 @@ type docEntry struct {
 	Metadata map[string]any `json:"metadata"`
 }
 
-// NewJSONStore creates a new JSON-based store.
-func NewJSONStore(basePath string, embedder Embedder) (*JSONStore, error) {
+// NewJSON creates a new JSON-based store.
+func NewJSON(basePath string, embedder types.Embedder) (types.Store, error) {
 	if basePath == "" {
-		return nil, ErrInvalidConfig
+		return nil, types.ErrInvalidConfig
 	}
 
 	if err := os.MkdirAll(basePath, 0755); err != nil {
@@ -55,7 +56,6 @@ func NewJSONStore(basePath string, embedder Embedder) (*JSONStore, error) {
 		},
 	}
 
-	// Load existing data
 	if err := store.load(); err != nil && !os.IsNotExist(err) {
 		return nil, fmt.Errorf("failed to load store: %w", err)
 	}
@@ -69,7 +69,7 @@ func (s *JSONStore) Initialize(ctx context.Context) error {
 }
 
 // Add stores documents.
-func (s *JSONStore) Add(ctx context.Context, docs []*Document) error {
+func (s *JSONStore) Add(ctx context.Context, docs []*types.Document) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -85,7 +85,6 @@ func (s *JSONStore) Add(ctx context.Context, docs []*Document) error {
 
 		s.storage.Documents[doc.ID] = entry
 
-		// Generate embedding if embedder is available
 		if s.embedder != nil {
 			embedding, err := s.embedder.Embed(ctx, doc.Content)
 			if err == nil {
@@ -99,8 +98,7 @@ func (s *JSONStore) Add(ctx context.Context, docs []*Document) error {
 }
 
 // Search performs a semantic search.
-func (s *JSONStore) Search(ctx context.Context, query string, opts *SearchOptions) ([]*SearchResult, error) {
-	// Use SearchByEmbedding if embedder is available
+func (s *JSONStore) Search(ctx context.Context, query string, opts *types.SearchOptions) ([]*types.SearchResult, error) {
 	if s.embedder != nil {
 		embedding, err := s.embedder.Embed(ctx, query)
 		if err == nil {
@@ -108,12 +106,11 @@ func (s *JSONStore) Search(ctx context.Context, query string, opts *SearchOption
 		}
 	}
 
-	// Fallback to keyword search
 	return s.keywordSearch(query, opts), nil
 }
 
 // SearchByEmbedding performs a search using a pre-computed embedding.
-func (s *JSONStore) SearchByEmbedding(ctx context.Context, embedding []float32, opts *SearchOptions) ([]*SearchResult, error) {
+func (s *JSONStore) SearchByEmbedding(ctx context.Context, embedding []float32, opts *types.SearchOptions) ([]*types.SearchResult, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -122,10 +119,9 @@ func (s *JSONStore) SearchByEmbedding(ctx context.Context, embedding []float32, 
 		limit = 10
 	}
 
-	var results []*SearchResult
+	var results []*types.SearchResult
 
 	for id, entry := range s.storage.Documents {
-		// Apply filters
 		if opts.Wing != "" && entry.Wing != opts.Wing {
 			continue
 		}
@@ -133,21 +129,18 @@ func (s *JSONStore) SearchByEmbedding(ctx context.Context, embedding []float32, 
 			continue
 		}
 
-		// Get embedding
 		docEmbedding, ok := s.storage.Embeddings[id]
 		if !ok {
 			continue
 		}
 
-		// Calculate similarity
 		score := cosineSimilarity(embedding, docEmbedding)
 
-		// Apply threshold
 		if opts.Threshold > 0 && score < opts.Threshold {
 			continue
 		}
 
-		results = append(results, &SearchResult{
+		results = append(results, &types.SearchResult{
 			ID:       id,
 			Content:  entry.Content,
 			Score:    score,
@@ -158,7 +151,6 @@ func (s *JSONStore) SearchByEmbedding(ctx context.Context, embedding []float32, 
 		})
 	}
 
-	// Sort by score descending
 	sortByScore(results)
 
 	if len(results) > limit {
@@ -168,8 +160,7 @@ func (s *JSONStore) SearchByEmbedding(ctx context.Context, embedding []float32, 
 	return results, nil
 }
 
-// keywordSearch performs a simple keyword-based search.
-func (s *JSONStore) keywordSearch(query string, opts *SearchOptions) []*SearchResult {
+func (s *JSONStore) keywordSearch(query string, opts *types.SearchOptions) []*types.SearchResult {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -178,10 +169,9 @@ func (s *JSONStore) keywordSearch(query string, opts *SearchOptions) []*SearchRe
 		limit = 10
 	}
 
-	var results []*SearchResult
+	var results []*types.SearchResult
 
 	for id, entry := range s.storage.Documents {
-		// Apply filters
 		if opts.Wing != "" && entry.Wing != opts.Wing {
 			continue
 		}
@@ -189,12 +179,11 @@ func (s *JSONStore) keywordSearch(query string, opts *SearchOptions) []*SearchRe
 			continue
 		}
 
-		// Simple keyword match
 		if containsIgnoreCase(entry.Content, query) {
-			results = append(results, &SearchResult{
+			results = append(results, &types.SearchResult{
 				ID:       id,
 				Content:  entry.Content,
-				Score:    0.5, // Base score for keyword match
+				Score:    0.5,
 				Wing:     entry.Wing,
 				Room:     entry.Room,
 				Source:   entry.Source,
@@ -211,16 +200,16 @@ func (s *JSONStore) keywordSearch(query string, opts *SearchOptions) []*SearchRe
 }
 
 // Get retrieves a document by ID.
-func (s *JSONStore) Get(ctx context.Context, id string) (*Document, error) {
+func (s *JSONStore) Get(ctx context.Context, id string) (*types.Document, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	entry, ok := s.storage.Documents[id]
 	if !ok {
-		return nil, ErrDocumentNotFound
+		return nil, types.ErrDocumentNotFound
 	}
 
-	return &Document{
+	return &types.Document{
 		ID:       entry.ID,
 		Content:  entry.Content,
 		Wing:     entry.Wing,
@@ -279,7 +268,7 @@ func (s *JSONStore) Count(ctx context.Context) (int, error) {
 }
 
 // Stats returns statistics.
-func (s *JSONStore) Stats(ctx context.Context) (*Stats, error) {
+func (s *JSONStore) Stats(ctx context.Context) (*types.Stats, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -291,19 +280,18 @@ func (s *JSONStore) Stats(ctx context.Context) (*Stats, error) {
 		rooms[entry.Wing+"/"+entry.Room] = true
 	}
 
-	// Get storage size
 	var size int64
 	info, err := os.Stat(filepath.Join(s.basePath, "store.json"))
 	if err == nil {
 		size = info.Size()
 	}
 
-	return &Stats{
+	return &types.Stats{
 		TotalDocuments: len(s.storage.Documents),
 		TotalWings:     len(wings),
 		TotalRooms:     len(rooms),
 		StorageSize:    size,
-		StoreType:      StoreTypeJSON,
+		StoreType:      types.StoreTypeJSON,
 	}, nil
 }
 
@@ -311,8 +299,6 @@ func (s *JSONStore) Stats(ctx context.Context) (*Stats, error) {
 func (s *JSONStore) Close() error {
 	return s.save()
 }
-
-// ============ Persistence ============
 
 func (s *JSONStore) load() error {
 	data, err := os.ReadFile(filepath.Join(s.basePath, "store.json"))
@@ -381,7 +367,7 @@ func lower(s string) string {
 	return string(b)
 }
 
-func sortByScore(results []*SearchResult) {
+func sortByScore(results []*types.SearchResult) {
 	for i := 0; i < len(results)-1; i++ {
 		for j := i + 1; j < len(results); j++ {
 			if results[j].Score > results[i].Score {
@@ -391,5 +377,5 @@ func sortByScore(results []*SearchResult) {
 	}
 }
 
-// Ensure JSONStore implements Store
-var _ Store = (*JSONStore)(nil)
+// Ensure JSONStore implements types.Store
+var _ types.Store = (*JSONStore)(nil)

@@ -14,6 +14,7 @@ import (
 	"github.com/cloudwego/eino/components/embedding"
 	"github.com/cloudwego/eino/schema"
 	"github.com/kinwyb/kanflux/knowledgebase"
+	"github.com/kinwyb/kanflux/knowledgebase/adapter"
 )
 
 // SearchResult 搜索结果
@@ -65,7 +66,7 @@ func NewConversationHistoryWithConfig(cfg *HistoryConfig) (*ConversationHistory,
 	kbCfg.StoreType = cfg.StoreType
 
 	if cfg.Embedder != nil {
-		kbCfg.Embedder = knowledgebase.NewEinoEmbedder(cfg.Embedder, "text-embedding")
+		kbCfg.Embedder = adapter.NewEinoEmbedder(cfg.Embedder, "text-embedding")
 	}
 
 	kb, err := knowledgebase.New(kbCfg)

@@ -1,102 +1,41 @@
 // Package knowledgebase provides a unified knowledge storage and retrieval module.
-// It defines public interfaces that can be implemented by various backends
-// (SQLite, JSON, etc.) and provides a facade for easy usage.
+// It re-exports types from the types package and provides a facade for easy usage.
 package knowledgebase
 
 import (
 	"context"
 	"fmt"
+
+	"github.com/kinwyb/kanflux/knowledgebase/store"
+	"github.com/kinwyb/kanflux/knowledgebase/types"
 )
 
-// Document represents a document to be stored in the knowledge base.
-type Document struct {
-	ID       string         // Unique identifier
-	Content  string         // Document content
-	Wing     string         // Top-level category (e.g., "history", "rag")
-	Room     string         // Sub-level category (e.g., "daily", "files")
-	Source   string         // Source path or identifier
-	Metadata map[string]any // Additional metadata
-}
+// Re-export types for convenience
+type (
+	Document     = types.Document
+	SearchResult = types.SearchResult
+	SearchOptions = types.SearchOptions
+	Stats        = types.Stats
+	Store        = types.Store
+	Embedder     = types.Embedder
+)
 
-// SearchResult represents a search result from the knowledge base.
-type SearchResult struct {
-	ID       string         // Document ID
-	Content  string         // Matched content
-	Score    float64        // Relevance score (0-1)
-	Wing     string         // Wing of the document
-	Room     string         // Room of the document
-	Source   string         // Source of the document
-	Metadata map[string]any // Additional metadata
-}
+// Re-export constants
+const (
+	StoreTypeSQLite = types.StoreTypeSQLite
+	StoreTypeJSON   = types.StoreTypeJSON
+)
 
-// SearchOptions configures search behavior.
-type SearchOptions struct {
-	Wing      string  // Filter by wing
-	Room      string  // Filter by room
-	Limit     int     // Max results to return (default: 10)
-	Threshold float64 // Min relevance score (default: 0.3)
-}
-
-// Stats holds statistics about the knowledge base.
-type Stats struct {
-	TotalDocuments int    // Total number of documents
-	TotalWings     int    // Number of wings
-	TotalRooms     int    // Number of rooms
-	StorageSize    int64  // Storage size in bytes
-	StoreType      string // Type of backend store
-}
-
-// Store is the interface for knowledge base storage backends.
-// Implementations can use SQLite, JSON files, or other storage systems.
-type Store interface {
-	// Initialize prepares the storage backend.
-	Initialize(ctx context.Context) error
-
-	// Add stores documents in the knowledge base.
-	Add(ctx context.Context, docs []*Document) error
-
-	// Search performs a semantic search.
-	Search(ctx context.Context, query string, opts *SearchOptions) ([]*SearchResult, error)
-
-	// SearchByEmbedding performs a search using a pre-computed embedding.
-	SearchByEmbedding(ctx context.Context, embedding []float32, opts *SearchOptions) ([]*SearchResult, error)
-
-	// Get retrieves a document by ID.
-	Get(ctx context.Context, id string) (*Document, error)
-
-	// Delete removes a document by ID.
-	Delete(ctx context.Context, id string) error
-
-	// DeleteByWing removes all documents in a wing.
-	DeleteByWing(ctx context.Context, wing string) error
-
-	// DeleteByRoom removes all documents in a wing/room.
-	DeleteByRoom(ctx context.Context, wing, room string) error
-
-	// Count returns the total number of documents.
-	Count(ctx context.Context) (int, error)
-
-	// Stats returns statistics about the store.
-	Stats(ctx context.Context) (*Stats, error)
-
-	// Close releases resources.
-	Close() error
-}
-
-// Embedder is the interface for generating text embeddings.
-type Embedder interface {
-	// Embed generates an embedding for a single text.
-	Embed(ctx context.Context, text string) ([]float32, error)
-
-	// EmbedBatch generates embeddings for multiple texts.
-	EmbedBatch(ctx context.Context, texts []string) ([][]float32, error)
-
-	// Dimension returns the embedding vector dimension.
-	Dimension() int
-}
+// Re-export errors
+var (
+	ErrEmptyContent        = types.ErrEmptyContent
+	ErrDocumentNotFound    = types.ErrDocumentNotFound
+	ErrInvalidConfig       = types.ErrInvalidConfig
+	ErrStoreNotInitialized = types.ErrStoreNotInitialized
+	ErrEmbedderNotSet      = types.ErrEmbedderNotSet
+)
 
 // KnowledgeBase is the main facade for knowledge storage and retrieval.
-// It combines a Store and an Embedder to provide a unified interface.
 type KnowledgeBase struct {
 	store    Store
 	embedder Embedder
@@ -109,34 +48,29 @@ func New(cfg *Config) (*KnowledgeBase, error) {
 		return nil, err
 	}
 
-	store, err := createStore(cfg)
+	var s Store
+	var err error
+
+	switch cfg.StoreType {
+	case StoreTypeJSON:
+		s, err = store.NewJSON(cfg.Workspace, cfg.Embedder)
+	default:
+		s, err = store.NewSQLite(cfg.Workspace, cfg.Embedder)
+	}
+
 	if err != nil {
 		return nil, err
 	}
 
-	if err := store.Initialize(context.Background()); err != nil {
+	if err := s.Initialize(context.Background()); err != nil {
 		return nil, err
 	}
 
-	kb := &KnowledgeBase{
-		store:    store,
+	return &KnowledgeBase{
+		store:    s,
 		embedder: cfg.Embedder,
 		config:   cfg,
-	}
-
-	return kb, nil
-}
-
-// createStore creates a store based on configuration.
-func createStore(cfg *Config) (Store, error) {
-	switch cfg.StoreType {
-	case StoreTypeJSON:
-		return NewJSONStore(cfg.Workspace, cfg.Embedder)
-	case StoreTypeSQLite:
-		fallthrough
-	default:
-		return NewSQLiteStore(cfg.Workspace, cfg.Embedder)
-	}
+	}, nil
 }
 
 // Add stores content in the knowledge base.
@@ -196,7 +130,6 @@ func (kb *KnowledgeBase) Search(ctx context.Context, query string, opts ...Searc
 		options.Threshold = 0.3
 	}
 
-	// If we have an embedder, use semantic search
 	if kb.embedder != nil {
 		embedding, err := kb.embedder.Embed(ctx, query)
 		if err == nil {
@@ -244,7 +177,6 @@ func (kb *KnowledgeBase) Store() Store {
 
 // ============ Options ============
 
-// AddOption is a functional option for Add operations.
 type AddOption func(*addConfig)
 
 type addConfig struct {
@@ -254,27 +186,13 @@ type addConfig struct {
 	metadata map[string]any
 }
 
-// WithWing sets the wing for the document.
-func WithWing(wing string) AddOption {
-	return func(c *addConfig) { c.wing = wing }
-}
-
-// WithRoom sets the room for the document.
-func WithRoom(room string) AddOption {
-	return func(c *addConfig) { c.room = room }
-}
-
-// WithSource sets the source for the document.
-func WithSource(source string) AddOption {
-	return func(c *addConfig) { c.source = source }
-}
-
-// WithMetadata sets metadata for the document.
+func WithWing(wing string) AddOption     { return func(c *addConfig) { c.wing = wing } }
+func WithRoom(room string) AddOption     { return func(c *addConfig) { c.room = room } }
+func WithSource(source string) AddOption { return func(c *addConfig) { c.source = source } }
 func WithMetadata(meta map[string]any) AddOption {
 	return func(c *addConfig) { c.metadata = meta }
 }
 
-// SearchOption is a functional option for Search operations.
 type SearchOption func(*searchOpts)
 
 type searchOpts struct {
@@ -284,27 +202,11 @@ type searchOpts struct {
 	threshold float64
 }
 
-// WithWingFilter filters by wing.
-func WithWingFilter(wing string) SearchOption {
-	return func(o *searchOpts) { o.wing = wing }
-}
+func WithWingFilter(wing string) SearchOption      { return func(o *searchOpts) { o.wing = wing } }
+func WithRoomFilter(room string) SearchOption      { return func(o *searchOpts) { o.room = room } }
+func WithLimit(limit int) SearchOption             { return func(o *searchOpts) { o.limit = limit } }
+func WithThreshold(threshold float64) SearchOption { return func(o *searchOpts) { o.threshold = threshold } }
 
-// WithRoomFilter filters by room.
-func WithRoomFilter(room string) SearchOption {
-	return func(o *searchOpts) { o.room = room }
-}
-
-// WithLimit sets the max results.
-func WithLimit(limit int) SearchOption {
-	return func(o *searchOpts) { o.limit = limit }
-}
-
-// WithThreshold sets the min relevance score.
-func WithThreshold(threshold float64) SearchOption {
-	return func(o *searchOpts) { o.threshold = threshold }
-}
-
-// AddResult represents the result of an Add operation.
 type AddResult struct {
 	ID     string
 	Wing   string

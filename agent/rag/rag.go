@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/kinwyb/kanflux/knowledgebase"
+	"github.com/kinwyb/kanflux/knowledgebase/adapter"
 )
 
 // RAGManagerInterface RAG 管理器接口
@@ -79,7 +80,7 @@ func NewManager(ctx context.Context, cfg *Config) (*RAGManager, error) {
 	// 创建 KnowledgeBase
 	kbCfg := knowledgebase.DefaultConfig()
 	kbCfg.Workspace = filepath.Join(cfg.Workspace, ".kanflux", "knowledge")
-	kbCfg.Embedder = knowledgebase.NewEinoEmbedder(cfg.Embedder, cfg.EmbeddingModel)
+	kbCfg.Embedder = adapter.NewEinoEmbedder(cfg.Embedder, cfg.EmbeddingModel)
 	kbCfg.ChunkSize = cfg.ChunkSize
 	kbCfg.ChunkOverlap = cfg.ChunkOverlap
 	kbCfg.DefaultLimit = cfg.TopK

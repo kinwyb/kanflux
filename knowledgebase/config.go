@@ -1,35 +1,20 @@
 package knowledgebase
 
-import "errors"
+import (
+	"errors"
 
-// Store type constants
-const (
-	StoreTypeSQLite = "sqlite" // SQLite + FTS5 (default, recommended)
-	StoreTypeJSON   = "json"   // JSON file (simple, no dependencies)
+	"github.com/kinwyb/kanflux/knowledgebase/types"
 )
 
 // Config holds configuration for the knowledge base.
 type Config struct {
-	// Workspace is the directory for storing data.
-	Workspace string
-
-	// Embedder generates text embeddings.
-	Embedder Embedder
-
-	// StoreType specifies the storage backend: "sqlite" (default) or "json".
-	StoreType string
-
-	// ChunkSize is the text chunk size for indexing (default: 500).
-	ChunkSize int
-
-	// ChunkOverlap is the overlap between chunks (default: 50).
-	ChunkOverlap int
-
-	// DefaultLimit is the default max search results (default: 10).
-	DefaultLimit int
-
-	// DefaultThreshold is the default min relevance score (default: 0.3).
-	DefaultThreshold float64
+	Workspace        string         // Directory for storing data
+	Embedder         types.Embedder // Embedder for semantic search
+	StoreType        string         // Storage backend: "sqlite" (default) or "json"
+	ChunkSize        int            // Text chunk size for indexing (default: 500)
+	ChunkOverlap     int            // Overlap between chunks (default: 50)
+	DefaultLimit     int            // Default max search results (default: 10)
+	DefaultThreshold float64        // Default min relevance score (default: 0.3)
 }
 
 // DefaultConfig returns a Config with sensible defaults.
@@ -60,7 +45,7 @@ func WithWorkspace(path string) ConfigOption {
 }
 
 // WithEmbedder sets the embedder.
-func WithEmbedder(e Embedder) ConfigOption {
+func WithEmbedder(e types.Embedder) ConfigOption {
 	return func(c *Config) { c.Embedder = e }
 }
 

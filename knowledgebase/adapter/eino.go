@@ -1,19 +1,21 @@
-package knowledgebase
+// Package adapter provides adapters for external interfaces.
+package adapter
 
 import (
 	"context"
 
 	"github.com/cloudwego/eino/components/embedding"
+	"github.com/kinwyb/kanflux/knowledgebase/types"
 )
 
-// EinoEmbedder adapts Eino's embedding.Embedder to our Embedder interface.
+// EinoEmbedder adapts Eino's embedding.Embedder to types.Embedder.
 type EinoEmbedder struct {
 	embedder embedding.Embedder
 	model    string
 }
 
 // NewEinoEmbedder creates a new adapter for Eino's embedder.
-func NewEinoEmbedder(e embedding.Embedder, model string) *EinoEmbedder {
+func NewEinoEmbedder(e embedding.Embedder, model string) types.Embedder {
 	return &EinoEmbedder{
 		embedder: e,
 		model:    model,
@@ -27,7 +29,7 @@ func (e *EinoEmbedder) Embed(ctx context.Context, text string) ([]float32, error
 		return nil, err
 	}
 	if len(vectors) == 0 || len(vectors[0]) == 0 {
-		return nil, ErrEmbedderNotSet
+		return nil, types.ErrEmbedderNotSet
 	}
 
 	return float64SliceToFloat32(vectors[0]), nil
@@ -62,7 +64,6 @@ func (e *EinoEmbedder) Model() string {
 	return e.model
 }
 
-// float64SliceToFloat32 converts []float64 to []float32.
 func float64SliceToFloat32(src []float64) []float32 {
 	if src == nil {
 		return nil
@@ -74,5 +75,5 @@ func float64SliceToFloat32(src []float64) []float32 {
 	return dst
 }
 
-// Ensure EinoEmbedder implements Embedder
-var _ Embedder = (*EinoEmbedder)(nil)
+// Ensure EinoEmbedder implements types.Embedder
+var _ types.Embedder = (*EinoEmbedder)(nil)

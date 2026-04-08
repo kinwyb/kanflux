@@ -1,4 +1,5 @@
-package knowledgebase
+// Package store provides storage backend implementations for the knowledge base.
+package store
 
 import (
 	"context"
@@ -6,21 +7,21 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/kinwyb/kanflux/knowledgebase/types"
 	mpvector "github.com/kinwyb/mempalace-go/pkg/vector"
 )
 
-// SQLiteStore implements Store using mempalace-go's SQLite backend.
-// It provides hybrid search (FTS5 + vector) and L0-L3 layer support.
+// SQLiteStore implements types.Store using mempalace-go's SQLite backend.
 type SQLiteStore struct {
 	store     *mpvector.SQLiteStore
-	embedder  Embedder
+	embedder  types.Embedder
 	workspace string
 }
 
-// NewSQLiteStore creates a new SQLite-based store.
-func NewSQLiteStore(workspace string, embedder Embedder) (*SQLiteStore, error) {
+// NewSQLite creates a new SQLite-based store.
+func NewSQLite(workspace string, embedder types.Embedder) (types.Store, error) {
 	if workspace == "" {
-		return nil, ErrInvalidConfig
+		return nil, types.ErrInvalidConfig
 	}
 
 	if err := os.MkdirAll(workspace, 0755); err != nil {
@@ -37,7 +38,6 @@ func NewSQLiteStore(workspace string, embedder Embedder) (*SQLiteStore, error) {
 func (s *SQLiteStore) Initialize(ctx context.Context) error {
 	dbPath := filepath.Join(s.workspace, "knowledge.db")
 
-	// Create embedder adapter if available
 	var mpEmbedder mpvector.Embedder
 	if s.embedder != nil {
 		mpEmbedder = &embedderAdapter{embedder: s.embedder}
@@ -57,9 +57,9 @@ func (s *SQLiteStore) Initialize(ctx context.Context) error {
 }
 
 // Add stores documents.
-func (s *SQLiteStore) Add(ctx context.Context, docs []*Document) error {
+func (s *SQLiteStore) Add(ctx context.Context, docs []*types.Document) error {
 	if s.store == nil {
-		return ErrStoreNotInitialized
+		return types.ErrStoreNotInitialized
 	}
 
 	mpDocs := make([]mpvector.Document, len(docs))
@@ -70,7 +70,6 @@ func (s *SQLiteStore) Add(ctx context.Context, docs []*Document) error {
 				metadata[k] = v
 			}
 		}
-		// Store wing/room/source in metadata (required by vector.SQLiteStore)
 		metadata["wing"] = doc.Wing
 		metadata["room"] = doc.Room
 		metadata["source_file"] = doc.Source
@@ -85,10 +84,10 @@ func (s *SQLiteStore) Add(ctx context.Context, docs []*Document) error {
 	return s.store.Add(ctx, mpDocs)
 }
 
-// Search performs a hybrid search (FTS5 + semantic).
-func (s *SQLiteStore) Search(ctx context.Context, query string, opts *SearchOptions) ([]*SearchResult, error) {
+// Search performs a hybrid search.
+func (s *SQLiteStore) Search(ctx context.Context, query string, opts *types.SearchOptions) ([]*types.SearchResult, error) {
 	if s.store == nil {
-		return nil, ErrStoreNotInitialized
+		return nil, types.ErrStoreNotInitialized
 	}
 
 	limit := opts.Limit
@@ -105,9 +104,9 @@ func (s *SQLiteStore) Search(ctx context.Context, query string, opts *SearchOpti
 }
 
 // SearchByEmbedding performs a search using a pre-computed embedding.
-func (s *SQLiteStore) SearchByEmbedding(ctx context.Context, embedding []float32, opts *SearchOptions) ([]*SearchResult, error) {
+func (s *SQLiteStore) SearchByEmbedding(ctx context.Context, embedding []float32, opts *types.SearchOptions) ([]*types.SearchResult, error) {
 	if s.store == nil {
-		return nil, ErrStoreNotInitialized
+		return nil, types.ErrStoreNotInitialized
 	}
 
 	limit := opts.Limit
@@ -124,9 +123,9 @@ func (s *SQLiteStore) SearchByEmbedding(ctx context.Context, embedding []float32
 }
 
 // Get retrieves a document by ID.
-func (s *SQLiteStore) Get(ctx context.Context, id string) (*Document, error) {
+func (s *SQLiteStore) Get(ctx context.Context, id string) (*types.Document, error) {
 	if s.store == nil {
-		return nil, ErrStoreNotInitialized
+		return nil, types.ErrStoreNotInitialized
 	}
 
 	doc, err := s.store.Get(ctx, id)
@@ -134,7 +133,7 @@ func (s *SQLiteStore) Get(ctx context.Context, id string) (*Document, error) {
 		return nil, err
 	}
 	if doc.ID == "" {
-		return nil, ErrDocumentNotFound
+		return nil, types.ErrDocumentNotFound
 	}
 
 	return convertVectorDocument(doc), nil
@@ -143,7 +142,7 @@ func (s *SQLiteStore) Get(ctx context.Context, id string) (*Document, error) {
 // Delete removes a document.
 func (s *SQLiteStore) Delete(ctx context.Context, id string) error {
 	if s.store == nil {
-		return ErrStoreNotInitialized
+		return types.ErrStoreNotInitialized
 	}
 	return s.store.Delete(ctx, id)
 }
@@ -151,7 +150,7 @@ func (s *SQLiteStore) Delete(ctx context.Context, id string) error {
 // DeleteByWing removes all documents in a wing.
 func (s *SQLiteStore) DeleteByWing(ctx context.Context, wing string) error {
 	if s.store == nil {
-		return ErrStoreNotInitialized
+		return types.ErrStoreNotInitialized
 	}
 	return s.store.DeleteByWing(ctx, wing)
 }
@@ -159,7 +158,7 @@ func (s *SQLiteStore) DeleteByWing(ctx context.Context, wing string) error {
 // DeleteByRoom removes all documents in a wing/room.
 func (s *SQLiteStore) DeleteByRoom(ctx context.Context, wing, room string) error {
 	if s.store == nil {
-		return ErrStoreNotInitialized
+		return types.ErrStoreNotInitialized
 	}
 	return s.store.DeleteByRoom(ctx, wing, room)
 }
@@ -167,15 +166,15 @@ func (s *SQLiteStore) DeleteByRoom(ctx context.Context, wing, room string) error
 // Count returns the total number of documents.
 func (s *SQLiteStore) Count(ctx context.Context) (int, error) {
 	if s.store == nil {
-		return 0, ErrStoreNotInitialized
+		return 0, types.ErrStoreNotInitialized
 	}
 	return s.store.Count(ctx)
 }
 
 // Stats returns statistics.
-func (s *SQLiteStore) Stats(ctx context.Context) (*Stats, error) {
+func (s *SQLiteStore) Stats(ctx context.Context) (*types.Stats, error) {
 	if s.store == nil {
-		return nil, ErrStoreNotInitialized
+		return nil, types.ErrStoreNotInitialized
 	}
 
 	storeStats, err := s.store.GetStats(ctx)
@@ -183,12 +182,12 @@ func (s *SQLiteStore) Stats(ctx context.Context) (*Stats, error) {
 		return nil, err
 	}
 
-	return &Stats{
+	return &types.Stats{
 		TotalDocuments: storeStats.TotalDocuments,
 		TotalWings:     storeStats.TotalWings,
 		TotalRooms:     storeStats.TotalRooms,
 		StorageSize:    storeStats.StorageSize,
-		StoreType:      StoreTypeSQLite,
+		StoreType:      types.StoreTypeSQLite,
 	}, nil
 }
 
@@ -200,11 +199,10 @@ func (s *SQLiteStore) Close() error {
 	return nil
 }
 
-// ============ Adapters ============
+// ============ Internal ============
 
-// embedderAdapter adapts our Embedder to vector.Embedder interface.
 type embedderAdapter struct {
-	embedder Embedder
+	embedder types.Embedder
 }
 
 func (a *embedderAdapter) Embed(ctx context.Context, text string) ([]float32, error) {
@@ -215,12 +213,10 @@ func (a *embedderAdapter) EmbedBatch(ctx context.Context, texts []string) ([][]f
 	return a.embedder.EmbedBatch(ctx, texts)
 }
 
-// ============ Converters ============
-
-func convertVectorSearchResults(items []mpvector.SearchResult) []*SearchResult {
-	results := make([]*SearchResult, len(items))
+func convertVectorSearchResults(items []mpvector.SearchResult) []*types.SearchResult {
+	results := make([]*types.SearchResult, len(items))
 	for i, item := range items {
-		results[i] = &SearchResult{
+		results[i] = &types.SearchResult{
 			ID:       item.ID,
 			Content:  item.Content,
 			Score:    item.Score,
@@ -233,8 +229,8 @@ func convertVectorSearchResults(items []mpvector.SearchResult) []*SearchResult {
 	return results
 }
 
-func convertVectorDocument(doc *mpvector.Document) *Document {
-	return &Document{
+func convertVectorDocument(doc *mpvector.Document) *types.Document {
+	return &types.Document{
 		ID:       doc.ID,
 		Content:  doc.Content,
 		Wing:     getMetadataString(doc.Metadata, "wing"),
@@ -257,8 +253,8 @@ func getMetadataString(m map[string]any, key string) string {
 	return ""
 }
 
-// Ensure SQLiteStore implements Store
-var _ Store = (*SQLiteStore)(nil)
+// Ensure SQLiteStore implements types.Store
+var _ types.Store = (*SQLiteStore)(nil)
 
-// Ensure embedderAdapter implements vector.Embedder
+// Ensure embedderAdapter implements mpvector.Embedder
 var _ mpvector.Embedder = (*embedderAdapter)(nil)
