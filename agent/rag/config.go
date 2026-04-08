@@ -14,18 +14,16 @@ type KnowledgePath struct {
 
 // Config RAG 配置
 type Config struct {
-	Workspace      string            `json:"workspace"`      // 工作区路径
-	KnowledgePaths []KnowledgePath   `json:"knowledge_paths"`// 知识库路径列表
-	EmbeddingModel string            `json:"embedding_model"`// Embedding 模型名称
-	ChunkSize      int               `json:"chunk_size"`     // 分块大小（字符数）
-	ChunkOverlap   int               `json:"chunk_overlap"`  // 分块重叠
-	TopK           int               `json:"top_k"`          // 检索返回数量
-	ScoreThreshold float64           `json:"score_threshold"`// 相关性阈值
-	EnableWatcher  bool              `json:"enable_watcher"` // 启用文件监控
-	Embedder       embedding.Embedder                       // Embedding 实例
-	// 存储配置
-	StoreType      StoreType         `json:"store_type"`     // 存储类型，默认 json
-	StoreOptions   map[string]any    `json:"store_options"`  // 存储额外配置
+	Workspace      string            `json:"workspace"`       // 工作区路径
+	KnowledgePaths []KnowledgePath   `json:"knowledge_paths"` // 知识库路径列表
+	EmbeddingModel string            `json:"embedding_model"` // Embedding 模型名称
+	ChunkSize      int               `json:"chunk_size"`      // 分块大小（字符数）
+	ChunkOverlap   int               `json:"chunk_overlap"`   // 分块重叠
+	TopK           int               `json:"top_k"`           // 检索返回数量
+	ScoreThreshold float64           `json:"score_threshold"` // 相关性阈值
+	EnableWatcher  bool              `json:"enable_watcher"`  // 启用文件监控
+	Embedder       embedding.Embedder                         // Embedding 实例
+	StoreType      string            `json:"store_type"`      // 存储类型: "sqlite" (默认) 或 "json"
 }
 
 // DefaultConfig 返回默认配置

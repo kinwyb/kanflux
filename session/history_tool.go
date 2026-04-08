@@ -110,8 +110,9 @@ func (t *GetHistoryStatsTool) Description() string {
 	return `Get statistics about conversation history.
 
 Returns:
-- Number of indexed conversation chunks
-- Number of days with recorded conversations`
+- Total number of indexed documents
+- Number of rooms (days) with recorded conversations
+- Storage size`
 }
 
 // Parameters 返回参数定义
@@ -132,8 +133,9 @@ func (t *GetHistoryStatsTool) Execute(ctx context.Context, params map[string]int
 
 	var sb strings.Builder
 	sb.WriteString("Conversation History Statistics:\n")
-	sb.WriteString(fmt.Sprintf("- Indexed Chunks: %v\n", stats["indexed_chunks"]))
-	sb.WriteString(fmt.Sprintf("- Days with Data: %v\n", stats["days_with_data"]))
+	sb.WriteString(fmt.Sprintf("- Total Documents: %v\n", stats["total_documents"]))
+	sb.WriteString(fmt.Sprintf("- Total Rooms (Days): %v\n", stats["total_rooms"]))
+	sb.WriteString(fmt.Sprintf("- Storage Size: %v bytes\n", stats["storage_size"]))
 
 	return sb.String(), nil
 }
