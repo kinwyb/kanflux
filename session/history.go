@@ -52,7 +52,9 @@ func NewConversationHistoryWithConfig(cfg *HistoryConfig) (*ConversationHistory,
 		return nil, fmt.Errorf("session directory is required")
 	}
 
-	workspace := filepath.Join(cfg.SessionDir, ".kanflux", "history")
+	// 知识库存储在 session 目录的父目录下的 history 子目录
+	// 例如：sessions 在 <workspace>/.kanflux/sessions，知识库在 <workspace>/.kanflux/history
+	workspace := filepath.Join(filepath.Dir(cfg.SessionDir), "history")
 	if err := os.MkdirAll(workspace, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create history directory: %w", err)
 	}
@@ -261,48 +263,64 @@ func (h *ConversationHistory) formatResults(results []*knowledgebase.SearchResul
 func (h *ConversationHistory) extractQAPairs(messages []adk.Message) []QAPair {
 	var pairs []QAPair
 	var currentQuestion string
-	var currentAnswer string
 
 	for i := 0; i < len(messages); i++ {
 		msg := messages[i]
 
 		switch msg.Role {
 		case schema.User:
-			if currentQuestion != "" && currentAnswer != "" {
-				pairs = append(pairs, QAPair{
-					Question: currentQuestion,
-					Answer:   currentAnswer,
-				})
-			}
-			currentQuestion = h.extractText(msg)
-			currentAnswer = ""
-
-		case schema.Assistant:
-			if len(msg.ToolCalls) == 0 {
-				currentAnswer = h.extractText(msg)
-			} else {
-				for j := i + 1; j < len(messages); j++ {
-					if messages[j].Role == schema.Assistant && len(messages[j].ToolCalls) == 0 {
-						currentAnswer = h.extractText(messages[j])
-						i = j
-						break
-					}
-					if messages[j].Role == schema.User {
-						break
-					}
+			// 用户消息：保存之前的问答对，开始新的问题
+			if currentQuestion != "" {
+				// 向前找最后一个无 ToolCalls 的 Assistant 作为答案
+				answer := h.findFinalAnswer(messages, i-1)
+				if answer != "" {
+					pairs = append(pairs, QAPair{
+						Question: currentQuestion,
+						Answer:   answer,
+					})
 				}
 			}
+			currentQuestion = h.extractText(msg)
+
+		case schema.Assistant:
+			// Assistant 消息：继续处理，不在这里设置答案
+			// 答案在下一个 User 消息或结束时确定
+
+		case schema.Tool:
+			// Tool 消息：跳过
 		}
 	}
 
-	if currentQuestion != "" && currentAnswer != "" {
-		pairs = append(pairs, QAPair{
-			Question: currentQuestion,
-			Answer:   currentAnswer,
-		})
+	// 处理最后一个问答对
+	if currentQuestion != "" {
+		answer := h.findFinalAnswer(messages, len(messages)-1)
+		if answer != "" {
+			pairs = append(pairs, QAPair{
+				Question: currentQuestion,
+				Answer:   answer,
+			})
+		}
 	}
 
 	return pairs
+}
+
+// findFinalAnswer 从指定位置向前找最后一个无 ToolCalls 的 Assistant 消息
+func (h *ConversationHistory) findFinalAnswer(messages []adk.Message, startPos int) string {
+	for i := startPos; i >= 0; i-- {
+		msg := messages[i]
+		if msg.Role == schema.Assistant && len(msg.ToolCalls) == 0 {
+			text := h.extractText(msg)
+			if text != "" {
+				return text
+			}
+		}
+		// 遇到 User 消息就停止，避免跨越到前一个问答
+		if msg.Role == schema.User {
+			break
+		}
+	}
+	return ""
 }
 
 // QAPair 问答对

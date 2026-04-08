@@ -38,8 +38,8 @@ func NewManager(baseDir string) (*Manager, error) {
 // SetEmbedder 设置 embedder，用于历史对话检索（异步初始化）
 func (m *Manager) SetEmbedder(embedder embedding.Embedder) error {
 	m.embedder = embedder
-	// 初始化历史对话管理器
-	history, err := NewConversationHistory(filepath.Dir(filepath.Dir(m.baseDir)), embedder)
+	// 初始化历史对话管理器，使用 sessions 目录
+	history, err := NewConversationHistory(m.baseDir, embedder)
 	if err != nil {
 		return err
 	}
@@ -52,8 +52,8 @@ func (m *Manager) SetEmbedder(embedder embedding.Embedder) error {
 // SetEmbedderSync 设置 embedder 并同步初始化历史记录
 func (m *Manager) SetEmbedderSync(ctx context.Context, embedder embedding.Embedder) error {
 	m.embedder = embedder
-	// 初始化历史对话管理器
-	history, err := NewConversationHistory(filepath.Dir(filepath.Dir(m.baseDir)), embedder)
+	// 初始化历史对话管理器，使用 sessions 目录
+	history, err := NewConversationHistory(m.baseDir, embedder)
 	if err != nil {
 		return err
 	}

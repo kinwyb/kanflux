@@ -4,16 +4,16 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 
-	"github.com/kinwyb/mempalace-go/pkg/mempalace"
 	mpvector "github.com/kinwyb/mempalace-go/pkg/vector"
 )
 
 // SQLiteStore implements Store using mempalace-go's SQLite backend.
 // It provides hybrid search (FTS5 + vector) and L0-L3 layer support.
 type SQLiteStore struct {
-	palace   *mempalace.Palace
-	embedder Embedder
+	store     *mpvector.SQLiteStore
+	embedder  Embedder
 	workspace string
 }
 
@@ -35,169 +35,174 @@ func NewSQLiteStore(workspace string, embedder Embedder) (*SQLiteStore, error) {
 
 // Initialize prepares the SQLite store.
 func (s *SQLiteStore) Initialize(ctx context.Context) error {
-	opts := []mempalace.Option{
-		mempalace.WithPalacePath(s.workspace),
-	}
+	dbPath := filepath.Join(s.workspace, "knowledge.db")
 
+	// Create embedder adapter if available
+	var mpEmbedder mpvector.Embedder
 	if s.embedder != nil {
-		opts = append(opts, mempalace.WithEmbedder(&embedderAdapter{embedder: s.embedder}))
+		mpEmbedder = &embedderAdapter{embedder: s.embedder}
 	}
 
-	palace, err := mempalace.New(ctx, opts...)
+	store, err := mpvector.NewSQLiteStore(dbPath, mpEmbedder)
 	if err != nil {
-		return fmt.Errorf("failed to create palace: %w", err)
+		return fmt.Errorf("failed to create vector store: %w", err)
 	}
 
-	s.palace = palace
+	if err := store.Initialize(ctx); err != nil {
+		return fmt.Errorf("failed to initialize vector store: %w", err)
+	}
+
+	s.store = store
 	return nil
 }
 
 // Add stores documents.
 func (s *SQLiteStore) Add(ctx context.Context, docs []*Document) error {
-	if s.palace == nil {
+	if s.store == nil {
 		return ErrStoreNotInitialized
 	}
 
-	for _, doc := range docs {
-		opts := []mempalace.AddOption{
-			mempalace.WithWingForAdd(doc.Wing),
-			mempalace.WithRoomForAdd(doc.Room),
-			mempalace.WithSource(doc.Source),
+	mpDocs := make([]mpvector.Document, len(docs))
+	for i, doc := range docs {
+		metadata := make(map[string]any)
+		if doc.Metadata != nil {
+			for k, v := range doc.Metadata {
+				metadata[k] = v
+			}
 		}
+		// Store wing/room/source in metadata (required by vector.SQLiteStore)
+		metadata["wing"] = doc.Wing
+		metadata["room"] = doc.Room
+		metadata["source_file"] = doc.Source
 
-		if len(doc.Metadata) > 0 {
-			opts = append(opts, mempalace.WithMetadata(doc.Metadata))
-		}
-
-		if _, err := s.palace.Add(ctx, doc.Content, opts...); err != nil {
-			return fmt.Errorf("failed to add document %s: %w", doc.ID, err)
+		mpDocs[i] = mpvector.Document{
+			ID:       doc.ID,
+			Content:  doc.Content,
+			Metadata: metadata,
 		}
 	}
 
-	return nil
+	return s.store.Add(ctx, mpDocs)
 }
 
-// Search performs a semantic search.
+// Search performs a hybrid search (FTS5 + semantic).
 func (s *SQLiteStore) Search(ctx context.Context, query string, opts *SearchOptions) ([]*SearchResult, error) {
-	if s.palace == nil {
+	if s.store == nil {
 		return nil, ErrStoreNotInitialized
 	}
 
-	palaceOpts := []mempalace.SearchOption{}
-	if opts.Wing != "" {
-		palaceOpts = append(palaceOpts, mempalace.WithWing(opts.Wing))
-	}
-	if opts.Room != "" {
-		palaceOpts = append(palaceOpts, mempalace.WithRoom(opts.Room))
-	}
-	if opts.Limit > 0 {
-		palaceOpts = append(palaceOpts, mempalace.WithLimit(opts.Limit))
+	limit := opts.Limit
+	if limit <= 0 {
+		limit = 10
 	}
 
-	result, err := s.palace.Search(ctx, query, palaceOpts...)
+	results, err := s.store.Search(ctx, query, opts.Wing, opts.Room, limit)
 	if err != nil {
 		return nil, err
 	}
 
-	return convertSearchResults(result.Results), nil
+	return convertVectorSearchResults(results), nil
 }
 
 // SearchByEmbedding performs a search using a pre-computed embedding.
 func (s *SQLiteStore) SearchByEmbedding(ctx context.Context, embedding []float32, opts *SearchOptions) ([]*SearchResult, error) {
-	if s.palace == nil {
+	if s.store == nil {
 		return nil, ErrStoreNotInitialized
 	}
 
-	// mempalace doesn't have direct SearchByVector, so we use Search
-	// In practice, the palace.Search will use embeddings internally
-	// For now, return empty - this can be enhanced
-	return []*SearchResult{}, nil
+	limit := opts.Limit
+	if limit <= 0 {
+		limit = 10
+	}
+
+	results, err := s.store.SearchByVector(ctx, embedding, opts.Wing, opts.Room, limit)
+	if err != nil {
+		return nil, err
+	}
+
+	return convertVectorSearchResults(results), nil
 }
 
 // Get retrieves a document by ID.
 func (s *SQLiteStore) Get(ctx context.Context, id string) (*Document, error) {
-	if s.palace == nil {
+	if s.store == nil {
 		return nil, ErrStoreNotInitialized
 	}
 
-	doc, err := s.palace.Get(ctx, id)
+	doc, err := s.store.Get(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	if doc == nil {
+	if doc.ID == "" {
 		return nil, ErrDocumentNotFound
 	}
 
-	return convertDocument(doc), nil
+	return convertVectorDocument(doc), nil
 }
 
 // Delete removes a document.
 func (s *SQLiteStore) Delete(ctx context.Context, id string) error {
-	if s.palace == nil {
+	if s.store == nil {
 		return ErrStoreNotInitialized
 	}
-	return s.palace.Delete(ctx, id)
+	return s.store.Delete(ctx, id)
 }
 
 // DeleteByWing removes all documents in a wing.
 func (s *SQLiteStore) DeleteByWing(ctx context.Context, wing string) error {
-	if s.palace == nil {
+	if s.store == nil {
 		return ErrStoreNotInitialized
 	}
-	return s.palace.DeleteByWing(ctx, wing)
+	return s.store.DeleteByWing(ctx, wing)
 }
 
 // DeleteByRoom removes all documents in a wing/room.
 func (s *SQLiteStore) DeleteByRoom(ctx context.Context, wing, room string) error {
-	if s.palace == nil {
+	if s.store == nil {
 		return ErrStoreNotInitialized
 	}
-	return s.palace.DeleteByRoom(ctx, wing, room)
+	return s.store.DeleteByRoom(ctx, wing, room)
 }
 
 // Count returns the total number of documents.
 func (s *SQLiteStore) Count(ctx context.Context) (int, error) {
-	if s.palace == nil {
+	if s.store == nil {
 		return 0, ErrStoreNotInitialized
 	}
-	stats, err := s.palace.GetStats(ctx)
-	if err != nil {
-		return 0, err
-	}
-	return stats.TotalDocuments, nil
+	return s.store.Count(ctx)
 }
 
 // Stats returns statistics.
 func (s *SQLiteStore) Stats(ctx context.Context) (*Stats, error) {
-	if s.palace == nil {
+	if s.store == nil {
 		return nil, ErrStoreNotInitialized
 	}
 
-	stats, err := s.palace.GetStats(ctx)
+	storeStats, err := s.store.GetStats(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	return &Stats{
-		TotalDocuments: stats.TotalDocuments,
-		TotalWings:     stats.TotalWings,
-		TotalRooms:     stats.TotalRooms,
-		StorageSize:    stats.StorageSize,
+		TotalDocuments: storeStats.TotalDocuments,
+		TotalWings:     storeStats.TotalWings,
+		TotalRooms:     storeStats.TotalRooms,
+		StorageSize:    storeStats.StorageSize,
 		StoreType:      StoreTypeSQLite,
 	}, nil
 }
 
 // Close closes the store.
 func (s *SQLiteStore) Close() error {
-	if s.palace != nil {
-		return s.palace.Close()
+	if s.store != nil {
+		return s.store.Close()
 	}
 	return nil
 }
 
 // ============ Adapters ============
 
-// embedderAdapter adapts our Embedder to mempalace's Embedder interface.
+// embedderAdapter adapts our Embedder to vector.Embedder interface.
 type embedderAdapter struct {
 	embedder Embedder
 }
@@ -210,64 +215,50 @@ func (a *embedderAdapter) EmbedBatch(ctx context.Context, texts []string) ([][]f
 	return a.embedder.EmbedBatch(ctx, texts)
 }
 
-func (a *embedderAdapter) Dimension() int {
-	return a.embedder.Dimension()
-}
-
-func (a *embedderAdapter) Model() string {
-	return "knowledgebase"
-}
-
 // ============ Converters ============
 
-func convertSearchResults(items []mempalace.ResultItem) []*SearchResult {
+func convertVectorSearchResults(items []mpvector.SearchResult) []*SearchResult {
 	results := make([]*SearchResult, len(items))
 	for i, item := range items {
 		results[i] = &SearchResult{
 			ID:       item.ID,
 			Content:  item.Content,
 			Score:    item.Score,
-			Wing:     item.Wing,
-			Room:     item.Room,
-			Source:   item.Source,
-			Metadata: convertMetadata(item.Metadata),
+			Wing:     getMetadataString(item.Metadata, "wing"),
+			Room:     getMetadataString(item.Metadata, "room"),
+			Source:   getMetadataString(item.Metadata, "source_file"),
+			Metadata: item.Metadata,
 		}
 	}
 	return results
 }
 
-func convertDocument(doc *mempalace.Document) *Document {
+func convertVectorDocument(doc *mpvector.Document) *Document {
 	return &Document{
 		ID:       doc.ID,
 		Content:  doc.Content,
-		Wing:     doc.Wing,
-		Room:     doc.Room,
-		Source:   doc.Source,
+		Wing:     getMetadataString(doc.Metadata, "wing"),
+		Room:     getMetadataString(doc.Metadata, "room"),
+		Source:   getMetadataString(doc.Metadata, "source_file"),
 		Metadata: doc.Metadata,
 	}
 }
 
-func convertMetadata(m map[string]string) map[string]any {
+func getMetadataString(m map[string]any, key string) string {
 	if m == nil {
-		return nil
+		return ""
 	}
-	result := make(map[string]any, len(m))
-	for k, v := range m {
-		result[k] = v
+	if v, ok := m[key]; ok {
+		if s, ok := v.(string); ok {
+			return s
+		}
+		return fmt.Sprintf("%v", v)
 	}
-	return result
+	return ""
 }
 
 // Ensure SQLiteStore implements Store
 var _ Store = (*SQLiteStore)(nil)
 
-// Ensure embedderAdapter implements mempalace's Embedder
-var _ interface {
-	Embed(ctx context.Context, text string) ([]float32, error)
-	EmbedBatch(ctx context.Context, texts []string) ([][]float32, error)
-	Dimension() int
-	Model() string
-} = (*embedderAdapter)(nil)
-
-// Reference mempalace types to ensure compatibility
-var _ = mpvector.Document{}
+// Ensure embedderAdapter implements vector.Embedder
+var _ mpvector.Embedder = (*embedderAdapter)(nil)
