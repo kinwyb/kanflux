@@ -217,7 +217,10 @@ func (m *Memoria) SearchL3(ctx context.Context, query string, opts *types.Retrie
 // ============ 层级搜索 ============
 
 // Search performs hierarchical search across all layers
-// Search order: L1 (exact/keyword) -> L2 (keyword) -> L3 (semantic)
+// Search behavior is determined by SearchMode:
+// - keyword (default): L1/L2/L3 keyword matching
+// - semantic: L2/L3 vector similarity search
+// Results are filtered by SourceType if specified
 func (m *Memoria) Search(ctx context.Context, query string, opts *types.RetrieveOptions) ([]*types.SearchResult, error) {
 	if opts == nil {
 		opts = &types.RetrieveOptions{Limit: 10}
@@ -226,20 +229,82 @@ func (m *Memoria) Search(ctx context.Context, query string, opts *types.Retrieve
 		opts.Limit = 10
 	}
 
+	// Default to keyword search if not specified
+	searchMode := opts.SearchMode
+	if searchMode == "" {
+		searchMode = types.SearchModeKeyword
+	}
+
+	var results []*types.SearchResult
+	var err error
+
+	switch searchMode {
+	case types.SearchModeSemantic:
+		results, err = m.semanticSearch(ctx, query, opts)
+	default:
+		results, err = m.keywordSearch(ctx, query, opts)
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	// Filter by SourceType if specified
+	if opts.SourceType != "" {
+		filtered := make([]*types.SearchResult, 0)
+		for _, r := range results {
+			if r.Item.SourceType == opts.SourceType {
+				filtered = append(filtered, r)
+			}
+		}
+		results = filtered
+	}
+
+	// Limit results
+	if len(results) > opts.Limit {
+		results = results[:opts.Limit]
+	}
+
+	return results, nil
+}
+
+// keywordSearch performs keyword-based search across L1/L2/L3
+func (m *Memoria) keywordSearch(ctx context.Context, query string, opts *types.RetrieveOptions) ([]*types.SearchResult, error) {
 	results := make([]*types.SearchResult, 0)
 	seen := make(map[string]bool)
 
+	// Check which layers to search
+	searchL1 := true
+	searchL2 := true
+	searchL3 := true
+	if len(opts.Layers) > 0 {
+		searchL1 = false
+		searchL2 = false
+		searchL3 = false
+		for _, l := range opts.Layers {
+			if l == types.LayerL1 {
+				searchL1 = true
+			} else if l == types.LayerL2 {
+				searchL2 = true
+			} else if l == types.LayerL3 {
+				searchL3 = true
+			}
+		}
+	}
+
 	// 1. L1 搜索：精确/关键词匹配（始终加载，最快）
-	l1Results := m.searchL1(query, opts)
-	for _, r := range l1Results {
-		if !seen[r.Item.ID] {
-			seen[r.Item.ID] = true
-			results = append(results, r)
+	if searchL1 {
+		l1Results := m.searchL1(query, opts)
+		for _, r := range l1Results {
+			if !seen[r.Item.ID] {
+				seen[r.Item.ID] = true
+				results = append(results, r)
+			}
 		}
 	}
 
 	// 2. L2 搜索：关键词过滤（按需加载）
-	if len(results) < opts.Limit {
+	if searchL2 && len(results) < opts.Limit {
 		l2Results := m.searchL2(ctx, query, opts)
 		for _, r := range l2Results {
 			if !seen[r.Item.ID] {
@@ -249,11 +314,11 @@ func (m *Memoria) Search(ctx context.Context, query string, opts *types.Retrieve
 		}
 	}
 
-	// 3. L3 搜索：语义搜索（最慢，最全面）
-	if len(results) < opts.Limit && m.l3 != nil {
-		l3Results, err := m.searchL3(ctx, query, opts)
+	// 3. L3 搜索：关键词匹配（如果有 L3）
+	if searchL3 && len(results) < opts.Limit && m.l3 != nil {
+		l3Results, err := m.searchL3Keyword(ctx, query, opts)
 		if err != nil {
-			slog.Warn("L3 search failed", "error", err)
+			slog.Warn("L3 keyword search failed", "error", err)
 		} else {
 			for _, r := range l3Results {
 				if !seen[r.Item.ID] {
@@ -264,11 +329,60 @@ func (m *Memoria) Search(ctx context.Context, query string, opts *types.Retrieve
 		}
 	}
 
-	// 限制返回数量
-	if len(results) > opts.Limit {
-		results = results[:opts.Limit]
+	return results, nil
+}
+
+// semanticSearch performs vector similarity search across L2/L3
+func (m *Memoria) semanticSearch(ctx context.Context, query string, opts *types.RetrieveOptions) ([]*types.SearchResult, error) {
+	results := make([]*types.SearchResult, 0)
+	seen := make(map[string]bool)
+
+	// Check which layers to search
+	searchL2 := true
+	searchL3 := true
+	if len(opts.Layers) > 0 {
+		searchL2 = false
+		searchL3 = false
+		for _, l := range opts.Layers {
+			if l == types.LayerL2 {
+				searchL2 = true
+			} else if l == types.LayerL3 {
+				searchL3 = true
+			}
+		}
 	}
 
+	// L2 semantic search (if embedder available)
+	// Note: L2 doesn't have vectors by default, so this is a keyword fallback
+	if searchL2 && len(results) < opts.Limit {
+		l2Results := m.searchL2(ctx, query, opts)
+		for _, r := range l2Results {
+			if !seen[r.Item.ID] {
+				seen[r.Item.ID] = true
+				// Mark as semantic even though it's keyword-based for L2
+				r.MatchType = "semantic"
+				results = append(results, r)
+			}
+		}
+	}
+
+	// L3 semantic search
+	if searchL3 && len(results) < opts.Limit && m.l3 != nil {
+		l3Results, err := m.searchL3(ctx, query, opts)
+		if err != nil {
+			slog.Warn("L3 semantic search failed", "error", err)
+		} else {
+			for _, r := range l3Results {
+				if !seen[r.Item.ID] {
+					seen[r.Item.ID] = true
+					results = append(results, r)
+				}
+			}
+		}
+	}
+
+	// Sort by score (semantic similarity)
+	sortResultsByScore(results)
 	return results, nil
 }
 
@@ -300,6 +414,11 @@ func (m *Memoria) searchL1(query string, opts *types.RetrieveOptions) []*types.S
 			}
 		}
 
+		// 过滤 SourceType (L1 only has chat content, but check anyway)
+		if opts.SourceType != "" && item.SourceType != opts.SourceType {
+			continue
+		}
+
 		score := m.calculateKeywordScore(item, queryLower, queryTerms)
 		if score > 0 {
 			matchType := "keyword"
@@ -328,10 +447,11 @@ func (m *Memoria) searchL2(ctx context.Context, query string, opts *types.Retrie
 
 	// 设置 L2 检索选项
 	l2Opts := &types.RetrieveOptions{
-		Layers:    []types.Layer{types.LayerL2},
-		UserID:    opts.UserID,
-		Limit:     50, // L2 取更多，然后过滤
-		TimeRange: opts.TimeRange,
+		Layers:     []types.Layer{types.LayerL2},
+		UserID:     opts.UserID,
+		SourceType: opts.SourceType, // Pass through SourceType filter
+		Limit:      50,               // L2 取更多，然后过滤
+		TimeRange:  opts.TimeRange,
 	}
 
 	if len(opts.HallTypes) > 0 {
@@ -368,6 +488,51 @@ func (m *Memoria) searchL3(ctx context.Context, query string, opts *types.Retrie
 
 	// 使用 L3 层的语义搜索
 	return m.l3.SearchWithScores(ctx, query, opts)
+}
+
+// searchL3Keyword performs keyword-based search on L3 content
+// This is used when SearchMode is "keyword" but we need to search L3
+func (m *Memoria) searchL3Keyword(ctx context.Context, query string, opts *types.RetrieveOptions) ([]*types.SearchResult, error) {
+	if m.l3 == nil {
+		return nil, nil // L3 not initialized, skip
+	}
+
+	// L3 doesn't support native keyword search, so we do semantic search
+	// and filter results by keyword presence
+	results, err := m.l3.SearchWithScores(ctx, query, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	// Filter results by keyword presence
+	queryLower := strings.ToLower(query)
+	queryTerms := strings.Fields(queryLower)
+	filtered := make([]*types.SearchResult, 0)
+
+	for _, r := range results {
+		// Check if query or any query term appears in content
+		contentLower := strings.ToLower(r.Item.Content)
+		summaryLower := strings.ToLower(r.Item.Summary)
+
+		hasMatch := false
+		if strings.Contains(contentLower, queryLower) || strings.Contains(summaryLower, queryLower) {
+			hasMatch = true
+		} else {
+			for _, term := range queryTerms {
+				if strings.Contains(contentLower, term) || strings.Contains(summaryLower, term) {
+					hasMatch = true
+					break
+				}
+			}
+		}
+
+		if hasMatch {
+			r.MatchType = "keyword" // Override match type
+			filtered = append(filtered, r)
+		}
+	}
+
+	return filtered, nil
 }
 
 // calculateKeywordScore calculates keyword match score

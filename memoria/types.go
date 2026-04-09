@@ -24,6 +24,8 @@ type (
 	VectorStore         = types.VectorStore
 	Layer               = types.Layer
 	HallType            = types.HallType
+	SourceType          = types.SourceType
+	SearchMode          = types.SearchMode
 )
 
 // Re-export constants
@@ -37,6 +39,12 @@ const (
 	HallDiscoveries = types.HallDiscoveries
 	HallPreferences = types.HallPreferences
 	HallAdvice      = types.HallAdvice
+
+	SourceTypeChat = types.SourceTypeChat
+	SourceTypeFile = types.SourceTypeFile
+
+	SearchModeKeyword  = types.SearchModeKeyword
+	SearchModeSemantic = types.SearchModeSemantic
 )
 
 // ParseSessionKey parses a session key into DefaultUserIdentity

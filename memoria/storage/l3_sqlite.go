@@ -72,6 +72,7 @@ func (s *L3SQLiteStore) StoreBatch(ctx context.Context, items []*types.MemoryIte
 		}
 		metadata["summary"] = item.Summary
 		metadata["layer"] = "L3"
+		metadata["source_type"] = string(item.SourceType)
 
 		doc := mempalace.Document{
 			ID:       item.ID,
@@ -101,7 +102,13 @@ func (s *L3SQLiteStore) Search(ctx context.Context, query string, opts *types.Re
 		limit = opts.Limit
 	}
 
-	searchOpts := []mempalace.SearchOption{mempalace.WithLimit(limit)}
+	// Request more results if we need to filter by SourceType
+	searchLimit := limit
+	if opts != nil && opts.SourceType != "" {
+		searchLimit = limit * 3 // Get more results for filtering
+	}
+
+	searchOpts := []mempalace.SearchOption{mempalace.WithLimit(searchLimit)}
 
 	if opts != nil {
 		if opts.UserID != "" {
@@ -117,7 +124,25 @@ func (s *L3SQLiteStore) Search(ctx context.Context, query string, opts *types.Re
 		return nil, err
 	}
 
-	return s.convertSearchResults(result.Results), nil
+	results := s.convertSearchResults(result.Results)
+
+	// Filter by SourceType if specified
+	if opts != nil && opts.SourceType != "" {
+		filtered := make([]*types.SearchResult, 0)
+		for _, r := range results {
+			if r.Item.SourceType == opts.SourceType {
+				filtered = append(filtered, r)
+			}
+		}
+		results = filtered
+	}
+
+	// Limit results
+	if len(results) > limit {
+		results = results[:limit]
+	}
+
+	return results, nil
 }
 
 // SearchByEmbedding searches using pre-computed embedding
@@ -131,7 +156,13 @@ func (s *L3SQLiteStore) SearchByEmbedding(ctx context.Context, embedding []float
 		limit = opts.Limit
 	}
 
-	searchOpts := []mempalace.SearchOption{mempalace.WithLimit(limit)}
+	// Request more results if we need to filter by SourceType
+	searchLimit := limit
+	if opts != nil && opts.SourceType != "" {
+		searchLimit = limit * 3 // Get more results for filtering
+	}
+
+	searchOpts := []mempalace.SearchOption{mempalace.WithLimit(searchLimit)}
 
 	if opts != nil {
 		if opts.UserID != "" {
@@ -147,7 +178,25 @@ func (s *L3SQLiteStore) SearchByEmbedding(ctx context.Context, embedding []float
 		return nil, err
 	}
 
-	return s.convertSearchResults(result.Results), nil
+	results := s.convertSearchResults(result.Results)
+
+	// Filter by SourceType if specified
+	if opts != nil && opts.SourceType != "" {
+		filtered := make([]*types.SearchResult, 0)
+		for _, r := range results {
+			if r.Item.SourceType == opts.SourceType {
+				filtered = append(filtered, r)
+			}
+		}
+		results = filtered
+	}
+
+	// Limit results
+	if len(results) > limit {
+		results = results[:limit]
+	}
+
+	return results, nil
 }
 
 // Delete removes a document by ID
@@ -227,22 +276,27 @@ func (a *l3EmbedderAdapter) Model() string {
 func (s *L3SQLiteStore) convertSearchResults(items []mempalace.ResultItem) []*types.SearchResult {
 	results := make([]*types.SearchResult, len(items))
 	for i, item := range items {
-		// 从 metadata 提取摘要
+		// 从 metadata 提取摘要和 source_type
 		summary := ""
+		sourceType := types.SourceTypeChat // Default
 		if item.Metadata != nil {
 			summary = item.Metadata["summary"]
+			if st := item.Metadata["source_type"]; st != "" {
+				sourceType = types.SourceType(st)
+			}
 		}
 
 		results[i] = &types.SearchResult{
 			Item: &types.MemoryItem{
-				ID:       item.ID,
-				Content:  item.Content,
-				Summary:  summary,
-				HallType: types.HallType(item.Wing),
-				UserID:   item.Room,
-				Source:   item.Source,
-				Metadata: stringMapToAny(item.Metadata),
-				Layer:    types.LayerL3,
+				ID:         item.ID,
+				Content:    item.Content,
+				Summary:    summary,
+				HallType:   types.HallType(item.Wing),
+				UserID:     item.Room,
+				Source:     item.Source,
+				SourceType: sourceType,
+				Metadata:   stringMapToAny(item.Metadata),
+				Layer:      types.LayerL3,
 			},
 			Score:     item.Score,
 			Layer:     types.LayerL3,

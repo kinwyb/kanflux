@@ -287,6 +287,7 @@ func (s *MDStore) generateMarkdown(items []*types.MemoryItem, layer types.Layer)
 		sb.WriteString("---\n\n")
 		sb.WriteString(fmt.Sprintf("**ID**: `%s`\n", item.ID))
 		sb.WriteString(fmt.Sprintf("**Hall**: %s\n", item.HallType))
+		sb.WriteString(fmt.Sprintf("**SourceType**: %s\n", item.SourceType))
 		sb.WriteString(fmt.Sprintf("**Timestamp**: %s\n", item.Timestamp.Format(time.RFC3339)))
 		sb.WriteString(fmt.Sprintf("**Source**: %s\n\n", item.Source))
 
@@ -335,7 +336,8 @@ func (s *MDStore) parseMDFile(file string) ([]*types.MemoryItem, error) {
 
 func (s *MDStore) parseSection(section string) *types.MemoryItem {
 	item := &types.MemoryItem{
-		Metadata: make(map[string]any),
+		Metadata:   make(map[string]any),
+		SourceType: types.SourceTypeChat, // Default to chat
 	}
 
 	lines := strings.Split(section, "\n")
@@ -351,6 +353,9 @@ func (s *MDStore) parseSection(section string) *types.MemoryItem {
 			item.ID = strings.Trim(strings.TrimPrefix(line, "**ID**:"), " `")
 		} else if strings.HasPrefix(line, "**Hall**:") {
 			item.HallType = types.HallType(strings.TrimPrefix(line, "**Hall**:"))
+		} else if strings.HasPrefix(line, "**SourceType**:") {
+			st := strings.TrimPrefix(line, "**SourceType**:")
+			item.SourceType = types.SourceType(st)
 		} else if strings.HasPrefix(line, "**Timestamp**:") {
 			ts := strings.TrimPrefix(line, "**Timestamp**:")
 			if t, err := time.Parse(time.RFC3339, ts); err == nil {
@@ -447,6 +452,11 @@ func (s *MDStore) matchesFilter(item *types.MemoryItem, opts *types.RetrieveOpti
 		if !found {
 			return false
 		}
+	}
+
+	// SourceType filter
+	if opts.SourceType != "" && item.SourceType != opts.SourceType {
+		return false
 	}
 
 	if opts.UserID != "" && item.UserID != opts.UserID {

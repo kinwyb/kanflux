@@ -18,6 +18,26 @@ const (
 	LayerL3 Layer = 3
 )
 
+// SourceType represents the source of memory content
+type SourceType string
+
+const (
+	// SourceTypeChat indicates content from chat/conversation
+	SourceTypeChat SourceType = "chat"
+	// SourceTypeFile indicates content from file processing
+	SourceTypeFile SourceType = "file"
+)
+
+// SearchMode represents the search strategy
+type SearchMode string
+
+const (
+	// SearchModeKeyword uses keyword matching
+	SearchModeKeyword SearchMode = "keyword"
+	// SearchModeSemantic uses vector similarity search
+	SearchModeSemantic SearchMode = "semantic"
+)
+
 // HallType represents the five hall types for organizing memories
 type HallType string
 
@@ -36,16 +56,17 @@ const (
 
 // MemoryItem represents a single memory entry
 type MemoryItem struct {
-	ID        string         `json:"id"`
-	HallType  HallType       `json:"hall_type"`
-	Layer     Layer          `json:"layer"`
-	Content   string         `json:"content"`
-	Summary   string         `json:"summary"`
-	Source    string         `json:"source"`
-	UserID    string         `json:"user_id"`
-	Timestamp time.Time      `json:"timestamp"`
-	Metadata  map[string]any `json:"metadata,omitempty"`
-	Tokens    int            `json:"tokens"`
+	ID         string         `json:"id"`
+	HallType   HallType       `json:"hall_type"`
+	Layer      Layer          `json:"layer"`
+	SourceType SourceType     `json:"source_type"`
+	Content    string         `json:"content"`
+	Summary    string         `json:"summary"`
+	Source     string         `json:"source"`
+	UserID     string         `json:"user_id"`
+	Timestamp  time.Time      `json:"timestamp"`
+	Metadata   map[string]any `json:"metadata,omitempty"`
+	Tokens     int            `json:"tokens"`
 }
 
 // ProcessingResult represents the result of memory extraction
@@ -114,12 +135,14 @@ func (u *DefaultUserIdentity) GetMetadata() map[string]any {
 
 // RetrieveOptions for memory retrieval
 type RetrieveOptions struct {
-	HallTypes []HallType `json:"hall_types,omitempty"`
-	Layers    []Layer    `json:"layers,omitempty"`
-	UserID    string     `json:"user_id,omitempty"`
-	Limit     int        `json:"limit"`
-	TimeRange *TimeRange `json:"time_range,omitempty"`
-	Query     string     `json:"query,omitempty"`     // 搜索查询
+	HallTypes  []HallType  `json:"hall_types,omitempty"`
+	Layers     []Layer     `json:"layers,omitempty"`
+	SourceType SourceType  `json:"source_type,omitempty"`
+	SearchMode SearchMode  `json:"search_mode,omitempty"`
+	UserID     string      `json:"user_id,omitempty"`
+	Limit      int         `json:"limit"`
+	TimeRange  *TimeRange  `json:"time_range,omitempty"`
+	Query      string      `json:"query,omitempty"` // 搜索查询
 }
 
 // SearchResult represents a search result with score

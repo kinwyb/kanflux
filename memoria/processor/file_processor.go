@@ -2,6 +2,7 @@ package processor
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -43,7 +44,9 @@ func (p *FileProcessor) Name() string {
 	return "file_processor"
 }
 
-// Process processes a single file using FileSummarizePrompt
+// Process processes a single file
+// Files are stored in L2 (summary) and L3 (raw content for semantic search)
+// No L1 storage for files - files don't contain user preferences/critical decisions
 func (p *FileProcessor) Process(ctx context.Context, source string, content string, userCtx types.UserIdentity) (*types.ProcessingResult, error) {
 	result := &types.ProcessingResult{
 		Items:       make([]*types.MemoryItem, 0),
@@ -59,17 +62,25 @@ func (p *FileProcessor) Process(ctx context.Context, source string, content stri
 
 	chunks := p.chunkContent(content, maxChunkSize)
 
+	summarizer := llm.NewSummarizer(p.Summarizer.(*llm.SummarizerImpl).Model, 500)
+
 	for _, chunk := range chunks {
-		// Use the specialized ProcessFileContent which uses FileSummarizePrompt
-		summarizer := llm.NewSummarizer(p.Summarizer.(*llm.SummarizerImpl).Model, 500)
+		// 1. Generate L2 summary using simplified file prompt
 		items, err := summarizer.ProcessFileContent(ctx, chunk, source, userCtx)
 		if err != nil {
-			// Fallback to generic ProcessContent
-			items, err = summarizer.ProcessContent(ctx, chunk, userCtx)
-			if err != nil {
-				result.Errors = append(result.Errors, err)
-				continue
-			}
+			// Fallback: create simple L2 item
+			items = []*types.MemoryItem{{
+				ID:         fmt.Sprintf("mem_%d", time.Now().UnixNano()),
+				HallType:   types.HallFacts,
+				Layer:      types.LayerL2,
+				SourceType: types.SourceTypeFile,
+				Content:    chunk,
+				Summary:    chunk[:min(200, len(chunk))] + "...",
+				Source:     source,
+				UserID:     userCtx.GetUserID(),
+				Timestamp:  time.Now(),
+				Tokens:     len(chunk) / 4,
+			}}
 		}
 
 		for _, item := range items {
@@ -78,9 +89,24 @@ func (p *FileProcessor) Process(ctx context.Context, source string, content stri
 			result.LayerCounts[item.Layer]++
 			result.HallCounts[item.HallType]++
 		}
+
+		// 2. Create L3 item for raw content (semantic search)
+		// Only if embedder is available (L3 requires vector storage)
+		l3Item := summarizer.ProcessFileContentRaw(ctx, chunk, source, userCtx)
+		if l3Item != nil {
+			result.Items = append(result.Items, l3Item)
+			result.LayerCounts[types.LayerL3]++
+		}
 	}
 
 	return result, nil
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // ProcessWithIndex processes a file with index checking (skip if unchanged)

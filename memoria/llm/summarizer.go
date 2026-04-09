@@ -207,17 +207,47 @@ func (s *SummarizerImpl) ProcessChatBatchContent(ctx context.Context, qaPairs []
 	return parseChatBatchResponse(response, userCtx), nil
 }
 
-// ProcessFileContent processes file content using FileSummarizePrompt
+// ProcessFileContent processes file content using FileSimplePrompt
+// Returns MemoryItems for L2 (summary) and optionally L3 (raw content)
+// Files are stored without complex HallType classification
 func (s *SummarizerImpl) ProcessFileContent(ctx context.Context, content, filePath string, userCtx types.UserIdentity) ([]*types.MemoryItem, error) {
-	prompt := FileSummarizePrompt(content, filePath)
+	prompt := FileSimplePrompt(content, filePath)
 	response, err := s.Model.GenerateWithSystem(ctx, SystemPrompt, prompt)
 	if err != nil {
 		return nil, err
 	}
 
 	// Parse response
-	result := parseFileResponse(response, userCtx)
+	result := parseSimpleFileResponse(response, userCtx)
+
+	// Set source type and file path
+	for _, item := range result {
+		item.Source = filePath
+		item.SourceType = types.SourceTypeFile
+		item.Layer = types.LayerL2 // Files default to L2 for summary
+	}
+
 	return result, nil
+}
+
+// ProcessFileContentRaw creates an L3 item for raw file content
+// This is called alongside ProcessFileContent to store full content for semantic search
+func (s *SummarizerImpl) ProcessFileContentRaw(ctx context.Context, content, filePath string, userCtx types.UserIdentity) *types.MemoryItem {
+	// Estimate tokens for the raw content
+	estTokens := estimateTokens(content)
+
+	return &types.MemoryItem{
+		ID:         generateID(),
+		HallType:   types.HallFacts, // Default, not really used for files
+		Layer:      types.LayerL3,
+		SourceType: types.SourceTypeFile,
+		Content:    content,
+		Summary:    "", // L3 doesn't need summary, content is the raw text
+		Source:     filePath,
+		UserID:     userCtx.GetUserID(),
+		Timestamp:  time.Now(),
+		Tokens:     estTokens,
+	}
 }
 
 // CompactMemories compacts multiple memory items using CompactPrompt
@@ -245,15 +275,16 @@ func (s *SummarizerImpl) ProcessContent(ctx context.Context, content string, use
 	}
 
 	item := &types.MemoryItem{
-		ID:        generateID(),
-		HallType:  hallType,
-		Layer:     layer,
-		Content:   content,
-		Summary:   summary,
-		Source:    "chat",
-		UserID:    userCtx.GetUserID(),
-		Timestamp: time.Now(),
-		Tokens:    estimateTokens(summary),
+		ID:         generateID(),
+		HallType:   hallType,
+		Layer:      layer,
+		SourceType: types.SourceTypeChat,
+		Content:    content,
+		Summary:    summary,
+		Source:     "chat",
+		UserID:     userCtx.GetUserID(),
+		Timestamp:  time.Now(),
+		Tokens:     estimateTokens(summary),
 	}
 
 	return []*types.MemoryItem{item}, nil
@@ -352,15 +383,16 @@ func parseFactsResponse(response string, userCtx types.UserIdentity) []*types.Me
 		}
 
 		items[i] = &types.MemoryItem{
-			ID:        generateID(),
-			HallType:  hallType,
-			Layer:     layer,
-			Content:   fact.Content,
-			Summary:   fact.Content,
-			Source:    "extracted",
-			UserID:    userCtx.GetUserID(),
-			Timestamp: time.Now(),
-			Tokens:    estimateTokens(fact.Content),
+			ID:         generateID(),
+			HallType:   hallType,
+			Layer:      layer,
+			SourceType: types.SourceTypeChat,
+			Content:    fact.Content,
+			Summary:    fact.Content,
+			Source:     "extracted",
+			UserID:     userCtx.GetUserID(),
+			Timestamp:  time.Now(),
+			Tokens:     estimateTokens(fact.Content),
 		}
 	}
 
@@ -378,15 +410,16 @@ func parsePlainTextFacts(response string, userCtx types.UserIdentity) []*types.M
 		}
 
 		items = append(items, &types.MemoryItem{
-			ID:        generateID(),
-			HallType:  types.HallFacts,
-			Layer:     types.LayerL1,
-			Content:   line,
-			Summary:   line,
-			Source:    "extracted",
-			UserID:    userCtx.GetUserID(),
-			Timestamp: time.Now(),
-			Tokens:    estimateTokens(line),
+			ID:         generateID(),
+			HallType:   types.HallFacts,
+			Layer:      types.LayerL1,
+			SourceType: types.SourceTypeChat,
+			Content:    line,
+			Summary:    line,
+			Source:     "extracted",
+			UserID:     userCtx.GetUserID(),
+			Timestamp:  time.Now(),
+			Tokens:     estimateTokens(line),
 		})
 	}
 
@@ -470,16 +503,17 @@ func parseChatResponse(response string, userCtx types.UserIdentity) []*types.Mem
 	}
 
 	return []*types.MemoryItem{{
-		ID:        generateID(),
-		HallType:  hallType,
-		Layer:     layer,
-		Content:   result.Summary,
-		Summary:   result.Summary,
-		Source:    "chat",
-		UserID:    userCtx.GetUserID(),
-		Timestamp: time.Now(),
-		Tokens:    estimateTokens(result.Summary),
-		Metadata:  map[string]any{"keywords": result.Keywords},
+		ID:         generateID(),
+		HallType:   hallType,
+		Layer:      layer,
+		SourceType: types.SourceTypeChat,
+		Content:    result.Summary,
+		Summary:    result.Summary,
+		Source:     "chat",
+		UserID:     userCtx.GetUserID(),
+		Timestamp:  time.Now(),
+		Tokens:     estimateTokens(result.Summary),
+		Metadata:   map[string]any{"keywords": result.Keywords},
 	}}
 }
 
@@ -531,16 +565,17 @@ func parseChatBatchResponse(response string, userCtx types.UserIdentity) []*type
 		}
 
 		result = append(result, &types.MemoryItem{
-			ID:        generateID(),
-			HallType:  hallType,
-			Layer:     layer,
-			Content:   item.Summary,
-			Summary:   item.Summary,
-			Source:    "chat",
-			UserID:    userCtx.GetUserID(),
-			Timestamp: time.Now(),
-			Tokens:    estimateTokens(item.Summary),
-			Metadata:  map[string]any{"keywords": item.Keywords, "qa_index": item.QAIndex},
+			ID:         generateID(),
+			HallType:   hallType,
+			Layer:      layer,
+			SourceType: types.SourceTypeChat,
+			Content:    item.Summary,
+			Summary:    item.Summary,
+			Source:     "chat",
+			UserID:     userCtx.GetUserID(),
+			Timestamp:  time.Now(),
+			Tokens:     estimateTokens(item.Summary),
+			Metadata:   map[string]any{"keywords": item.Keywords, "qa_index": item.QAIndex},
 		})
 	}
 
@@ -550,6 +585,60 @@ func parseChatBatchResponse(response string, userCtx types.UserIdentity) []*type
 func parseFileResponse(response string, userCtx types.UserIdentity) []*types.MemoryItem {
 	// Similar to parseChatResponse
 	return parseChatResponse(response, userCtx)
+}
+
+// parseSimpleFileResponse parses the simplified file response (no HallType)
+func parseSimpleFileResponse(response string, userCtx types.UserIdentity) []*types.MemoryItem {
+	response = strings.TrimSpace(response)
+	response = cleanCodeBlock(response)
+
+	var result struct {
+		Summary  string   `json:"summary"`
+		Keywords []string `json:"keywords"`
+		Category string   `json:"category"`
+	}
+
+	if err := json.Unmarshal([]byte(response), &result); err != nil {
+		// Fall back to simple parsing
+		return []*types.MemoryItem{{
+			ID:         generateID(),
+			HallType:   types.HallFacts,
+			Layer:      types.LayerL2,
+			SourceType: types.SourceTypeFile,
+			Content:    response,
+			Summary:    response,
+			Source:     "file",
+			UserID:     userCtx.GetUserID(),
+			Timestamp:  time.Now(),
+			Tokens:     estimateTokens(response),
+		}}
+	}
+
+	if result.Summary == "" {
+		return nil
+	}
+
+	metadata := map[string]any{}
+	if len(result.Keywords) > 0 {
+		metadata["keywords"] = result.Keywords
+	}
+	if result.Category != "" {
+		metadata["category"] = result.Category
+	}
+
+	return []*types.MemoryItem{{
+		ID:         generateID(),
+		HallType:   types.HallFacts, // Default for files, not really used
+		Layer:      types.LayerL2,
+		SourceType: types.SourceTypeFile,
+		Content:    result.Summary,
+		Summary:    result.Summary,
+		Source:     "file",
+		UserID:     userCtx.GetUserID(),
+		Timestamp:  time.Now(),
+		Tokens:     estimateTokens(result.Summary),
+		Metadata:   metadata,
+	}}
 }
 
 func parseCompactResponse(response string) []string {

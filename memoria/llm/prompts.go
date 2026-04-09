@@ -151,6 +151,7 @@ type QAPair struct {
 }
 
 // FileSummarizePrompt generates a prompt for summarizing file content
+// DEPRECATED: Use FileSimplePrompt for simplified file processing
 func FileSummarizePrompt(content, filePath string) string {
 	return fmt.Sprintf(`Analyze this file content and extract useful information for memory storage.
 
@@ -172,6 +173,27 @@ Return a JSON object:
   "layer": "L1/L2/L3",
   "summary": "...",
   "keywords": ["..."]
+}`, filePath, content)
+}
+
+// FileSimplePrompt generates a simplified prompt for file content summarization
+// This version only extracts a summary without HallType classification
+func FileSimplePrompt(content, filePath string) string {
+	return fmt.Sprintf(`Summarize this file content concisely for knowledge storage.
+
+File: %s
+
+Content:
+%s
+
+Provide a brief summary that captures the main points and key information.
+The summary should be useful for later retrieval.
+
+Return a JSON object:
+{
+  "summary": "...",
+  "keywords": ["..."],
+  "category": "..." // Optional: e.g., "documentation", "code", "config", "notes"
 }`, filePath, content)
 }
 
