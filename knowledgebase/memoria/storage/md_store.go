@@ -2,6 +2,8 @@ package storage
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,10 +19,11 @@ import (
 
 // MDStore implements Storage interface using markdown files
 type MDStore struct {
-	config    *types.StorageConfig
-	baseDir   string
-	mu        sync.RWMutex
-	fileCache map[string][]*types.MemoryItem
+	config     *types.StorageConfig
+	baseDir    string
+	mu         sync.RWMutex
+	fileCache  map[string][]*types.MemoryItem
+	fileIndex  *FileIndex // 文件处理状态索引
 }
 
 // StorageConfig alias for backward compatibility
@@ -51,6 +54,9 @@ func NewMDStore(baseDir string, config *StorageConfig) (*MDStore, error) {
 		slog.Warn("Failed to load cache", "error", err)
 	}
 
+	// 加载文件索引
+	store.fileIndex = LoadFileIndex(baseDir + "/metadata/file_index.json")
+
 	return store, nil
 }
 
@@ -63,6 +69,11 @@ func (s *MDStore) ensureDirs() error {
 		s.baseDir + "/l2",
 		s.baseDir + "/l2/events",
 		s.baseDir + "/l2/discoveries",
+		s.baseDir + "/files",
+		s.baseDir + "/files/facts",
+		s.baseDir + "/files/preferences",
+		s.baseDir + "/files/events",
+		s.baseDir + "/files/discoveries",
 		s.baseDir + "/metadata",
 	}
 	for _, dir := range dirs {
@@ -128,32 +139,62 @@ func (s *MDStore) StoreBatch(ctx context.Context, items []*types.MemoryItem) err
 
 	groups := s.groupItems(items)
 
+	// 先收集文件来源的源文件路径，稍后统一清理
+	fileSources := make(map[string]bool)
+
 	for key, groupItems := range groups {
-		file := s.getFilePath(key)
-		if err := s.writeToFile(file, groupItems, key.layer); err != nil {
-			return err
+		// 记录文件来源
+		if key.sourceType == "file" && key.sourcePath != "" {
+			fileSources[key.sourcePath] = true
 		}
-		s.fileCache[file] = append(s.fileCache[file], groupItems...)
+
+		file := s.getFilePath(key)
+
+		// 文件来源：直接覆盖，不追加
+		if key.sourceType == "file" {
+			if err := s.writeToFile(file, groupItems, key.layer); err != nil {
+				return err
+			}
+			s.fileCache[file] = groupItems
+		} else {
+			// 聊天来源：追加
+			if err := s.writeToFile(file, groupItems, key.layer); err != nil {
+				return err
+			}
+			s.fileCache[file] = append(s.fileCache[file], groupItems...)
+		}
 	}
 
 	return nil
 }
 
 type itemKey struct {
-	layer    types.Layer
-	hallType types.HallType
-	userID   string
-	date     string
+	layer      types.Layer
+	hallType   types.HallType
+	userID     string
+	date       string
+	sourceType string // "chat" 或 "file"
+	sourcePath string // 文件来源时为文件路径
 }
 
 func (s *MDStore) groupItems(items []*types.MemoryItem) map[itemKey][]*types.MemoryItem {
 	groups := make(map[itemKey][]*types.MemoryItem)
 	for _, item := range items {
+		// 判断来源类型
+		sourceType := "chat"
+		sourcePath := ""
+		if strings.HasPrefix(item.Source, "/") || strings.Contains(item.Source, string(filepath.Separator)) {
+			sourceType = "file"
+			sourcePath = item.Source
+		}
+
 		key := itemKey{
-			layer:    item.Layer,
-			hallType: item.HallType,
-			userID:   item.UserID,
-			date:     item.Timestamp.Format(s.config.DateFormat),
+			layer:      item.Layer,
+			hallType:   item.HallType,
+			userID:     item.UserID,
+			date:       item.Timestamp.Format(s.config.DateFormat),
+			sourceType: sourceType,
+			sourcePath: sourcePath,
 		}
 		groups[key] = append(groups[key], item)
 	}
@@ -162,6 +203,36 @@ func (s *MDStore) groupItems(items []*types.MemoryItem) map[itemKey][]*types.Mem
 
 func (s *MDStore) getFilePath(key itemKey) string {
 	userPart := sanitizeUserID(key.userID)
+
+	// 判断来源：聊天记录按时间，文件按源路径
+	if key.sourceType == "file" && key.sourcePath != "" {
+		// 文件来源：使用文件路径 hash 作为存储路径
+		fileHash := HashFilePath(key.sourcePath)
+		switch key.layer {
+		case types.LayerL1:
+			switch key.hallType {
+			case types.HallFacts:
+				return s.baseDir + "/files/facts/" + fileHash + ".md"
+			case types.HallPreferences:
+				return s.baseDir + "/files/preferences/" + fileHash + ".md"
+			default:
+				return s.baseDir + "/files/facts/" + fileHash + ".md"
+			}
+		case types.LayerL2:
+			switch key.hallType {
+			case types.HallEvents:
+				return s.baseDir + "/files/events/" + fileHash + ".md"
+			case types.HallDiscoveries:
+				return s.baseDir + "/files/discoveries/" + fileHash + ".md"
+			default:
+				return s.baseDir + "/files/events/" + fileHash + ".md"
+			}
+		default:
+			return s.baseDir + "/files/" + fileHash + ".md"
+		}
+	}
+
+	// 聊天记录：按用户和时间存储
 	switch key.layer {
 	case types.LayerL1:
 		switch key.hallType {
@@ -178,7 +249,7 @@ func (s *MDStore) getFilePath(key itemKey) string {
 		case types.HallEvents:
 			return s.baseDir + "/l2/events/" + datePart + "_" + userPart + ".md"
 		case types.HallDiscoveries:
-			return s.baseDir + "/l2/discovery/" + datePart + "_" + userPart + ".md"
+			return s.baseDir + "/l2/discoveries/" + datePart + "_" + userPart + ".md"
 		default:
 			return s.baseDir + "/l2/events/" + datePart + "_" + userPart + ".md"
 		}
@@ -448,8 +519,75 @@ func (s *MDStore) DeleteByUser(ctx context.Context, userID string) error {
 func (s *MDStore) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// 保存文件索引
+	if s.fileIndex != nil {
+		if err := s.fileIndex.Save(); err != nil {
+			slog.Warn("Failed to save file index", "error", err)
+		}
+	}
+
 	s.fileCache = nil
 	return nil
+}
+
+// ShouldProcessFile 检查文件是否需要处理（内容是否变化）
+func (s *MDStore) ShouldProcessFile(filePath string, content []byte) bool {
+	if s.fileIndex == nil {
+		return true
+	}
+
+	contentHash := HashContent(content)
+	return s.fileIndex.NeedsProcessing(filePath, contentHash)
+}
+
+// MarkFileProcessed 标记文件已处理
+func (s *MDStore) MarkFileProcessed(filePath string, content []byte, itemCount int) {
+	if s.fileIndex == nil {
+		return
+	}
+
+	contentHash := HashContent(content)
+	s.fileIndex.MarkProcessed(filePath, contentHash, itemCount)
+}
+
+// DeleteFileMemories 删除指定文件的记忆（文件更新或删除时调用）
+func (s *MDStore) DeleteFileMemories(filePath string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	fileHash := HashFilePath(filePath)
+
+	// 删除文件来源的记忆文件
+	patterns := []string{
+		s.baseDir + "/files/facts/" + fileHash + ".md",
+		s.baseDir + "/files/preferences/" + fileHash + ".md",
+		s.baseDir + "/files/events/" + fileHash + ".md",
+		s.baseDir + "/files/discoveries/" + fileHash + ".md",
+		s.baseDir + "/files/" + fileHash + ".md",
+	}
+
+	for _, pattern := range patterns {
+		if fileExists(pattern) {
+			if s.config.EnableBackup {
+				s.backupFile(pattern)
+			}
+			os.Remove(pattern)
+			delete(s.fileCache, pattern)
+		}
+	}
+
+	// 从索引中移除
+	if s.fileIndex != nil {
+		s.fileIndex.Remove(filePath)
+	}
+
+	return nil
+}
+
+// GetFileIndex 获取文件索引
+func (s *MDStore) GetFileIndex() *FileIndex {
+	return s.fileIndex
 }
 
 func (s *MDStore) backupFile(file string) error {
@@ -521,4 +659,107 @@ func sortByTimestamp(items []*types.MemoryItem) {
 			}
 		}
 	}
+}
+
+// ============ 文件索引相关 ============
+
+// FileIndex 记录文件处理状态
+type FileIndex struct {
+	filePath string
+	mu       sync.RWMutex
+	Entries  map[string]*FileEntry `json:"entries"` // 文件路径 -> 处理记录
+}
+
+// FileEntry 文件处理记录
+type FileEntry struct {
+	ContentHash string    `json:"content_hash"` // 内容 hash
+	ProcessedAt time.Time `json:"processed_at"` // 处理时间
+	ItemCount   int       `json:"item_count"`   // 提取的记忆数量
+}
+
+// LoadFileIndex 加载文件索引
+func LoadFileIndex(path string) *FileIndex {
+	idx := &FileIndex{
+		filePath: path,
+		Entries:  make(map[string]*FileEntry),
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return idx
+	}
+
+	if err := json.Unmarshal(data, idx); err != nil {
+		slog.Warn("Failed to parse file index", "error", err)
+	}
+
+	return idx
+}
+
+// Save 保存文件索引
+func (idx *FileIndex) Save() error {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+
+	data, err := json.MarshalIndent(idx, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(idx.filePath, data, 0644)
+}
+
+// NeedsProcessing 检查文件是否需要处理
+func (idx *FileIndex) NeedsProcessing(filePath, contentHash string) bool {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+
+	entry, exists := idx.Entries[filePath]
+	if !exists {
+		return true
+	}
+
+	return entry.ContentHash != contentHash
+}
+
+// MarkProcessed 标记文件已处理
+func (idx *FileIndex) MarkProcessed(filePath, contentHash string, itemCount int) {
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+
+	idx.Entries[filePath] = &FileEntry{
+		ContentHash: contentHash,
+		ProcessedAt: time.Now(),
+		ItemCount:   itemCount,
+	}
+}
+
+// Remove 移除文件记录
+func (idx *FileIndex) Remove(filePath string) {
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+
+	delete(idx.Entries, filePath)
+}
+
+// GetEntry 获取文件处理记录
+func (idx *FileIndex) GetEntry(filePath string) *FileEntry {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+
+	return idx.Entries[filePath]
+}
+
+// HashFilePath 计算文件路径的 hash（用于存储文件名）
+func HashFilePath(filePath string) string {
+	h := sha256.New()
+	h.Write([]byte(filePath))
+	return hex.EncodeToString(h.Sum(nil))[:16] // 取前 16 字符
+}
+
+// HashContent 计算内容的 hash
+func HashContent(content []byte) string {
+	h := sha256.New()
+	h.Write(content)
+	return hex.EncodeToString(h.Sum(nil))
 }

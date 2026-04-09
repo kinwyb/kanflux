@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/kinwyb/kanflux/knowledgebase/memoria/llm"
+	"github.com/kinwyb/kanflux/knowledgebase/memoria/storage"
 	"github.com/kinwyb/kanflux/knowledgebase/memoria/types"
 )
 
@@ -21,6 +22,7 @@ type FileProcessor struct {
 	*BaseProcessor
 	watchPaths []WatchPath
 	watcher    *FileWatcher
+	storage    types.Storage // 用于访问文件索引
 }
 
 // NewFileProcessor creates a file processor
@@ -29,6 +31,11 @@ func NewFileProcessor(summarizer types.Summarizer, config *ProcessorConfig, watc
 		BaseProcessor: NewBaseProcessor(summarizer, config),
 		watchPaths:    watchPaths,
 	}
+}
+
+// SetStorage sets the storage for file index tracking
+func (p *FileProcessor) SetStorage(s types.Storage) {
+	p.storage = s
 }
 
 // Name returns the processor name
@@ -44,7 +51,13 @@ func (p *FileProcessor) Process(ctx context.Context, source string, content stri
 		HallCounts:  make(map[types.HallType]int),
 	}
 
-	chunks := p.chunkContent(content, p.Config.MaxBatchSize)
+	// 文件处理：使用较大的分块大小（默认 8000 字符，约 2000 tokens）
+	maxChunkSize := p.Config.MaxBatchSize
+	if maxChunkSize <= 0 || maxChunkSize < 1000 {
+		maxChunkSize = 8000 // 默认 8000 字符，适合大多数模型
+	}
+
+	chunks := p.chunkContent(content, maxChunkSize)
 
 	for _, chunk := range chunks {
 		// Use the specialized ProcessFileContent which uses FileSummarizePrompt
@@ -68,6 +81,39 @@ func (p *FileProcessor) Process(ctx context.Context, source string, content stri
 	}
 
 	return result, nil
+}
+
+// ProcessWithIndex processes a file with index checking (skip if unchanged)
+func (p *FileProcessor) ProcessWithIndex(ctx context.Context, filePath string, content []byte, userCtx types.UserIdentity) (*types.ProcessingResult, error) {
+	// 检查存储是否支持文件索引
+	if mdStore, ok := p.storage.(*storage.MDStore); ok {
+		// 检查文件是否需要处理
+		if !mdStore.ShouldProcessFile(filePath, content) {
+			slog.Debug("File unchanged, skipping", "file", filePath)
+			return &types.ProcessingResult{
+				Items:       make([]*types.MemoryItem, 0),
+				LayerCounts: make(map[types.Layer]int),
+				HallCounts:  make(map[types.HallType]int),
+			}, nil
+		}
+
+		// 文件变化了，先删除旧记忆
+		mdStore.DeleteFileMemories(filePath)
+
+		// 处理文件
+		result, err := p.Process(ctx, filePath, string(content), userCtx)
+		if err != nil {
+			return nil, err
+		}
+
+		// 标记文件已处理
+		mdStore.MarkFileProcessed(filePath, content, len(result.Items))
+
+		return result, nil
+	}
+
+	// 没有文件索引支持，直接处理
+	return p.Process(ctx, filePath, string(content), userCtx)
 }
 
 // ProcessBatch processes multiple files

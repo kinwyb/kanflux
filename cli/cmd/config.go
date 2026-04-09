@@ -86,6 +86,11 @@ func createDefaultConfig(workspace string) *config.Config {
 				Type:        config.AgentTypeDeep, // 默认使用 deep agent
 				Description: "Main agent for general tasks",
 				Workspace:   workspace,
+				// 可选：配置专门的记忆摘要模型（用于 memory 命令）
+				// SummarizeModel: &config.EmbeddingConfig{
+				// 	Provider: "qwen",
+				// 	Model:    "qwen3.5-plus",
+				// },
 			},
 		},
 	}

@@ -93,10 +93,28 @@ knowledgebase/memoria/
 │   ├── 2026-04-09_<user>.md # L2 按日期分文件
 │   └── events/
 │   └── discoveries/
+├── files/                    # 文件来源的记忆（按文件hash存储）
+│   ├── facts/
+│   ├── preferences/
+│   ├── events/
+│   └── discoveries/
 ├── l3_index.db              # SQLite 向量索引
 └── metadata/
-    └── users.json           # 用户注册表
+    ├── users.json           # 用户注册表
+    └── file_index.json      # 文件处理状态索引
 ```
+
+**存储区分：**
+
+| 来源 | 存储位置 | 命名规则 | 更新策略 |
+|------|---------|---------|---------|
+| 聊天记录 | `l1/`, `l2/` | `<user>.md` / `<date>_<user>.md` | 追加 |
+| 文件内容 | `files/` | `<file_hash>.md` | 替换（文件变化时删除旧数据） |
+
+**文件索引** (`metadata/file_index.json`)：
+- 记录每个已处理文件的内容 hash
+- 文件内容变化时自动重新处理
+- 避免重复处理相同内容的文件
 
 ## 核心接口
 
@@ -239,13 +257,21 @@ items, err := service.Retrieve(ctx, &types.RetrieveOptions{
 ### 批量处理配置
 
 ```go
-// 修改批量大小（默认 5 组问答一次请求）
+// ProcessorConfig 配置说明
 processorConfig := &types.ProcessorConfig{
-    MaxBatchSize:    10,  // 每次处理 10 组问答
+    MaxBatchSize:    8000, // 文件处理: 分块大小(字符), 默认 8000
+                        // 聊天处理: QA pairs 数量, 默认 5
     EnableParallel:  true, // 启用并行处理
     MaxConcurrency:  3,    // 最大并发数
 }
 ```
+
+**MaxBatchSize 含义区分：**
+
+| 处理器 | 含义 | 默认值 | 说明 |
+|--------|------|--------|------|
+| FileProcessor | 字符数 | 8000 | 文件内容分块大小，超过此值切分 |
+| ChatProcessor | QA数量 | 5 | 每次LLM调用处理的问答对数量 |
 
 ## MD 文件格式
 

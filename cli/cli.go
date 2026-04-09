@@ -31,6 +31,7 @@ func NewRootCmd() *cobra.Command {
 	rootCmd.AddCommand(cmd.NewAgentCmd())
 	rootCmd.AddCommand(cmd.NewRAGCmd())
 	rootCmd.AddCommand(cmd.NewHistoryCmd())
+	rootCmd.AddCommand(cmd.NewMemoryCmd())
 
 	return rootCmd
 }

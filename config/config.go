@@ -73,6 +73,8 @@ type AgentConfig struct {
 	KnowledgeBaseRefs  []string              `json:"knowledge_base_refs"` // 引用公共知识库名称列表
 	Embedding          *EmbeddingConfig      `json:"embedding"`           // Embedding 配置（可独立于 agent provider）
 	RAGConfig          *RAGConfigOptions     `json:"rag_config"`          // RAG 详细配置
+	// Memoria 记忆摘要配置
+	SummarizeModel     *EmbeddingConfig      `json:"summarize_model"`     // 记忆摘要模型配置（用于 Memoria）
 }
 
 // KnowledgePathConfig 知识库路径配置
@@ -117,6 +119,11 @@ type ResolvedAgentConfig struct {
 	EmbeddingModel      string // Embedding 模型名称
 	EmbeddingAPIKey     string // Embedding API Key
 	EmbeddingAPIBaseURL string // Embedding API Base URL
+	// Memoria 记忆摘要配置
+	SummarizeProvider   string // 记忆摘要 provider 名称
+	SummarizeModel      string // 记忆摘要模型名称
+	SummarizeAPIKey     string // 记忆摘要 API Key
+	SummarizeAPIBaseURL string // 记忆摘要 API Base URL
 }
 
 // Load 从指定路径加载配置文件
@@ -252,6 +259,9 @@ func (c *Config) ResolveAgentConfig(name string) (*ResolvedAgentConfig, error) {
 	// 解析 Embedding 配置
 	embeddingProvider, embeddingModel, embeddingAPIKey, embeddingAPIBaseURL := c.resolveEmbeddingConfig(agent, providerName, provider)
 
+	// 解析 SummarizeModel 配置（用于 Memoria）
+	summarizeProvider, summarizeModel, summarizeAPIKey, summarizeAPIBaseURL := c.resolveSummarizeModelConfig(agent, providerName, provider, model)
+
 	return &ResolvedAgentConfig{
 		Name:                agent.Name,
 		Type:                agentType,
@@ -272,6 +282,10 @@ func (c *Config) ResolveAgentConfig(name string) (*ResolvedAgentConfig, error) {
 		EmbeddingModel:      embeddingModel,
 		EmbeddingAPIKey:     embeddingAPIKey,
 		EmbeddingAPIBaseURL: embeddingAPIBaseURL,
+		SummarizeProvider:   summarizeProvider,
+		SummarizeModel:      summarizeModel,
+		SummarizeAPIKey:     summarizeAPIKey,
+		SummarizeAPIBaseURL: summarizeAPIBaseURL,
 	}, nil
 }
 
@@ -335,6 +349,38 @@ func (c *Config) resolveEmbeddingConfig(agent *AgentConfig, agentProviderName st
 	// 设置默认模型
 	if model == "" {
 		model = "text-embedding-3-small" // OpenAI 默认 embedding 模型
+	}
+
+	return
+}
+
+// resolveSummarizeModelConfig 解析 Memoria 记忆摘要模型配置
+// 优先级：agent.SummarizeModel > agent.Provider（使用 agent 的主模型）
+func (c *Config) resolveSummarizeModelConfig(agent *AgentConfig, agentProviderName string, agentProvider *ProviderConfig, agentModel string) (provider, model, apiKey, apiBaseURL string) {
+	// 默认使用 agent 的 provider 和 model
+	provider = agentProviderName
+	model = agentModel
+	apiKey = agentProvider.APIKey
+	apiBaseURL = agentProvider.APIBaseURL
+
+	// 如果配置了专门的 summarize_model
+	if agent.SummarizeModel != nil {
+		if agent.SummarizeModel.Provider != "" {
+			provider = agent.SummarizeModel.Provider
+			if p, ok := c.Providers[provider]; ok {
+				apiKey = p.APIKey
+				apiBaseURL = p.APIBaseURL
+			}
+		}
+		if agent.SummarizeModel.Model != "" {
+			model = agent.SummarizeModel.Model
+		}
+		if agent.SummarizeModel.APIKey != "" {
+			apiKey = agent.SummarizeModel.APIKey
+		}
+		if agent.SummarizeModel.APIBaseURL != "" {
+			apiBaseURL = agent.SummarizeModel.APIBaseURL
+		}
 	}
 
 	return
