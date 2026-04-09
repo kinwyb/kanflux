@@ -239,18 +239,84 @@ config.WatchPaths = watchPaths
 
 ```go
 // 处理单个聊天会话
-result, err := service.ProcessChatSession(ctx, sessionContent, userCtx)
+result, err := service.ProcessChat(ctx, sessionPath, content, userCtx)
 
 // 处理文件内容
 result, err := service.ProcessFile(ctx, filePath, content, userCtx)
+```
 
-// 检索记忆
-items, err := service.Retrieve(ctx, &types.RetrieveOptions{
-    Layers:   []types.Layer{types.LayerL1, types.LayerL2},
-    HallType: types.HallFacts,
-    UserID:   "user123",
-    Query:    "database decision",
-    Limit:    20,
+### 层级搜索（核心功能）
+
+Memoria 提供按层级优先级的搜索功能：
+
+```go
+// 搜索会按 L1 -> L2 -> L3 的优先级进行
+results, err := service.Search(ctx, "database decision", &types.RetrieveOptions{
+    UserID: "user123",
+    Limit:  10,
+})
+
+for _, r := range results {
+    fmt.Printf("Layer: L%d, Score: %.2f, Match: %s\n",
+        r.Layer, r.Score, r.MatchType)
+    fmt.Printf("Summary: %s\n\n", r.Item.Summary)
+}
+```
+
+**搜索优先级：**
+
+| 层级 | 搜索方式 | 速度 | 说明 |
+|------|---------|------|------|
+| L1 | 精确/关键词 | 最快 | 始终加载在内存，优先返回 |
+| L2 | 关键词过滤 | 中等 | 按需加载，时间范围过滤 |
+| L3 | 语义搜索 | 最慢 | 向量搜索，最全面 |
+
+**匹配类型：**
+
+- `exact`: 完全匹配查询字符串
+- `keyword`: 关键词匹配
+- `semantic`: 语义向量匹配（需要配置 Embedder）
+
+### 启用 L3 语义搜索
+
+L3 使用 SQLite + 向量存储原始内容和 embedding：
+
+```go
+// 1. 实现 Embedder 接口
+type MyEmbedder struct{}
+
+func (e *MyEmbedder) Embed(ctx context.Context, text string) ([]float32, error) {
+    // 调用 embedding API
+}
+
+func (e *MyEmbedder) Dimension() int { return 1536 }  // embedding 维度
+
+// 2. 设置 Embedder（会自动初始化 L3 层）
+service.SetEmbedder(&MyEmbedder{})
+
+// 3. 搜索时自动使用 L3 语义搜索
+results, err := service.Search(ctx, "那个数据库问题怎么解决的", &types.RetrieveOptions{
+    UserID: "user123",
+    Limit:  10,
+})
+```
+
+**L3 存储内容：**
+- 原始对话/文件内容
+- 自动生成的 embedding 向量
+- 元数据（用户ID、来源、时间等）
+
+**存储位置：** `<workspace>/memoria/l3/`
+
+### 直接检索记忆
+
+```go
+// 直接检索（不过滤分数）
+items, err := service.GetStorage().Retrieve(ctx, &types.RetrieveOptions{
+    Layers:    []types.Layer{types.LayerL1, types.LayerL2},
+    HallTypes: []types.HallType{types.HallFacts},
+    UserID:    "user123",
+    Limit:     20,
 })
 ```
 

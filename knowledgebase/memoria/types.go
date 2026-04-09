@@ -14,11 +14,14 @@ type (
 	UserIdentity        = types.UserIdentity
 	DefaultUserIdentity = types.DefaultUserIdentity
 	RetrieveOptions     = types.RetrieveOptions
+	SearchResult        = types.SearchResult
 	TimeRange           = types.TimeRange
 	Processor           = types.Processor
 	Summarizer          = types.Summarizer
 	ChatModel           = types.ChatModel
 	Storage             = types.Storage
+	Embedder            = types.Embedder
+	VectorStore         = types.VectorStore
 	Layer               = types.Layer
 	HallType            = types.HallType
 )

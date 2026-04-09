@@ -119,6 +119,15 @@ type RetrieveOptions struct {
 	UserID    string     `json:"user_id,omitempty"`
 	Limit     int        `json:"limit"`
 	TimeRange *TimeRange `json:"time_range,omitempty"`
+	Query     string     `json:"query,omitempty"`     // 搜索查询
+}
+
+// SearchResult represents a search result with score
+type SearchResult struct {
+	Item      *MemoryItem `json:"item"`
+	Score     float64     `json:"score"`     // 相关性分数 0-1
+	Layer     Layer       `json:"layer"`     // 来源层级
+	MatchType string      `json:"match_type"` // "exact", "keyword", "semantic"
 }
 
 // TimeRange for time-based filtering
@@ -183,4 +192,18 @@ type WatchPath struct {
 	Extensions []string `json:"extensions"`
 	Recursive  bool     `json:"recursive"`
 	Exclude    []string `json:"exclude"`
+}
+
+// Embedder is the interface for generating text embeddings (for L3 semantic search)
+type Embedder interface {
+	Embed(ctx context.Context, text string) ([]float32, error)
+	EmbedBatch(ctx context.Context, texts []string) ([][]float32, error)
+	Dimension() int
+}
+
+// VectorStore is the interface for vector storage (for L3)
+type VectorStore interface {
+	StoreWithEmbedding(ctx context.Context, item *MemoryItem, embedding []float32) error
+	SearchByEmbedding(ctx context.Context, embedding []float32, opts *RetrieveOptions) ([]*SearchResult, error)
+	DeleteBySource(ctx context.Context, source string) error
 }

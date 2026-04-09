@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
 
 	"github.com/kinwyb/kanflux/knowledgebase/memoria/llm"
@@ -26,6 +27,10 @@ type Memoria struct {
 	l1 *L1FactsLayer
 	l2 *L2EventsLayer
 	l3 *L3RawLayer
+
+	// L3 语义搜索
+	embedder    types.Embedder
+	vectorStore types.VectorStore
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -83,11 +88,38 @@ func (m *Memoria) SetChatModel(model types.ChatModel) {
 		m.config.ProcessorConfig,
 		m.config.WatchPaths,
 	)
+	// Set storage for file index tracking
+	if fp, ok := m.fileProcessor.(*processor.FileProcessor); ok {
+		fp.SetStorage(m.storage)
+	}
 }
 
-// SetL3KnowledgeBase sets the knowledge base for L3 deep search
+// SetEmbedder sets the embedder for L3 semantic search
+func (m *Memoria) SetEmbedder(emb types.Embedder) {
+	m.embedder = emb
+
+	// Initialize L3 layer with embedder
+	if m.l3 == nil && emb != nil {
+		m.l3 = NewL3RawLayer(m.config.GetMemoriaDir()+"/l3", emb)
+		if err := m.l3.Initialize(context.Background()); err != nil {
+			slog.Warn("Failed to initialize L3 layer", "error", err)
+		}
+	}
+}
+
+// SetVectorStore sets the vector store for L3 (optional, L3 has its own store)
+func (m *Memoria) SetVectorStore(vs types.VectorStore) {
+	m.vectorStore = vs
+}
+
+// SetL3KnowledgeBase initializes L3 layer with embedder
 func (m *Memoria) SetL3KnowledgeBase() {
-	m.l3 = NewL3RawLayer(nil)
+	if m.embedder != nil && m.l3 == nil {
+		m.l3 = NewL3RawLayer(m.config.GetMemoriaDir()+"/l3", m.embedder)
+		if err := m.l3.Initialize(context.Background()); err != nil {
+			slog.Warn("Failed to initialize L3 layer", "error", err)
+		}
+	}
 }
 
 // Start starts the Memoria service
@@ -188,6 +220,216 @@ func (m *Memoria) SearchL3(ctx context.Context, query string, opts *types.Retrie
 	return m.l3.Search(ctx, query, opts)
 }
 
+// ============ 层级搜索 ============
+
+// Search performs hierarchical search across all layers
+// Search order: L1 (exact/keyword) -> L2 (keyword) -> L3 (semantic)
+func (m *Memoria) Search(ctx context.Context, query string, opts *types.RetrieveOptions) ([]*types.SearchResult, error) {
+	if opts == nil {
+		opts = &types.RetrieveOptions{Limit: 10}
+	}
+	if opts.Limit <= 0 {
+		opts.Limit = 10
+	}
+
+	results := make([]*types.SearchResult, 0)
+	seen := make(map[string]bool)
+
+	// 1. L1 搜索：精确/关键词匹配（始终加载，最快）
+	l1Results := m.searchL1(query, opts)
+	for _, r := range l1Results {
+		if !seen[r.Item.ID] {
+			seen[r.Item.ID] = true
+			results = append(results, r)
+		}
+	}
+
+	// 2. L2 搜索：关键词过滤（按需加载）
+	if len(results) < opts.Limit {
+		l2Results := m.searchL2(ctx, query, opts)
+		for _, r := range l2Results {
+			if !seen[r.Item.ID] {
+				seen[r.Item.ID] = true
+				results = append(results, r)
+			}
+		}
+	}
+
+	// 3. L3 搜索：语义搜索（最慢，最全面）
+	if len(results) < opts.Limit && m.l3 != nil {
+		l3Results, err := m.searchL3(ctx, query, opts)
+		if err != nil {
+			slog.Warn("L3 search failed", "error", err)
+		} else {
+			for _, r := range l3Results {
+				if !seen[r.Item.ID] {
+					seen[r.Item.ID] = true
+					results = append(results, r)
+				}
+			}
+		}
+	}
+
+	// 限制返回数量
+	if len(results) > opts.Limit {
+		results = results[:opts.Limit]
+	}
+
+	return results, nil
+}
+
+// searchL1 searches L1 layer (exact/keyword match)
+func (m *Memoria) searchL1(query string, opts *types.RetrieveOptions) []*types.SearchResult {
+	results := make([]*types.SearchResult, 0)
+	queryLower := strings.ToLower(query)
+	queryTerms := strings.Fields(queryLower)
+
+	var items []*types.MemoryItem
+	if opts.UserID != "" {
+		items = m.l1.GetForUser(opts.UserID)
+	} else {
+		items = m.l1.GetAll()
+	}
+
+	for _, item := range items {
+		// 过滤 HallType
+		if len(opts.HallTypes) > 0 {
+			found := false
+			for _, ht := range opts.HallTypes {
+				if item.HallType == ht {
+					found = true
+					break
+				}
+			}
+			if !found {
+				continue
+			}
+		}
+
+		score := m.calculateKeywordScore(item, queryLower, queryTerms)
+		if score > 0 {
+			matchType := "keyword"
+			if score >= 0.8 {
+				matchType = "exact"
+			}
+			results = append(results, &types.SearchResult{
+				Item:      item,
+				Score:     score,
+				Layer:     types.LayerL1,
+				MatchType: matchType,
+			})
+		}
+	}
+
+	// 按分数排序
+	sortResultsByScore(results)
+	return results
+}
+
+// searchL2 searches L2 layer (keyword match)
+func (m *Memoria) searchL2(ctx context.Context, query string, opts *types.RetrieveOptions) []*types.SearchResult {
+	results := make([]*types.SearchResult, 0)
+	queryLower := strings.ToLower(query)
+	queryTerms := strings.Fields(queryLower)
+
+	// 设置 L2 检索选项
+	l2Opts := &types.RetrieveOptions{
+		Layers:    []types.Layer{types.LayerL2},
+		UserID:    opts.UserID,
+		Limit:     50, // L2 取更多，然后过滤
+		TimeRange: opts.TimeRange,
+	}
+
+	if len(opts.HallTypes) > 0 {
+		l2Opts.HallTypes = opts.HallTypes
+	}
+
+	items, err := m.storage.Retrieve(ctx, l2Opts)
+	if err != nil {
+		slog.Warn("L2 retrieval failed", "error", err)
+		return results
+	}
+
+	for _, item := range items {
+		score := m.calculateKeywordScore(item, queryLower, queryTerms)
+		if score > 0 {
+			results = append(results, &types.SearchResult{
+				Item:      item,
+				Score:     score,
+				Layer:     types.LayerL2,
+				MatchType: "keyword",
+			})
+		}
+	}
+
+	sortResultsByScore(results)
+	return results
+}
+
+// searchL3 searches L3 layer (semantic search)
+func (m *Memoria) searchL3(ctx context.Context, query string, opts *types.RetrieveOptions) ([]*types.SearchResult, error) {
+	if m.l3 == nil {
+		return nil, fmt.Errorf("L3 not initialized: set embedder first")
+	}
+
+	// 使用 L3 层的语义搜索
+	return m.l3.SearchWithScores(ctx, query, opts)
+}
+
+// calculateKeywordScore calculates keyword match score
+func (m *Memoria) calculateKeywordScore(item *types.MemoryItem, queryLower string, queryTerms []string) float64 {
+	summaryLower := strings.ToLower(item.Summary)
+	contentLower := strings.ToLower(item.Content)
+
+	// 完全匹配
+	if strings.Contains(summaryLower, queryLower) {
+		return 1.0
+	}
+	if strings.Contains(contentLower, queryLower) {
+		return 0.9
+	}
+
+	// 关键词匹配
+	summaryTerms := strings.Fields(summaryLower)
+	contentTerms := strings.Fields(contentLower)
+
+	summaryMatch := 0
+	contentMatch := 0
+
+	for _, qt := range queryTerms {
+		for _, st := range summaryTerms {
+			if st == qt {
+				summaryMatch++
+			}
+		}
+		for _, ct := range contentTerms {
+			if ct == qt {
+				contentMatch++
+			}
+		}
+	}
+
+	if len(queryTerms) == 0 {
+		return 0
+	}
+
+	summaryScore := float64(summaryMatch) / float64(len(queryTerms))
+	contentScore := float64(contentMatch) / float64(len(queryTerms)*2) // 内容匹配权重更低
+
+	return summaryScore * 0.7 + contentScore * 0.3
+}
+
+// sortResultsByScore sorts results by score descending
+func sortResultsByScore(results []*types.SearchResult) {
+	for i := 0; i < len(results)-1; i++ {
+		for j := i + 1; j < len(results); j++ {
+			if results[i].Score < results[j].Score {
+				results[i], results[j] = results[j], results[i]
+			}
+		}
+	}
+}
+
 // ProcessChat processes chat content for memory extraction
 func (m *Memoria) ProcessChat(ctx context.Context, source, content string, userCtx types.UserIdentity) (*types.ProcessingResult, error) {
 	if m.chatProcessor == nil {
@@ -264,4 +506,9 @@ func (m *Memoria) GetConfig() *Config {
 // GetMemoriaDir returns the memoria storage directory
 func (m *Memoria) GetMemoriaDir() string {
 	return m.config.GetMemoriaDir()
+}
+
+// GetStorage returns the storage interface
+func (m *Memoria) GetStorage() types.Storage {
+	return m.storage
 }

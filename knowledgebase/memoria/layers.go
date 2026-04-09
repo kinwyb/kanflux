@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/kinwyb/kanflux/knowledgebase/memoria/llm"
+	"github.com/kinwyb/kanflux/knowledgebase/memoria/storage"
 	"github.com/kinwyb/kanflux/knowledgebase/memoria/types"
 )
 
@@ -314,42 +315,87 @@ func (l *L2EventsLayer) Close() error {
 
 // L3RawLayer implements the L3 (Deep Search) layer
 type L3RawLayer struct {
-	wing string
+	store     *storage.L3SQLiteStore
+	embedder  types.Embedder
+	workspace string
 }
 
 // NewL3RawLayer creates an L3 layer instance
-func NewL3RawLayer(kb interface{}) *L3RawLayer {
+func NewL3RawLayer(workspace string, embedder types.Embedder) *L3RawLayer {
 	return &L3RawLayer{
-		wing: "memoria_l3",
+		workspace: workspace,
+		embedder:  embedder,
 	}
 }
 
 // Initialize initializes the L3 layer
 func (l *L3RawLayer) Initialize(ctx context.Context) error {
+	if l.workspace == "" {
+		return nil // No workspace, skip initialization
+	}
+
+	store, err := storage.NewL3SQLiteStore(l.workspace, l.embedder)
+	if err != nil {
+		return fmt.Errorf("failed to create L3 store: %w", err)
+	}
+
+	if err := store.Initialize(ctx); err != nil {
+		return fmt.Errorf("failed to initialize L3 store: %w", err)
+	}
+
+	l.store = store
 	return nil
 }
 
-// Add adds raw content to L3
+// Add adds raw content to L3 with embedding
 func (l *L3RawLayer) Add(ctx context.Context, item *types.MemoryItem) error {
+	if l.store == nil {
+		return fmt.Errorf("L3 store not initialized")
+	}
+
 	if item.Layer != types.LayerL3 {
 		return fmt.Errorf("invalid layer for L3: expected L3, got %d", item.Layer)
 	}
-	return nil
+
+	return l.store.Store(ctx, item)
 }
 
-// Search performs semantic search
+// Search performs semantic search in L3
 func (l *L3RawLayer) Search(ctx context.Context, query string, opts *types.RetrieveOptions) ([]*types.MemoryItem, error) {
-	return []*types.MemoryItem{}, nil
+	if l.store == nil {
+		return []*types.MemoryItem{}, nil
+	}
+
+	results, err := l.store.Search(ctx, query, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	items := make([]*types.MemoryItem, len(results))
+	for i, r := range results {
+		items[i] = r.Item
+	}
+
+	return items, nil
 }
 
-// GetAll returns all L3 memories
+// SearchWithScores performs semantic search with similarity scores
+func (l *L3RawLayer) SearchWithScores(ctx context.Context, query string, opts *types.RetrieveOptions) ([]*types.SearchResult, error) {
+	if l.store == nil {
+		return []*types.SearchResult{}, nil
+	}
+
+	return l.store.Search(ctx, query, opts)
+}
+
+// GetAll returns all L3 memories (not recommended for L3, use Search instead)
 func (l *L3RawLayer) GetAll() []*types.MemoryItem {
-	return nil
+	return nil // L3 is for search, not enumeration
 }
 
-// GetForUser returns L3 memories for a user
+// GetForUser returns L3 memories for a user (not recommended, use Search)
 func (l *L3RawLayer) GetForUser(userID string) []*types.MemoryItem {
-	return nil
+	return nil // L3 is for semantic search, not user filtering
 }
 
 // Compact is a no-op for L3
@@ -357,9 +403,25 @@ func (l *L3RawLayer) Compact(ctx context.Context) error {
 	return nil
 }
 
-// Close closes the layer
+// Close closes the L3 layer
 func (l *L3RawLayer) Close() error {
+	if l.store != nil {
+		return l.store.Close()
+	}
 	return nil
+}
+
+// DeleteBySource removes all memories from a source file
+func (l *L3RawLayer) DeleteBySource(ctx context.Context, source string) error {
+	if l.store == nil {
+		return nil
+	}
+	return l.store.DeleteBySource(ctx, source)
+}
+
+// GetStore returns the underlying L3 store
+func (l *L3RawLayer) GetStore() *storage.L3SQLiteStore {
+	return l.store
 }
 
 func generateID() string {
