@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kinwyb/kanflux/knowledgebase/memoria/types"
+	"github.com/kinwyb/kanflux/memoria/types"
 )
 
 // Scheduler handles periodic triggering of processors

@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kinwyb/kanflux/knowledgebase/memoria/llm"
-	"github.com/kinwyb/kanflux/knowledgebase/memoria/types"
+	"github.com/kinwyb/kanflux/memoria/llm"
+	"github.com/kinwyb/kanflux/memoria/types"
 )
 
 // ChatProcessor processes chat history for memory extraction

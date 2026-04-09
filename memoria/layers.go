@@ -7,9 +7,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kinwyb/kanflux/knowledgebase/memoria/llm"
-	"github.com/kinwyb/kanflux/knowledgebase/memoria/storage"
-	"github.com/kinwyb/kanflux/knowledgebase/memoria/types"
+	"github.com/kinwyb/kanflux/memoria/llm"
+	"github.com/kinwyb/kanflux/memoria/storage"
+	"github.com/kinwyb/kanflux/memoria/types"
 )
 
 // L1FactsLayer implements the L1 (Key Facts) layer

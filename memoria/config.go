@@ -4,16 +4,16 @@ import (
 	"errors"
 	"time"
 
-	"github.com/kinwyb/kanflux/knowledgebase/memoria/types"
+	"github.com/kinwyb/kanflux/memoria/types"
 )
 
 // Config holds configuration for Memoria service
 type Config struct {
-	Workspace        string            `json:"workspace"`
-	ScheduleConfig   *ScheduleConfig   `json:"schedule_config"`
-	StorageConfig    *types.StorageConfig    `json:"storage_config"`
-	ProcessorConfig  *types.ProcessorConfig  `json:"processor_config"`
-	WatchPaths       []types.WatchPath       `json:"watch_paths"`
+	Workspace       string                 `json:"workspace"`
+	ScheduleConfig  *ScheduleConfig        `json:"schedule_config"`
+	StorageConfig   *types.StorageConfig   `json:"storage_config"`
+	ProcessorConfig *types.ProcessorConfig `json:"processor_config"`
+	WatchPaths      []types.WatchPath      `json:"watch_paths"`
 }
 
 // ScheduleConfig for periodic scheduling

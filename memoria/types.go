@@ -3,7 +3,7 @@
 package memoria
 
 import (
-	"github.com/kinwyb/kanflux/knowledgebase/memoria/types"
+	"github.com/kinwyb/kanflux/memoria/types"
 )
 
 // Re-export types from types package

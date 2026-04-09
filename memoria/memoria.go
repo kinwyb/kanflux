@@ -8,10 +8,10 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/kinwyb/kanflux/knowledgebase/memoria/llm"
-	"github.com/kinwyb/kanflux/knowledgebase/memoria/processor"
-	"github.com/kinwyb/kanflux/knowledgebase/memoria/storage"
-	"github.com/kinwyb/kanflux/knowledgebase/memoria/types"
+	"github.com/kinwyb/kanflux/memoria/llm"
+	"github.com/kinwyb/kanflux/memoria/processor"
+	"github.com/kinwyb/kanflux/memoria/storage"
+	"github.com/kinwyb/kanflux/memoria/types"
 )
 
 // Memoria is the main orchestrator for the memory agent service
@@ -29,8 +29,7 @@ type Memoria struct {
 	l3 *L3RawLayer
 
 	// L3 语义搜索
-	embedder    types.Embedder
-	vectorStore types.VectorStore
+	embedder types.Embedder
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -105,11 +104,6 @@ func (m *Memoria) SetEmbedder(emb types.Embedder) {
 			slog.Warn("Failed to initialize L3 layer", "error", err)
 		}
 	}
-}
-
-// SetVectorStore sets the vector store for L3 (optional, L3 has its own store)
-func (m *Memoria) SetVectorStore(vs types.VectorStore) {
-	m.vectorStore = vs
 }
 
 // SetL3KnowledgeBase initializes L3 layer with embedder
@@ -416,7 +410,7 @@ func (m *Memoria) calculateKeywordScore(item *types.MemoryItem, queryLower strin
 	summaryScore := float64(summaryMatch) / float64(len(queryTerms))
 	contentScore := float64(contentMatch) / float64(len(queryTerms)*2) // 内容匹配权重更低
 
-	return summaryScore * 0.7 + contentScore * 0.3
+	return summaryScore*0.7 + contentScore*0.3
 }
 
 // sortResultsByScore sorts results by score descending

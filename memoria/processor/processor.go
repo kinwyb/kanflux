@@ -1,7 +1,7 @@
 package processor
 
 import (
-	"github.com/kinwyb/kanflux/knowledgebase/memoria/types"
+	"github.com/kinwyb/kanflux/memoria/types"
 )
 
 // BaseProcessor provides common functionality for processors

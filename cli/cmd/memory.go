@@ -11,8 +11,8 @@ import (
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
 	"github.com/kinwyb/kanflux/config"
-	"github.com/kinwyb/kanflux/knowledgebase/memoria"
-	"github.com/kinwyb/kanflux/knowledgebase/memoria/types"
+	"github.com/kinwyb/kanflux/memoria"
+	"github.com/kinwyb/kanflux/memoria/types"
 	"github.com/kinwyb/kanflux/providers"
 
 	"github.com/spf13/cobra"

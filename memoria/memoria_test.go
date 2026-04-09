@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kinwyb/kanflux/knowledgebase/memoria/storage"
-	"github.com/kinwyb/kanflux/knowledgebase/memoria/types"
+	"github.com/kinwyb/kanflux/memoria/storage"
+	"github.com/kinwyb/kanflux/memoria/types"
 )
 
 func TestConfig(t *testing.T) {

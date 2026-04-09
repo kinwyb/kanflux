@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kinwyb/kanflux/knowledgebase/memoria/types"
+	"github.com/kinwyb/kanflux/memoria/types"
 )
 
 // SummarizerImpl implements the Summarizer interface using ChatModel
@@ -493,11 +493,11 @@ func parseChatBatchResponse(response string, userCtx types.UserIdentity) []*type
 	}
 
 	var items []struct {
-		QAIndex   int      `json:"qa_index"`
-		HallType  string   `json:"hall_type"`
-		Layer     string   `json:"layer"`
-		Summary   string   `json:"summary"`
-		Keywords  []string `json:"keywords"`
+		QAIndex  int      `json:"qa_index"`
+		HallType string   `json:"hall_type"`
+		Layer    string   `json:"layer"`
+		Summary  string   `json:"summary"`
+		Keywords []string `json:"keywords"`
 	}
 
 	if err := json.Unmarshal([]byte(response), &items); err != nil {

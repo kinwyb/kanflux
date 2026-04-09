@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/kinwyb/kanflux/knowledgebase/memoria/types"
+	"github.com/kinwyb/kanflux/memoria/types"
 	"github.com/kinwyb/mempalace-go/pkg/mempalace"
 )
 

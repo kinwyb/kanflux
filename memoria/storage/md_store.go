@@ -14,16 +14,16 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kinwyb/kanflux/knowledgebase/memoria/types"
+	"github.com/kinwyb/kanflux/memoria/types"
 )
 
 // MDStore implements Storage interface using markdown files
 type MDStore struct {
-	config     *types.StorageConfig
-	baseDir    string
-	mu         sync.RWMutex
-	fileCache  map[string][]*types.MemoryItem
-	fileIndex  *FileIndex // 文件处理状态索引
+	config    *types.StorageConfig
+	baseDir   string
+	mu        sync.RWMutex
+	fileCache map[string][]*types.MemoryItem
+	fileIndex *FileIndex // 文件处理状态索引
 }
 
 // StorageConfig alias for backward compatibility
