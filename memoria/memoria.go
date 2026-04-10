@@ -127,7 +127,7 @@ func (m *Memoria) SetChatModel(model types.ChatModel) {
 	m.fileProcessor = processor.NewFileProcessor(
 		m.summarizer,
 		m.config.ProcessorConfig,
-		m.config.WatchPaths,
+		m.config.GetAllWatchPaths(), // 使用 GetAllWatchPaths 获取包含 KnowledgePaths 的完整路径
 	)
 	// Set storage for file index tracking
 	if fp, ok := m.fileProcessor.(*processor.FileProcessor); ok {

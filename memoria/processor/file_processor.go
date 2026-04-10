@@ -222,12 +222,15 @@ func (p *FileProcessor) scanPath(wp WatchPath, since time.Time) ([]types.Process
 		}
 
 		if info.IsDir() {
+			// 检查是否在排除列表中
 			for _, excl := range wp.Exclude {
 				if strings.Contains(path, excl) {
-					if !wp.Recursive {
-						return filepath.SkipDir
-					}
+					return filepath.SkipDir
 				}
+			}
+			// 如果不递归，跳过根目录之外的子目录
+			if path != wp.Path && !wp.Recursive {
+				return filepath.SkipDir
 			}
 			return nil
 		}
