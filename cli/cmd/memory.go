@@ -29,6 +29,7 @@ func NewMemoryCmd() *cobra.Command {
 	cmd.AddCommand(NewMemoryProcessCmd())
 	cmd.AddCommand(NewMemoryShowCmd())
 	cmd.AddCommand(NewMemoryServeCmd())
+	cmd.AddCommand(NewMemorySearchCmd())
 
 	return cmd
 }
@@ -440,4 +441,212 @@ func truncateStr(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// NewMemorySearchCmd 创建搜索命令
+func NewMemorySearchCmd() *cobra.Command {
+	var (
+		configPath string
+		workspace  string
+		mode       string
+		limit      int
+		daysBack   int
+		minScore   float64
+		sourceType string
+		hallTypes  string
+	)
+
+	cmd := &cobra.Command{
+		Use:   "search <query>",
+		Short: "搜索记忆",
+		Long: `搜索已存储的记忆内容。
+
+支持两种搜索模式:
+- keyword: 关键词搜索，快速匹配，仅搜索 chat 内容 (L1+L2+L3)
+- semantic: 语义搜索，深度理解，搜索 chat+file 内容 (L2+L3)
+
+示例:
+  kanflux memory search "database choice"                    # 关键词搜索
+  kanflux memory search "performance" -m semantic            # 语义搜索
+  kanflux memory search "auth" --days 7 --hall facts         # 最近7天的决策
+  kanflux memory search "cache" -m semantic --min-score 0.7  # 高相关性`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := context.Background()
+			query := args[0]
+
+			// 加载配置
+			cfg, err := loadConfig(configPath)
+			if err != nil {
+				return fmt.Errorf("加载配置失败: %w", err)
+			}
+
+			agentName := cfg.GetDefaultAgentName()
+			if agentName == "" {
+				agentName = "main"
+			}
+
+			resolved, err := cfg.ResolveAgentConfig(agentName)
+			if err != nil {
+				return fmt.Errorf("解析 Agent 配置失败: %w", err)
+			}
+
+			ws := resolved.Workspace
+			if workspace != "" {
+				ws = workspace
+			}
+
+			// 创建 Memoria 服务
+			memoriaConfig := memoria.NewConfig(
+				memoria.WithWorkspace(ws),
+				memoria.WithInitialScan(false), // 搜索不需要初始化扫描
+			)
+
+			mem, err := memoria.New(memoriaConfig)
+			if err != nil {
+				return fmt.Errorf("创建 Memoria 服务失败: %w", err)
+			}
+			defer mem.Close()
+
+			// 设置默认值
+			if mode == "" {
+				mode = "keyword"
+			}
+			if limit <= 0 {
+				limit = 10
+			}
+			if daysBack <= 0 {
+				daysBack = 30
+			}
+			if minScore <= 0 {
+				minScore = 0.5
+			}
+
+			fmt.Printf("搜索模式: %s\n", mode)
+			fmt.Printf("查询: %s\n", query)
+			fmt.Printf("限制: %d 条结果\n\n", limit)
+
+			// 构建搜索选项
+			opts := &types.RetrieveOptions{
+				Query: query,
+				Limit: limit,
+			}
+
+			if mode == "keyword" {
+				opts.SearchMode = types.SearchModeKeyword
+				opts.SourceType = types.SourceTypeChat
+				opts.Layers = []types.Layer{types.LayerL1, types.LayerL2, types.LayerL3}
+				opts.TimeRange = &types.TimeRange{
+					Start: time.Now().AddDate(0, 0, -daysBack),
+					End:   time.Now(),
+				}
+
+				// 解析 hallTypes
+				if hallTypes != "" {
+					typesList := strings.Split(hallTypes, ",")
+					opts.HallTypes = make([]types.HallType, 0, len(typesList))
+					for _, t := range typesList {
+						t = strings.TrimSpace(t)
+						if t != "" {
+							// 支持简写: facts, events, discoveries, preferences, advice
+							fullName := "hall_" + t
+							opts.HallTypes = append(opts.HallTypes, types.HallType(fullName))
+						}
+					}
+				}
+
+				fmt.Printf("时间范围: 最近 %d 天\n", daysBack)
+				if len(opts.HallTypes) > 0 {
+					fmt.Printf("Hall 类型: %v\n", opts.HallTypes)
+				}
+			} else {
+				opts.SearchMode = types.SearchModeSemantic
+				opts.Layers = []types.Layer{types.LayerL2, types.LayerL3}
+
+				if sourceType != "" {
+					opts.SourceType = types.SourceType(sourceType)
+					fmt.Printf("来源类型: %s\n", sourceType)
+				}
+				fmt.Printf("最小相关性: %.2f\n", minScore)
+			}
+
+			// 执行搜索
+			results, err := mem.Search(ctx, query, opts)
+			if err != nil {
+				return fmt.Errorf("搜索失败: %w", err)
+			}
+
+			// 过滤语义搜索结果
+			if mode == "semantic" && minScore > 0 {
+				filtered := make([]*types.SearchResult, 0)
+				for _, r := range results {
+					if r.Score >= minScore {
+						filtered = append(filtered, r)
+					}
+				}
+				results = filtered
+			}
+
+			fmt.Printf("存储目录: %s\n", mem.GetMemoriaDir())
+			fmt.Println()
+
+			if len(results) == 0 {
+				fmt.Println("未找到匹配的记忆")
+				if mode == "keyword" {
+					fmt.Println("建议: 尝试不同的关键词，增加 days 范围，或使用 semantic 模式")
+				} else {
+					fmt.Println("建议: 尝试自然语言描述，降低 min-score，或使用 keyword 模式")
+				}
+				return nil
+			}
+
+			fmt.Printf("找到 %d 条记忆:\n\n", len(results))
+
+			for i, r := range results {
+				layerName := "L1"
+				if r.Layer == types.LayerL2 {
+					layerName = "L2"
+				} else if r.Layer == types.LayerL3 {
+					layerName = "L3"
+				}
+
+				// 显示结果
+				fmt.Printf("--- [%d] %s ---\n", i+1, layerName)
+				fmt.Printf("匹配类型: %s (分数: %.2f)\n", r.MatchType, r.Score)
+
+				if r.Item.HallType != "" {
+					hallName := strings.Replace(string(r.Item.HallType), "hall_", "", 1)
+					fmt.Printf("Hall: %s\n", hallName)
+				}
+
+				if r.Item.SourceType != "" {
+					fmt.Printf("来源类型: %s\n", r.Item.SourceType)
+				}
+
+				// 显示内容
+				if r.Item.Summary != "" {
+					fmt.Printf("摘要: %s\n", truncateStr(r.Item.Summary, 150))
+				} else {
+					fmt.Printf("内容: %s\n", truncateStr(r.Item.Content, 150))
+				}
+
+				fmt.Printf("时间: %s\n", r.Item.Timestamp.Format("2006-01-02 15:04"))
+				fmt.Printf("来源: %s\n", r.Item.Source)
+				fmt.Println()
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVarP(&configPath, "config", "c", "", "配置文件路径")
+	cmd.Flags().StringVarP(&workspace, "workspace", "w", "", "工作目录")
+	cmd.Flags().StringVarP(&mode, "mode", "m", "keyword", "搜索模式 (keyword/semantic)")
+	cmd.Flags().IntVarP(&limit, "limit", "l", 10, "结果数量限制")
+	cmd.Flags().IntVarP(&daysBack, "days", "d", 30, "keyword模式: 搜索最近天数")
+	cmd.Flags().Float64Var(&minScore, "min-score", 0.5, "semantic模式: 最小相关性分数 (0-1)")
+	cmd.Flags().StringVar(&sourceType, "source", "", "semantic模式: 来源类型过滤 (chat/file)")
+	cmd.Flags().StringVar(&hallTypes, "hall", "", "keyword模式: Hall类型过滤 (facts,events,discoveries,preferences,advice)")
+
+	return cmd
 }
