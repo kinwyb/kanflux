@@ -299,7 +299,7 @@ func (s *SQLiteVectorStore) SearchByVector(ctx context.Context, vector []float32
 // searchByVectorInLayer searches within a specific layer
 func (s *SQLiteVectorStore) searchByVectorInLayer(ctx context.Context, vector []float32, layer int, opts *SearchOptions) ([]SearchResult, error) {
 	query := `
-		SELECT d.id, d.content, d.hall_type, d.user_id, d.source, d.source_type, d.metadata, d.layer
+		SELECT d.id, d.content, d.hall_type, d.user_id, d.source, d.source_type, d.timestamp, d.metadata, d.layer
 		FROM documents d
 		JOIN embeddings e ON d.id = e.document_id
 		WHERE d.layer = ?
@@ -330,14 +330,22 @@ func (s *SQLiteVectorStore) searchByVectorInLayer(ctx context.Context, vector []
 		var result SearchResult
 		var metadataJSON string
 		var layer int
+		var timestampStr sql.NullString
 
-		err := rows.Scan(&result.ID, &result.Content, &result.HallType, &result.UserID, &result.Source, &result.SourceType, &metadataJSON, &layer)
+		err := rows.Scan(&result.ID, &result.Content, &result.HallType, &result.UserID, &result.Source, &result.SourceType, &timestampStr, &metadataJSON, &layer)
 		if err != nil {
 			continue
 		}
 
 		result.Layer = layer
 		result.Metadata = jsonToMetadata(metadataJSON)
+
+		// Parse timestamp
+		if timestampStr.Valid && timestampStr.String != "" {
+			if t, err := time.Parse(time.RFC3339, timestampStr.String); err == nil {
+				result.Timestamp = t
+			}
+		}
 
 		// get embedding and compute similarity
 		embeddingBlob, err := s.getEmbedding(result.ID)
@@ -390,8 +398,9 @@ func (s *SQLiteVectorStore) ftsSearch(ctx context.Context, query string, opts *S
 		var result SearchResult
 		var metadataJSON string
 		var layer int
+		var timestampStr sql.NullString
 
-		err := rows.Scan(&result.ID, &result.Content, &result.Score, &metadataJSON, &layer)
+		err := rows.Scan(&result.ID, &result.Content, &result.Score, &metadataJSON, &layer, &timestampStr)
 		if err != nil {
 			continue
 		}
@@ -402,6 +411,13 @@ func (s *SQLiteVectorStore) ftsSearch(ctx context.Context, query string, opts *S
 		}
 		// normalize to 0-1 range (rough approximation)
 		result.Score = 1.0 / (1.0 + result.Score)
+
+		// Parse timestamp
+		if timestampStr.Valid && timestampStr.String != "" {
+			if t, err := time.Parse(time.RFC3339, timestampStr.String); err == nil {
+				result.Timestamp = t
+			}
+		}
 
 		result.Metadata = jsonToMetadata(metadataJSON)
 		result.Layer = layer
@@ -414,7 +430,7 @@ func (s *SQLiteVectorStore) ftsSearch(ctx context.Context, query string, opts *S
 // buildFTSQuery builds FTS5 search query
 func (s *SQLiteVectorStore) buildFTSQuery(query string, opts *SearchOptions) string {
 	baseQuery := `
-		SELECT d.id, d.content, bm25(documents_fts) as score, d.metadata, d.layer
+		SELECT d.id, d.content, bm25(documents_fts) as score, d.metadata, d.layer, d.timestamp
 		FROM documents d
 		JOIN documents_fts fts ON d.id = fts.id
 		WHERE documents_fts MATCH ?

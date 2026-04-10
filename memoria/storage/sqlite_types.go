@@ -31,6 +31,7 @@ type SearchResult struct {
 	SourceType string         `json:"source_type"`
 	Score      float64        `json:"score"`       // relevance score 0-1
 	Layer      int            `json:"layer"`
+	Timestamp  time.Time      `json:"timestamp"`
 	Metadata   map[string]any `json:"metadata,omitempty"`
 }
 
@@ -96,6 +97,7 @@ func (r *SearchResult) ToSearchResult() *types.SearchResult {
 			Source:     r.Source,
 			SourceType: types.SourceType(r.SourceType),
 			Layer:      types.Layer(r.Layer),
+			Timestamp:  r.Timestamp,
 			Metadata:   r.Metadata,
 		},
 		Score:     r.Score,
