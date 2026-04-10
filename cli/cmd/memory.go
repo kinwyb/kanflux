@@ -30,6 +30,7 @@ func NewMemoryCmd() *cobra.Command {
 	cmd.AddCommand(NewMemoryShowCmd())
 	cmd.AddCommand(NewMemoryServeCmd())
 	cmd.AddCommand(NewMemorySearchCmd())
+	cmd.AddCommand(NewMemoryInitCmd())
 
 	return cmd
 }
@@ -289,12 +290,14 @@ func NewMemoryServeCmd() *cobra.Command {
 		workspace    string
 		chatInterval int
 		fileInterval int
+		skipScan     bool
+		skipL3       bool
 	)
 
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "启动后台记忆服务",
-		Long:  `启动 Memoria 后台服务，定时处理聊天记录和文件修改。`,
+		Long:  `启动 Memoria 后台服务，定时处理聊天记录和文件修改。初始化时会扫描知识库文件和聊天记录。`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
@@ -320,41 +323,68 @@ func NewMemoryServeCmd() *cobra.Command {
 				ws = workspace
 			}
 
-			// 创建 ChatModel
+			// 创建 ChatModel（用于记忆提取）
 			chatModel, err := createMemoriaChatModel(ctx, resolved)
 			if err != nil {
 				return fmt.Errorf("创建 ChatModel 失败: %w", err)
 			}
 
-			// 创建 Memoria 配置
-			memoriaConfig := &memoria.Config{
-				Workspace: ws,
+			// 构建 Memoria 配置选项
+			opts := []memoria.ConfigOption{
+				memoria.WithWorkspace(ws),
+				memoria.WithKnowledgePaths(resolved.KnowledgePaths),
+				memoria.WithInitialScan(!skipScan),
+			}
+
+			// 添加 Embedding 配置（L3 层）
+			if !skipL3 {
+				if embCfg := getEmbeddingConfig(resolved); embCfg != nil {
+					opts = append(opts, memoria.WithEmbedding(embCfg))
+				}
 			}
 
 			// 设置定时调度
 			if chatInterval > 0 || fileInterval > 0 {
-				memoriaConfig.ScheduleConfig = &memoria.ScheduleConfig{
+				scheduleCfg := &memoria.ScheduleConfig{
 					Enabled:         true,
 					ChatInterval:    time.Duration(chatInterval) * time.Minute,
 					FileInterval:    time.Duration(fileInterval) * time.Minute,
 					CleanupInterval: time.Hour,
 				}
+				opts = append(opts, memoria.WithScheduleConfig(scheduleCfg))
 			}
 
 			// 创建 Memoria 服务
+			memoriaConfig := memoria.NewConfig(opts...)
 			mem, err := memoria.New(memoriaConfig)
 			if err != nil {
 				return fmt.Errorf("创建 Memoria 服务失败: %w", err)
 			}
 
-			// 设置 ChatModel
+			// 设置 ChatModel（用于记忆提取）
 			mem.SetChatModel(chatModel)
 
 			// 启动服务
 			fmt.Printf("启动 Memoria 服务...\n")
 			fmt.Printf("Workspace: %s\n", ws)
 			fmt.Printf("存储目录: %s\n", mem.GetMemoriaDir())
-			fmt.Printf("模型: %s (Provider: %s)\n\n", resolved.SummarizeModel, resolved.SummarizeProvider)
+			fmt.Printf("摘要模型: %s (Provider: %s)\n", resolved.SummarizeModel, resolved.SummarizeProvider)
+			if resolved.EmbeddingProvider != "" && resolved.EmbeddingModel != "" {
+				fmt.Printf("Embedding: %s (Provider: %s) [L3 已启用]\n", resolved.EmbeddingModel, resolved.EmbeddingProvider)
+			} else {
+				fmt.Printf("Embedding: 未配置 [L3 未启用]\n")
+			}
+			fmt.Printf("知识库路径: %d 个\n", len(resolved.KnowledgePaths))
+			for i, kp := range resolved.KnowledgePaths {
+				fmt.Printf("  [%d] %s (ext: %v, recursive: %v)\n", i+1, kp.Path, kp.Extensions, kp.Recursive)
+			}
+			fmt.Printf("Session 目录: %s\n", memoriaConfig.GetSessionDir())
+			if !skipScan {
+				fmt.Printf("初始扫描: 启用\n")
+			} else {
+				fmt.Printf("初始扫描: 跳过\n")
+			}
+			fmt.Println()
 
 			if err := mem.Start(ctx); err != nil {
 				mem.Close()
@@ -375,6 +405,8 @@ func NewMemoryServeCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&workspace, "workspace", "w", "", "工作目录")
 	cmd.Flags().IntVarP(&chatInterval, "chat-interval", "", 5, "聊天处理间隔(分钟)")
 	cmd.Flags().IntVarP(&fileInterval, "file-interval", "", 10, "文件处理间隔(分钟)")
+	cmd.Flags().BoolVar(&skipScan, "skip-scan", false, "跳过初始扫描")
+	cmd.Flags().BoolVar(&skipL3, "skip-l3", false, "跳过 L3 层初始化")
 
 	return cmd
 }
@@ -435,12 +467,146 @@ func createMemoriaChatModel(ctx context.Context, resolved *config.ResolvedAgentC
 	return &EinoChatModelAdapter{Model: einoModel}, nil
 }
 
+// getEmbeddingConfig 从 resolved 配置获取 Embedding 配置
+func getEmbeddingConfig(resolved *config.ResolvedAgentConfig) *memoria.EmbeddingConfig {
+	if resolved.EmbeddingProvider == "" || resolved.EmbeddingModel == "" || resolved.EmbeddingAPIKey == "" {
+		return nil
+	}
+	return &memoria.EmbeddingConfig{
+		Provider:   resolved.EmbeddingProvider,
+		Model:      resolved.EmbeddingModel,
+		APIKey:     resolved.EmbeddingAPIKey,
+		APIBaseURL: resolved.EmbeddingAPIBaseURL,
+	}
+}
+
 // truncateStr 截断字符串
 func truncateStr(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// NewMemoryInitCmd 创建初始化命令
+func NewMemoryInitCmd() *cobra.Command {
+	var (
+		configPath string
+		workspace  string
+		skipL3     bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "init",
+		Short: "初始化记忆库",
+		Long: `扫描知识库文件和聊天记录，提取记忆并存储。
+
+此命令会:
+1. 扫描配置的知识库路径 (knowledge_paths)
+2. 扫描 session 目录下的聊天记录
+3. 使用 LLM 提取记忆并分类存储到 L1/L2/L3 层
+4. 初始化 L3 语义搜索层（需要 Embedding 配置）
+
+需要配置:
+- SummarizeModel: 用于记忆提取
+- Embedding: 用于 L3 语义搜索`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := context.Background()
+
+			// 加载配置
+			cfg, err := loadConfig(configPath)
+			if err != nil {
+				return fmt.Errorf("加载配置失败: %w", err)
+			}
+
+			agentName := cfg.GetDefaultAgentName()
+			if agentName == "" {
+				agentName = "main"
+			}
+
+			resolved, err := cfg.ResolveAgentConfig(agentName)
+			if err != nil {
+				return fmt.Errorf("解析 Agent 配置失败: %w", err)
+			}
+
+			ws := resolved.Workspace
+			if workspace != "" {
+				ws = workspace
+			}
+
+			// 创建 ChatModel（用于记忆提取）
+			chatModel, err := createMemoriaChatModel(ctx, resolved)
+			if err != nil {
+				return fmt.Errorf("创建 ChatModel 失败: %w", err)
+			}
+
+			// 构建 Memoria 配置选项
+			opts := []memoria.ConfigOption{
+				memoria.WithWorkspace(ws),
+				memoria.WithKnowledgePaths(resolved.KnowledgePaths),
+				memoria.WithInitialScan(false), // 手动控制扫描
+			}
+
+			// 添加 Embedding 配置（L3 层）
+			if !skipL3 {
+				if embCfg := getEmbeddingConfig(resolved); embCfg != nil {
+					opts = append(opts, memoria.WithEmbedding(embCfg))
+				}
+			}
+
+			// 创建 Memoria 服务
+			memoriaConfig := memoria.NewConfig(opts...)
+			mem, err := memoria.New(memoriaConfig)
+			if err != nil {
+				return fmt.Errorf("创建 Memoria 服务失败: %w", err)
+			}
+			defer mem.Close()
+
+			// 设置 ChatModel（用于记忆提取）
+			mem.SetChatModel(chatModel)
+
+			// 显示配置信息
+			fmt.Printf("\n初始化记忆库...\n")
+			fmt.Printf("Workspace: %s\n", ws)
+			fmt.Printf("存储目录: %s\n", mem.GetMemoriaDir())
+			fmt.Printf("摘要模型: %s (Provider: %s)\n", resolved.SummarizeModel, resolved.SummarizeProvider)
+			fmt.Printf("知识库路径: %d 个\n", len(resolved.KnowledgePaths))
+			for i, kp := range resolved.KnowledgePaths {
+				fmt.Printf("  [%d] %s (ext: %v, recursive: %v)\n", i+1, kp.Path, kp.Extensions, kp.Recursive)
+			}
+			fmt.Printf("Session 目录: %s\n\n", memoriaConfig.GetSessionDir())
+
+			// 显示扫描前的统计
+			stats := mem.GetStats()
+			fmt.Printf("扫描前 L1 记忆数: %d\n\n", stats["l1_items"])
+
+			// 执行同步扫描
+			fmt.Println("正在扫描知识库文件和聊天记录...")
+			knowledgeItems, chatItems, err := mem.ScanAndProcess(ctx)
+			if err != nil {
+				return fmt.Errorf("扫描失败: %w", err)
+			}
+
+			// 显示扫描后的统计
+			stats = mem.GetStats()
+			fmt.Printf("\n扫描结果:\n")
+			fmt.Printf("  知识库条目: %d\n", knowledgeItems)
+			fmt.Printf("  聊天条目: %d\n", chatItems)
+			fmt.Printf("  L1 记忆总数: %d\n", stats["l1_items"])
+			if resolved.EmbeddingProvider != "" && resolved.EmbeddingModel != "" {
+				fmt.Printf("  L3 层: 已启用语义搜索\n")
+			}
+
+			fmt.Println("\n初始化完成!")
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVarP(&configPath, "config", "c", "", "配置文件路径")
+	cmd.Flags().StringVarP(&workspace, "workspace", "w", "", "工作目录")
+	cmd.Flags().BoolVar(&skipL3, "skip-l3", false, "跳过 L3 层初始化")
+
+	return cmd
 }
 
 // NewMemorySearchCmd 创建搜索命令
@@ -496,12 +662,24 @@ func NewMemorySearchCmd() *cobra.Command {
 				ws = workspace
 			}
 
-			// 创建 Memoria 服务
-			memoriaConfig := memoria.NewConfig(
+			// 构建 Memoria 配置选项
+			opts := []memoria.ConfigOption{
 				memoria.WithWorkspace(ws),
 				memoria.WithInitialScan(false), // 搜索不需要初始化扫描
-			)
+			}
 
+			// 语义搜索需要 Embedding 配置
+			if mode == "semantic" {
+				if embCfg := getEmbeddingConfig(resolved); embCfg != nil {
+					opts = append(opts, memoria.WithEmbedding(embCfg))
+				} else {
+					fmt.Println("警告: 无 Embedding 配置，语义搜索将不可用")
+					fmt.Println("提示: 使用 keyword 模式进行关键词搜索")
+				}
+			}
+
+			// 创建 Memoria 服务
+			memoriaConfig := memoria.NewConfig(opts...)
 			mem, err := memoria.New(memoriaConfig)
 			if err != nil {
 				return fmt.Errorf("创建 Memoria 服务失败: %w", err)
@@ -527,16 +705,16 @@ func NewMemorySearchCmd() *cobra.Command {
 			fmt.Printf("限制: %d 条结果\n\n", limit)
 
 			// 构建搜索选项
-			opts := &types.RetrieveOptions{
+			searchOpts := &types.RetrieveOptions{
 				Query: query,
 				Limit: limit,
 			}
 
 			if mode == "keyword" {
-				opts.SearchMode = types.SearchModeKeyword
-				opts.SourceType = types.SourceTypeChat
-				opts.Layers = []types.Layer{types.LayerL1, types.LayerL2, types.LayerL3}
-				opts.TimeRange = &types.TimeRange{
+				searchOpts.SearchMode = types.SearchModeKeyword
+				searchOpts.SourceType = types.SourceTypeChat
+				searchOpts.Layers = []types.Layer{types.LayerL1, types.LayerL2, types.LayerL3}
+				searchOpts.TimeRange = &types.TimeRange{
 					Start: time.Now().AddDate(0, 0, -daysBack),
 					End:   time.Now(),
 				}
@@ -544,34 +722,34 @@ func NewMemorySearchCmd() *cobra.Command {
 				// 解析 hallTypes
 				if hallTypes != "" {
 					typesList := strings.Split(hallTypes, ",")
-					opts.HallTypes = make([]types.HallType, 0, len(typesList))
+					searchOpts.HallTypes = make([]types.HallType, 0, len(typesList))
 					for _, t := range typesList {
 						t = strings.TrimSpace(t)
 						if t != "" {
 							// 支持简写: facts, events, discoveries, preferences, advice
 							fullName := "hall_" + t
-							opts.HallTypes = append(opts.HallTypes, types.HallType(fullName))
+							searchOpts.HallTypes = append(searchOpts.HallTypes, types.HallType(fullName))
 						}
 					}
 				}
 
 				fmt.Printf("时间范围: 最近 %d 天\n", daysBack)
-				if len(opts.HallTypes) > 0 {
-					fmt.Printf("Hall 类型: %v\n", opts.HallTypes)
+				if len(searchOpts.HallTypes) > 0 {
+					fmt.Printf("Hall 类型: %v\n", searchOpts.HallTypes)
 				}
 			} else {
-				opts.SearchMode = types.SearchModeSemantic
-				opts.Layers = []types.Layer{types.LayerL2, types.LayerL3}
+				searchOpts.SearchMode = types.SearchModeSemantic
+				searchOpts.Layers = []types.Layer{types.LayerL2, types.LayerL3}
 
 				if sourceType != "" {
-					opts.SourceType = types.SourceType(sourceType)
+					searchOpts.SourceType = types.SourceType(sourceType)
 					fmt.Printf("来源类型: %s\n", sourceType)
 				}
 				fmt.Printf("最小相关性: %.2f\n", minScore)
 			}
 
 			// 执行搜索
-			results, err := mem.Search(ctx, query, opts)
+			results, err := mem.Search(ctx, query, searchOpts)
 			if err != nil {
 				return fmt.Errorf("搜索失败: %w", err)
 			}

@@ -69,7 +69,34 @@ func (m *Memoria) initialize() error {
 	m.l1 = NewL1FactsLayer(mdStore, m.config.StorageConfig.MaxL1Tokens)
 	m.l2 = NewL2EventsLayer(mdStore, m.config.StorageConfig.MaxL2Tokens)
 
+	// 自动初始化 L3 层（如果有 Embedding 配置）
+	if m.config.Embedding != nil {
+		if err := m.initL3FromConfig(); err != nil {
+			slog.Warn("Failed to initialize L3 layer from config", "error", err)
+		}
+	}
+
 	slog.Info("Memoria initialized", "workspace", m.config.Workspace)
+	return nil
+}
+
+// initL3FromConfig 根据 Embedding 配置初始化 L3 层
+func (m *Memoria) initL3FromConfig() error {
+	ctx := context.Background()
+	embedder, err := NewEmbedderFromConfig(ctx, m.config.Embedding)
+	if err != nil {
+		return fmt.Errorf("failed to create embedder: %w", err)
+	}
+
+	m.embedder = embedder
+	m.l3 = NewL3RawLayer(m.config.GetMemoriaDir()+"/l3", embedder)
+	if err := m.l3.Initialize(ctx); err != nil {
+		return fmt.Errorf("failed to initialize L3 layer: %w", err)
+	}
+
+	slog.Info("L3 layer initialized from config",
+		"provider", m.config.Embedding.Provider,
+		"model", m.config.Embedding.Model)
 	return nil
 }
 
@@ -158,6 +185,25 @@ func (m *Memoria) initialScan() {
 	m.scanChatSessions(ctx)
 
 	slog.Info("Initial memory scan completed")
+}
+
+// ScanAndProcess performs a synchronous scan of knowledge files and chat sessions.
+// This is useful for initialization or manual triggering of memory processing.
+// Returns the number of items processed and any errors encountered.
+func (m *Memoria) ScanAndProcess(ctx context.Context) (knowledgeItems, chatItems int, err error) {
+	slog.Info("Starting synchronous memory scan")
+
+	// 1. 扫描知识库文件
+	knowledgeItems = m.scanKnowledgeFilesSync(ctx)
+
+	// 2. 扫描聊天记录
+	chatItems = m.scanChatSessionsSync(ctx)
+
+	slog.Info("Synchronous memory scan completed",
+		"knowledge_items", knowledgeItems,
+		"chat_items", chatItems)
+
+	return knowledgeItems, chatItems, nil
 }
 
 // scanKnowledgeFiles 扫描并解析知识库文件
@@ -270,6 +316,121 @@ func (m *Memoria) scanChatSessions(ctx context.Context) {
 		"l2", result.LayerCounts[types.LayerL2],
 		"l3", result.LayerCounts[types.LayerL3],
 		"errors", len(result.Errors))
+}
+
+// scanKnowledgeFilesSync 同步扫描知识库文件，返回处理的条目数
+func (m *Memoria) scanKnowledgeFilesSync(ctx context.Context) int {
+	if m.fileProcessor == nil {
+		slog.Warn("File processor not initialized, skipping knowledge scan")
+		return 0
+	}
+
+	watchPaths := m.config.GetAllWatchPaths()
+	if len(watchPaths) == 0 {
+		slog.Debug("No knowledge paths configured")
+		return 0
+	}
+
+	slog.Info("Scanning knowledge files", "paths", len(watchPaths))
+
+	fileProc, ok := m.fileProcessor.(*processor.FileProcessor)
+	if !ok {
+		slog.Warn("File processor type mismatch")
+		return 0
+	}
+
+	items, err := fileProc.ScanModifiedFiles(ctx, time.Time{})
+	if err != nil {
+		slog.Error("Failed to scan knowledge files", "error", err)
+		return 0
+	}
+
+	if len(items) == 0 {
+		slog.Debug("No knowledge files found")
+		return 0
+	}
+
+	slog.Info("Processing knowledge files", "count", len(items))
+
+	result, err := m.fileProcessor.ProcessBatch(ctx, items)
+	if err != nil {
+		slog.Error("Failed to process knowledge files", "error", err)
+		return 0
+	}
+
+	storedCount := 0
+	for _, item := range result.Items {
+		if err := m.AddMemory(ctx, item); err != nil {
+			slog.Warn("Failed to store memory item", "id", item.ID, "error", err)
+		} else {
+			storedCount++
+		}
+	}
+
+	slog.Info("Knowledge files processed",
+		"items", len(result.Items),
+		"stored", storedCount,
+		"l1", result.LayerCounts[types.LayerL1],
+		"l2", result.LayerCounts[types.LayerL2],
+		"l3", result.LayerCounts[types.LayerL3],
+		"errors", len(result.Errors))
+
+	return storedCount
+}
+
+// scanChatSessionsSync 同步扫描聊天记录，返回处理的条目数
+func (m *Memoria) scanChatSessionsSync(ctx context.Context) int {
+	if m.chatProcessor == nil {
+		slog.Warn("Chat processor not initialized, skipping session scan")
+		return 0
+	}
+
+	sessionDir := m.config.GetSessionDir()
+	slog.Info("Scanning chat sessions", "dir", sessionDir)
+
+	chatProc, ok := m.chatProcessor.(*processor.ChatProcessor)
+	if !ok {
+		slog.Warn("Chat processor type mismatch")
+		return 0
+	}
+
+	items, err := chatProc.ScanSessions(ctx, time.Time{})
+	if err != nil {
+		slog.Error("Failed to scan chat sessions", "error", err)
+		return 0
+	}
+
+	if len(items) == 0 {
+		slog.Debug("No chat sessions found")
+		return 0
+	}
+
+	slog.Info("Processing chat sessions", "count", len(items))
+
+	result, err := m.chatProcessor.ProcessBatch(ctx, items)
+	if err != nil {
+		slog.Error("Failed to process chat sessions", "error", err)
+		return 0
+	}
+
+	storedCount := 0
+	for _, item := range result.Items {
+		if err := m.AddMemory(ctx, item); err != nil {
+			slog.Warn("Failed to store memory item", "id", item.ID, "error", err)
+		} else {
+			storedCount++
+		}
+	}
+
+	slog.Info("Chat sessions processed",
+		"items", len(result.Items),
+		"stored", storedCount,
+		"l1", result.LayerCounts[types.LayerL1],
+		"l2", result.LayerCounts[types.LayerL2],
+		"l3", result.LayerCounts[types.LayerL3],
+		"errors", len(result.Errors))
+
+	return storedCount
 }
 
 // Stop stops the Memoria service

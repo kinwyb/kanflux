@@ -8,6 +8,14 @@ import (
 	"github.com/kinwyb/kanflux/memoria/types"
 )
 
+// EmbeddingConfig 配置 L3 层的 Embedder
+type EmbeddingConfig struct {
+	Provider   string `json:"provider"`    // openai, ollama
+	Model      string `json:"model"`       // embedding model name
+	APIKey     string `json:"api_key"`     // API key
+	APIBaseURL string `json:"api_base_url"` // API base URL
+}
+
 // Config holds configuration for Memoria service
 type Config struct {
 	Workspace       string                 `json:"workspace"`
@@ -17,6 +25,8 @@ type Config struct {
 	WatchPaths      []types.WatchPath      `json:"watch_paths"`
 	// KnowledgePaths 知识库路径配置（从主配置继承）
 	KnowledgePaths  []config.KnowledgePathConfig `json:"knowledge_paths"`
+	// Embedding 配置（用于 L3 语义搜索）
+	Embedding       *EmbeddingConfig `json:"embedding"`
 	// InitialScan 初始化时是否扫描（默认 true）
 	InitialScan     bool `json:"initial_scan"`
 }
@@ -108,6 +118,11 @@ func WithKnowledgePaths(paths []config.KnowledgePathConfig) ConfigOption {
 // WithInitialScan sets whether to scan on initialization
 func WithInitialScan(scan bool) ConfigOption {
 	return func(c *Config) { c.InitialScan = scan }
+}
+
+// WithEmbedding sets the embedding config for L3 layer
+func WithEmbedding(cfg *EmbeddingConfig) ConfigOption {
+	return func(c *Config) { c.Embedding = cfg }
 }
 
 // ApplyOptions applies options to the config
