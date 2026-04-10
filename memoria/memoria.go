@@ -857,32 +857,26 @@ func (m *Memoria) searchL3Keyword(ctx context.Context, query string, opts *types
 // calculateKeywordScore calculates keyword match score
 func (m *Memoria) calculateKeywordScore(item *types.MemoryItem, queryLower string, queryTerms []string) float64 {
 	summaryLower := strings.ToLower(item.Summary)
-	contentLower := strings.ToLower(item.Content)
 
-	// 完全匹配
+	// 完全匹配 Summary
 	if strings.Contains(summaryLower, queryLower) {
 		return 1.0
 	}
-	if strings.Contains(contentLower, queryLower) {
+
+	// L1/L2 only have Summary, L3 has Content for semantic search
+	contentLower := strings.ToLower(item.Content)
+	if contentLower != "" && strings.Contains(contentLower, queryLower) {
 		return 0.9
 	}
 
 	// 关键词匹配
 	summaryTerms := strings.Fields(summaryLower)
-	contentTerms := strings.Fields(contentLower)
 
 	summaryMatch := 0
-	contentMatch := 0
-
 	for _, qt := range queryTerms {
 		for _, st := range summaryTerms {
 			if st == qt {
 				summaryMatch++
-			}
-		}
-		for _, ct := range contentTerms {
-			if ct == qt {
-				contentMatch++
 			}
 		}
 	}
@@ -892,9 +886,23 @@ func (m *Memoria) calculateKeywordScore(item *types.MemoryItem, queryLower strin
 	}
 
 	summaryScore := float64(summaryMatch) / float64(len(queryTerms))
-	contentScore := float64(contentMatch) / float64(len(queryTerms)*2) // 内容匹配权重更低
 
-	return summaryScore*0.7 + contentScore*0.3
+	// If Content exists (L3), include it in scoring with lower weight
+	if contentLower != "" {
+		contentTerms := strings.Fields(contentLower)
+		contentMatch := 0
+		for _, qt := range queryTerms {
+			for _, ct := range contentTerms {
+				if ct == qt {
+					contentMatch++
+				}
+			}
+		}
+		contentScore := float64(contentMatch) / float64(len(queryTerms)*2)
+		return summaryScore*0.7 + contentScore*0.3
+	}
+
+	return summaryScore
 }
 
 // sortResultsByScore sorts results by score descending

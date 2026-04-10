@@ -174,6 +174,7 @@ func (s *SummarizerImpl) categorizeWithLLM(ctx context.Context, content string) 
 }
 
 // ProcessChatContent processes chat Q&A content using ChatSummarizePrompt
+// Returns MemoryItems for L1/L2 (summary) and optionally L3 (raw content)
 func (s *SummarizerImpl) ProcessChatContent(ctx context.Context, question, answer string, userCtx types.UserIdentity) ([]*types.MemoryItem, error) {
 	prompt := ChatSummarizePrompt(question, answer)
 	response, err := s.Model.GenerateWithSystem(ctx, SystemPrompt, prompt)
@@ -183,11 +184,31 @@ func (s *SummarizerImpl) ProcessChatContent(ctx context.Context, question, answe
 
 	// Parse response
 	result := parseChatResponse(response, userCtx)
+
+	// Add L3 item with raw content if we have L1/L2 items
+	if len(result) > 0 {
+		rawContent := "Q: " + question + "\n\nA: " + answer
+		l3Item := &types.MemoryItem{
+			ID:         generateID(),
+			HallType:   types.HallEvents,
+			Layer:      types.LayerL3,
+			SourceType: types.SourceTypeChat,
+			Content:    rawContent,
+			Summary:    "", // L3 doesn't need summary
+			Source:     "chat",
+			UserID:     userCtx.GetUserID(),
+			Timestamp:  time.Now(),
+			Tokens:     estimateTokens(rawContent),
+		}
+		result = append(result, l3Item)
+	}
+
 	return result, nil
 }
 
 // ProcessChatBatchContent processes multiple Q&A pairs in one LLM call
 // This reduces API calls when processing chat history
+// Returns MemoryItems for L1/L2 (summaries) and L3 (raw content)
 func (s *SummarizerImpl) ProcessChatBatchContent(ctx context.Context, qaPairs []QAPair, userCtx types.UserIdentity) ([]*types.MemoryItem, error) {
 	if len(qaPairs) == 0 {
 		return nil, nil
@@ -205,7 +226,27 @@ func (s *SummarizerImpl) ProcessChatBatchContent(ctx context.Context, qaPairs []
 	}
 
 	// Parse batch response
-	return parseChatBatchResponse(response, userCtx), nil
+	result := parseChatBatchResponse(response, userCtx)
+
+	// Add L3 items with raw content for each Q&A pair
+	for _, qa := range qaPairs {
+		rawContent := "Q: " + qa.Question + "\n\nA: " + qa.Answer
+		l3Item := &types.MemoryItem{
+			ID:         generateID(),
+			HallType:   types.HallEvents,
+			Layer:      types.LayerL3,
+			SourceType: types.SourceTypeChat,
+			Content:    rawContent,
+			Summary:    "",
+			Source:     "chat",
+			UserID:     userCtx.GetUserID(),
+			Timestamp:  time.Now(),
+			Tokens:     estimateTokens(rawContent),
+		}
+		result = append(result, l3Item)
+	}
+
+	return result, nil
 }
 
 // ProcessFileContent processes file content using FileSimplePrompt
@@ -504,12 +545,18 @@ func parseChatResponse(response string, userCtx types.UserIdentity) []*types.Mem
 		layer = types.LayerL3
 	}
 
+	// Only L3 needs Content, L1/L2 only need Summary
+	content := ""
+	if layer == types.LayerL3 {
+		content = result.Summary
+	}
+
 	return []*types.MemoryItem{{
 		ID:         generateID(),
 		HallType:   hallType,
 		Layer:      layer,
 		SourceType: types.SourceTypeChat,
-		Content:    result.Summary,
+		Content:    content,
 		Summary:    result.Summary,
 		Source:     "chat",
 		UserID:     userCtx.GetUserID(),
@@ -593,7 +640,7 @@ func parseChatBatchResponse(response string, userCtx types.UserIdentity) []*type
 			HallType:   hallType,
 			Layer:      layer,
 			SourceType: types.SourceTypeChat,
-			Content:    summary,
+			Content:    "", // Only L3 needs Content
 			Summary:    summary,
 			Source:     "chat",
 			UserID:     userCtx.GetUserID(),
@@ -630,7 +677,7 @@ func parseSimpleFileResponse(response string, userCtx types.UserIdentity) []*typ
 			HallType:   types.HallDiscoveries, // Files use discoveries for L2
 			Layer:      types.LayerL2,
 			SourceType: types.SourceTypeFile,
-			Content:    response,
+			Content:    "",
 			Summary:    response,
 			Source:     "file",
 			UserID:     userCtx.GetUserID(),
@@ -656,7 +703,7 @@ func parseSimpleFileResponse(response string, userCtx types.UserIdentity) []*typ
 		HallType:   types.HallDiscoveries, // Files use discoveries for L2
 		Layer:      types.LayerL2,
 		SourceType: types.SourceTypeFile,
-		Content:    result.Summary,
+		Content:    "",
 		Summary:    result.Summary,
 		Source:     "file",
 		UserID:     userCtx.GetUserID(),

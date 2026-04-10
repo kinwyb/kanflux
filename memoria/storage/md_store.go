@@ -300,8 +300,11 @@ func (s *MDStore) generateMarkdown(items []*types.MemoryItem, layer types.Layer)
 			sb.WriteString(item.Summary + "\n\n")
 		}
 
-		sb.WriteString("### Content\n")
-		sb.WriteString(item.Content + "\n\n")
+		// L3 stores full content for semantic search, L1/L2 only need summary
+		if layer == types.LayerL3 && item.Content != "" {
+			sb.WriteString("### Content\n")
+			sb.WriteString(item.Content + "\n\n")
+		}
 
 		if len(item.Metadata) > 0 {
 			sb.WriteString("### Metadata\n")
