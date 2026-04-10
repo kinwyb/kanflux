@@ -214,10 +214,28 @@ func (p *ChatProcessor) parseJSONL(content string) []ChatMessage {
 
 // ChatMessage represents a chat message from JSONL
 type ChatMessage struct {
-	Role      string `json:"role"`
-	Content   string `json:"content"`
-	Name      string `json:"name,omitempty"`
-	Timestamp string `json:"timestamp,omitempty"`
+	Role         string         `json:"role"`
+	Content      string         `json:"content"`
+	MultiContent []ContentPart  `json:"multi_content,omitempty"`
+	ToolCalls    []ToolCall     `json:"tool_calls,omitempty"`
+	Name         string         `json:"name,omitempty"`
+	Timestamp    string         `json:"timestamp,omitempty"`
+}
+
+// ContentPart represents a part of multi-content message
+type ContentPart struct {
+	Type string `json:"type"`
+	Text string `json:"text,omitempty"`
+}
+
+// ToolCall represents a tool call in a message
+type ToolCall struct {
+	ID   string `json:"id"`
+	Type string `json:"type"`
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
 }
 
 // QAPair represents a question-answer pair
@@ -227,15 +245,31 @@ type QAPair struct {
 	Time     time.Time
 }
 
+// extractQAPairs extracts question-answer pairs from messages
+// It skips tool messages and finds the final assistant response without tool calls
 func (p *ChatProcessor) extractQAPairs(messages []ChatMessage) []QAPair {
-	pairs := make([]QAPair, 0)
-
+	var pairs []QAPair
 	var currentQuestion string
 	var questionTime time.Time
 
-	for _, msg := range messages {
-		if msg.Role == "user" {
-			currentQuestion = msg.Content
+	for i := 0; i < len(messages); i++ {
+		msg := messages[i]
+
+		switch msg.Role {
+		case "user":
+			// User message: save previous QA pair, start new question
+			if currentQuestion != "" {
+				// Find the last assistant message without tool calls as answer
+				answer := p.findFinalAnswer(messages, i-1)
+				if answer != "" {
+					pairs = append(pairs, QAPair{
+						Question: currentQuestion,
+						Answer:   answer,
+						Time:     questionTime,
+					})
+				}
+			}
+			currentQuestion = p.extractMessageText(msg)
 			if msg.Timestamp != "" {
 				if t, err := time.Parse(time.RFC3339, msg.Timestamp); err == nil {
 					questionTime = t
@@ -243,17 +277,64 @@ func (p *ChatProcessor) extractQAPairs(messages []ChatMessage) []QAPair {
 			} else {
 				questionTime = time.Now()
 			}
-		} else if msg.Role == "assistant" && currentQuestion != "" {
+
+		case "assistant":
+			// Assistant message: continue processing, answer is determined at next user message or end
+			// Skip here, answer will be found by findFinalAnswer
+
+		case "tool":
+			// Tool message: skip
+		}
+	}
+
+	// Handle the last QA pair
+	if currentQuestion != "" {
+		answer := p.findFinalAnswer(messages, len(messages)-1)
+		if answer != "" {
 			pairs = append(pairs, QAPair{
 				Question: currentQuestion,
-				Answer:   msg.Content,
+				Answer:   answer,
 				Time:     questionTime,
 			})
-			currentQuestion = ""
 		}
 	}
 
 	return pairs
+}
+
+// findFinalAnswer finds the last assistant message without tool calls from startPos backwards
+func (p *ChatProcessor) findFinalAnswer(messages []ChatMessage, startPos int) string {
+	for i := startPos; i >= 0; i-- {
+		msg := messages[i]
+		if msg.Role == "assistant" && len(msg.ToolCalls) == 0 {
+			text := p.extractMessageText(msg)
+			if text != "" {
+				return text
+			}
+		}
+		// Stop at user message to avoid crossing to previous QA
+		if msg.Role == "user" {
+			break
+		}
+	}
+	return ""
+}
+
+// extractMessageText extracts text content from a message
+func (p *ChatProcessor) extractMessageText(msg ChatMessage) string {
+	if msg.Content != "" {
+		return msg.Content
+	}
+	if len(msg.MultiContent) > 0 {
+		var texts []string
+		for _, part := range msg.MultiContent {
+			if part.Type == "text" && part.Text != "" {
+				texts = append(texts, part.Text)
+			}
+		}
+		return strings.Join(texts, "\n")
+	}
+	return ""
 }
 
 // processQA uses ChatSummarizePrompt for processing single QA pair
