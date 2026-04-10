@@ -12,7 +12,8 @@ import (
 	"github.com/kinwyb/kanflux/memoria/types"
 )
 
-// L1FactsLayer implements the L1 (Key Facts) layer
+// L1FactsLayer implements the L1 (Preferences) layer
+// Only stores user preferences, concise and always loaded
 type L1FactsLayer struct {
 	storage    types.Storage
 	maxTokens  int
@@ -51,14 +52,15 @@ func (l *L1FactsLayer) Initialize(ctx context.Context) error {
 	return nil
 }
 
-// Add adds a new L1 memory item
+// Add adds a new L1 memory item (only preferences)
 func (l *L1FactsLayer) Add(ctx context.Context, item *types.MemoryItem) error {
 	if item.Layer != types.LayerL1 {
 		return fmt.Errorf("invalid layer for L1: expected L1, got %d", item.Layer)
 	}
 
-	if item.HallType != types.HallFacts && item.HallType != types.HallPreferences {
-		return fmt.Errorf("invalid hall type for L1: expected facts or preferences, got %s", item.HallType)
+	// L1 only accepts preferences now
+	if item.HallType != types.HallPreferences {
+		return fmt.Errorf("invalid hall type for L1: expected preferences, got %s (facts should go to L2)", item.HallType)
 	}
 
 	l.mu.RLock()
@@ -261,8 +263,9 @@ func (l *L2EventsLayer) Add(ctx context.Context, item *types.MemoryItem) error {
 		return fmt.Errorf("invalid layer for L2: expected L2, got %d", item.Layer)
 	}
 
-	if item.HallType != types.HallEvents && item.HallType != types.HallDiscoveries {
-		return fmt.Errorf("invalid hall type for L2: expected events or discoveries, got %s", item.HallType)
+	// L2 accepts facts, events, and discoveries
+	if item.HallType != types.HallFacts && item.HallType != types.HallEvents && item.HallType != types.HallDiscoveries {
+		return fmt.Errorf("invalid hall type for L2: expected facts, events or discoveries, got %s", item.HallType)
 	}
 
 	// Store to SQLite first (primary storage for semantic search)

@@ -12,16 +12,20 @@ const (
 	SystemPrompt = `You are a memory extraction assistant. Your job is to analyze content and extract useful information that should be stored for long-term memory.
 
 You categorize content into one of 5 hall types:
-- hall_facts: Important decisions, locked choices, key facts that should always be remembered
+- hall_facts: Important decisions, locked choices, key facts that should be remembered
 - hall_events: Sessions, milestones, debugging process, notable activities
 - hall_discoveries: Breakthroughs, new insights, learned information
-- hall_preferences: Habits, preferences, opinions, user tendencies
+- hall_preferences: Habits, preferences, opinions, user tendencies (ALWAYS assign to L1)
 - hall_advice: Recommendations, solutions, helpful advice given
 
-You also assign a layer:
-- L1: Critical facts/preferences that should always be loaded (~120 tokens total)
-- L2: Events and discoveries loaded on demand (~500 tokens per entry)
-- L3: Raw content for deep search
+Layer assignment rules:
+- L1: ONLY for user preferences (hall_preferences). These are concise, always loaded, ~120 tokens total.
+- L2: For facts (hall_facts), events (hall_events), and discoveries (hall_discoveries). ~500 tokens per entry.
+- L3: Raw content for deep semantic search.
+
+IMPORTANT:
+- Preferences (hall_preferences) must ALWAYS go to L1
+- Facts (hall_facts) must ALWAYS go to L2, never L1
 
 Respond concisely and in the requested format.`
 )
@@ -96,16 +100,21 @@ Answer:
 %s
 
 Extract:
-1. Any decisions or facts (hall_facts)
-2. Any preferences expressed (hall_preferences)
-3. Any notable events or activities (hall_events)
-4. Any insights or discoveries (hall_discoveries)
-5. Any advice or solutions (hall_advice)
+1. Any decisions or facts (hall_facts) → assign to L2
+2. Any preferences expressed (hall_preferences) → assign to L1
+3. Any notable events or activities (hall_events) → assign to L2
+4. Any insights or discoveries (hall_discoveries) → assign to L2
+5. Any advice or solutions (hall_advice) → assign to L2
+
+Layer rules:
+- L1: ONLY for hall_preferences (user preferences, habits)
+- L2: For hall_facts, hall_events, hall_discoveries, hall_advice
+- L3: Raw content (not used for summaries)
 
 Return a JSON object with the extracted information in this format:
 {
   "hall_type": "...",
-  "layer": "L1/L2/L3",
+  "layer": "L1/L2",
   "summary": "...",
   "keywords": ["..."]
 }`, question, answer)
@@ -123,18 +132,22 @@ func ChatBatchSummarizePrompt(qaPairs []QAPair) string {
 
 %s
 For each Q&A that contains useful information, extract:
-1. Any decisions or facts (hall_facts)
-2. Any preferences expressed (hall_preferences)
-3. Any notable events or activities (hall_events)
-4. Any insights or discoveries (hall_discoveries)
-5. Any advice or solutions (hall_advice)
+1. Any decisions or facts (hall_facts) → assign to L2
+2. Any preferences expressed (hall_preferences) → assign to L1
+3. Any notable events or activities (hall_events) → assign to L2
+4. Any insights or discoveries (hall_discoveries) → assign to L2
+5. Any advice or solutions (hall_advice) → assign to L2
+
+Layer rules:
+- L1: ONLY for hall_preferences (user preferences, habits)
+- L2: For hall_facts, hall_events, hall_discoveries, hall_advice
 
 Return a JSON array of extracted memories. Skip Q&A pairs that don't contain useful information.
 [
   {
     "qa_index": 0,
     "hall_type": "...",
-    "layer": "L1/L2/L3",
+    "layer": "L1/L2",
     "summary": "...",
     "keywords": ["..."]
   },

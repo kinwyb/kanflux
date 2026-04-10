@@ -112,10 +112,10 @@ func TestL1Layer(t *testing.T) {
 
 	item := &types.MemoryItem{
 		ID:        "l1_test_1",
-		HallType:  types.HallFacts,
+		HallType:  types.HallPreferences, // L1 only accepts preferences now
 		Layer:     types.LayerL1,
 		Content:   "L1 test content",
-		Summary:   "L1 test summary",
+		Summary:   "User prefers dark mode",
 		Source:    "test",
 		UserID:    "user1",
 		Timestamp: time.Now(),

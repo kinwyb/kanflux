@@ -147,7 +147,9 @@ func detectByKeywords(content string) (types.HallType, types.Layer) {
 		layer = types.LayerL3
 	default:
 		// Determine layer based on hall type
-		if hallType == types.HallFacts || hallType == types.HallPreferences {
+		// L1 only for preferences (concise, always loaded)
+		// L2 for facts, events, discoveries
+		if hallType == types.HallPreferences {
 			layer = types.LayerL1
 		} else {
 			layer = types.LayerL2
@@ -538,11 +540,11 @@ func parseChatResponse(response string, userCtx types.UserIdentity) []*types.Mem
 		hallType = types.HallAdvice
 	}
 
+	// Determine layer based on hall type
+	// L1 only for preferences, L2 for facts/events/discoveries/advice
 	layer := types.LayerL2
-	if result.Layer == "L1" {
+	if hallType == types.HallPreferences {
 		layer = types.LayerL1
-	} else if result.Layer == "L3" {
-		layer = types.LayerL3
 	}
 
 	// Only L3 needs Content, L1/L2 only need Summary
@@ -593,7 +595,6 @@ func parseChatBatchResponse(response string, userCtx types.UserIdentity) []*type
 	for _, rawItem := range rawItems {
 		// Extract fields from map
 		hallTypeStr, _ := rawItem["hall_type"].(string)
-		layerStr, _ := rawItem["layer"].(string)
 		summary, _ := rawItem["summary"].(string)
 
 		if summary == "" {
@@ -628,11 +629,11 @@ func parseChatBatchResponse(response string, userCtx types.UserIdentity) []*type
 			hallType = types.HallAdvice
 		}
 
+		// Determine layer based on hall type
+		// L1 only for preferences, L2 for facts/events/discoveries/advice
 		layer := types.LayerL2
-		if layerStr == "L1" {
+		if hallType == types.HallPreferences {
 			layer = types.LayerL1
-		} else if layerStr == "L3" {
-			layer = types.LayerL3
 		}
 
 		result = append(result, &types.MemoryItem{

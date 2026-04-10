@@ -23,19 +23,28 @@ Memoria 区分两种数据来源，采用不同的处理策略：
 
 | 层级 | 名称 | Token 限制 | 特点 | Chat 存储 | File 存储 |
 |------|------|-----------|------|----------|----------|
-| **L1** | 关键事实层 | ~120 tokens | 始终加载，内存缓存 | 用户关键决策、偏好 | ❌ 不存储 |
-| **L2** | 房间回忆层 | ~500 tokens | 按需加载 | 用户事件、发现 | 文件内容总结 |
+| **L1** | 用户偏好层 | ~120 tokens | 始终加载，内存缓存 | 用户偏好、习惯 | ❌ 不存储 |
+| **L2** | 事件/事实层 | ~500 tokens | 按需加载，语义搜索 | 事件、发现、决策 | 文件内容总结 |
 | **L3** | 深度搜索层 | 无限制 | 全库语义搜索 | 原始聊天记录 | 文件全文向量 |
+
+**层级说明：**
+- **L1** 只存储用户偏好（hall_preferences），简介明了，始终加载在内存中
+- **L2** 存储关键事实（hall_facts）、事件（hall_events）、发现（hall_discoveries），支持语义搜索
+- **L3** 存储原始内容，用于深度语义搜索
 
 ### 五个 Hall 类型（仅 Chat 使用）
 
-| Hall 类型 | 说明 | 示例 |
-|-----------|------|------|
-| `hall_facts` | 决策、锁定选择 | "项目使用 PostgreSQL 作为主数据库" |
-| `hall_events` | 会话、里程碑、调试过程 | "2024-01-15 完成用户认证模块开发" |
-| `hall_discoveries` | 突破、新洞察 | "发现 index 未命中导致查询慢，添加索引后提升 10x" |
-| `hall_preferences` | 习惯、偏好、观点 | "用户偏好使用 dark mode" |
-| `hall_advice` | 推荐、解决方案 | "建议使用 connection pool 减少数据库连接开销" |
+| Hall 类型 | 说明 | 默认层级 | 示例 |
+|-----------|------|---------|------|
+| `hall_preferences` | 习惯、偏好、观点 | L1 | "用户偏好使用 dark mode" |
+| `hall_facts` | 决策、锁定选择 | L2 | "项目使用 PostgreSQL 作为主数据库" |
+| `hall_events` | 会话、里程碑、调试过程 | L2 | "2024-01-15 完成用户认证模块开发" |
+| `hall_discoveries` | 突破、新洞察 | L2 | "发现 index 未命中导致查询慢，添加索引后提升 10x" |
+| `hall_advice` | 推荐、解决方案 | L2 | "建议使用 connection pool 减少数据库连接开销" |
+
+**层级分配规则：**
+- `hall_preferences` → L1（始终加载，简介明了）
+- `hall_facts`, `hall_events`, `hall_discoveries`, `hall_advice` → L2
 
 ### 处理流程
 
@@ -129,7 +138,7 @@ memoria/
 
 | 来源 | L1 | L2 | L3 | 说明 |
 |------|-----|-----|-----|------|
-| 聊天记录 | ✅ 用户关键决策、偏好 | ✅ 事件、发现 | ✅ 原始聊天记录 | 复杂 HallType 分类 |
+| 聊天记录 | ✅ 用户偏好（preferences） | ✅ 事实、事件、发现 | ✅ 原始聊天记录 | 复杂 HallType 分类 |
 | 文件内容 | ❌ 不存储 | ✅ 内容总结 | ✅ 全文向量 | 简单总结，无 HallType |
 
 **L2 存储特点：**
@@ -439,27 +448,29 @@ processorConfig := &types.ProcessorConfig{
 
 ## MD 文件格式
 
-### L1 文件格式 (`l1/facts_<user>.md`)
+### L1 文件格式 (`l1/preferences/<user>.md`)
+
+L1 只存储用户偏好，简介明了：
 
 ```markdown
-# L1 Facts - user123
+# L1 Preferences - user123
 
 ## 2026-04-09 10:30:00
 - **ID**: mem_1234567890
-- **Hall**: hall_facts
-- **Summary**: 项目使用 PostgreSQL 作为主数据库，已锁定选择
-- **Source**: chat
-- **Keywords**: database, postgres, decision
-
-## 2026-04-09 11:00:00
-- **ID**: mem_1234567891
 - **Hall**: hall_preferences
 - **Summary**: 用户偏好使用 dark mode 界面
 - **Source**: chat
 - **Keywords**: ui, preference, dark-mode
+
+## 2026-04-09 11:00:00
+- **ID**: mem_1234567891
+- **Hall**: hall_preferences
+- **Summary**: 用户习惯使用 PostgreSQL 数据库
+- **Source**: chat
+- **Keywords**: database, preference, postgres
 ```
 
-### L2 文件格式 (`l2/2026-04-09_<user>.md`)
+### L2 文件格式 (`l2/events/<date>_<user>.md`)
 
 ```markdown
 # L2 Events - 2026-04-09 - user123

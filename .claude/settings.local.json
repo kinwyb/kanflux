@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go test:*)",
+      "Bash(go build:*)",
+      "Bash(grep:*)",
+      "Bash(go doc:*)",
+      "Bash(go list:*)",
+      "Bash(go mod:*)",
+      "Read(//Users/wangyingbin/go/pkg/mod/github.com/**)",
+      "WebSearch",
+      "Read(//Users/wangyingbin/.claude/plans/**)",
+      "Bash(mkdir -p /Users/wangyingbin/.claude/plans/)",
+      "Bash(find:*)"
+    ]
+  }
+}
