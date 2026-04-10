@@ -5,7 +5,9 @@ package memoria
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/kinwyb/kanflux/memoria/types"
 )
@@ -106,6 +108,8 @@ func (t *RAGTool) Execute(ctx context.Context, params map[string]interface{}) (s
 		return "", fmt.Errorf("query parameter is required")
 	}
 
+	slog.Debug("RAGTool execute started", "query", query)
+
 	opts := &types.RetrieveOptions{
 		Query:      query,
 		SearchMode: types.SearchModeSemantic,
@@ -130,8 +134,10 @@ func (t *RAGTool) Execute(ctx context.Context, params map[string]interface{}) (s
 	}
 
 	// Perform semantic search across all layers
+	startTime := time.Now()
 	results, err := t.searcher.Search(ctx, query, opts)
 	if err != nil {
+		slog.Error("RAGTool search failed", "query", query, "error", err)
 		return "", fmt.Errorf("semantic search failed: %w", err)
 	}
 
@@ -142,6 +148,13 @@ func (t *RAGTool) Execute(ctx context.Context, params map[string]interface{}) (s
 			filteredResults = append(filteredResults, r)
 		}
 	}
+
+	slog.Info("RAGTool search completed",
+		"query", query,
+		"total_results", len(results),
+		"filtered_results", len(filteredResults),
+		"min_score", minScore,
+		"duration", time.Since(startTime).Milliseconds())
 
 	if len(filteredResults) == 0 {
 		return formatNoRAGResults(query, minScore), nil

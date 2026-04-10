@@ -308,6 +308,14 @@ func (m *Memoria) Close() error {
 
 // AddMemory adds a memory item to the appropriate layer
 func (m *Memoria) AddMemory(ctx context.Context, item *types.MemoryItem) error {
+	slog.Debug("Adding memory item",
+		"id", item.ID,
+		"layer", item.Layer,
+		"hall_type", item.HallType,
+		"source_type", item.SourceType,
+		"source", item.Source,
+		"tokens", item.Tokens)
+
 	switch item.Layer {
 	case types.LayerL1:
 		return m.l1.Add(ctx, item)
@@ -367,6 +375,14 @@ func (m *Memoria) Search(ctx context.Context, query string, opts *types.Retrieve
 		searchMode = types.SearchModeKeyword
 	}
 
+	slog.Debug("Memory search started",
+		"query", query,
+		"mode", searchMode,
+		"limit", opts.Limit,
+		"layers", opts.Layers,
+		"source_type", opts.SourceType)
+
+	startTime := time.Now()
 	var results []*types.SearchResult
 	var err error
 
@@ -378,6 +394,10 @@ func (m *Memoria) Search(ctx context.Context, query string, opts *types.Retrieve
 	}
 
 	if err != nil {
+		slog.Error("Memory search failed",
+			"query", query,
+			"mode", searchMode,
+			"error", err)
 		return nil, err
 	}
 
@@ -396,6 +416,12 @@ func (m *Memoria) Search(ctx context.Context, query string, opts *types.Retrieve
 	if len(results) > opts.Limit {
 		results = results[:opts.Limit]
 	}
+
+	slog.Info("Memory search completed",
+		"query", query,
+		"mode", searchMode,
+		"results", len(results),
+		"duration", time.Since(startTime).Milliseconds())
 
 	return results, nil
 }
@@ -727,16 +753,35 @@ func (m *Memoria) ProcessChat(ctx context.Context, source, content string, userC
 		return nil, fmt.Errorf("chat processor not initialized - set a chat model first")
 	}
 
+	slog.Info("Processing chat content",
+		"source", source,
+		"content_len", len(content),
+		"user_id", userCtx.GetUserID())
+
+	startTime := time.Now()
 	result, err := m.chatProcessor.Process(ctx, source, content, userCtx)
 	if err != nil {
+		slog.Error("Chat processing failed", "source", source, "error", err)
 		return nil, err
 	}
 
+	// Store extracted memories
+	storedCount := 0
 	for _, item := range result.Items {
 		if err := m.AddMemory(ctx, item); err != nil {
 			result.Errors = append(result.Errors, err)
+			slog.Warn("Failed to store memory item", "id", item.ID, "error", err)
+		} else {
+			storedCount++
 		}
 	}
+
+	slog.Info("Chat processing completed",
+		"source", source,
+		"items", len(result.Items),
+		"stored", storedCount,
+		"errors", len(result.Errors),
+		"duration", time.Since(startTime).Milliseconds())
 
 	return result, nil
 }
@@ -747,16 +792,35 @@ func (m *Memoria) ProcessFile(ctx context.Context, source, content string, userC
 		return nil, fmt.Errorf("file processor not initialized - set a chat model first")
 	}
 
+	slog.Info("Processing file content",
+		"source", source,
+		"content_len", len(content),
+		"user_id", userCtx.GetUserID())
+
+	startTime := time.Now()
 	result, err := m.fileProcessor.Process(ctx, source, content, userCtx)
 	if err != nil {
+		slog.Error("File processing failed", "source", source, "error", err)
 		return nil, err
 	}
 
+	// Store extracted memories
+	storedCount := 0
 	for _, item := range result.Items {
 		if err := m.AddMemory(ctx, item); err != nil {
 			result.Errors = append(result.Errors, err)
+			slog.Warn("Failed to store memory item", "id", item.ID, "error", err)
+		} else {
+			storedCount++
 		}
 	}
+
+	slog.Info("File processing completed",
+		"source", source,
+		"items", len(result.Items),
+		"stored", storedCount,
+		"errors", len(result.Errors),
+		"duration", time.Since(startTime).Milliseconds())
 
 	return result, nil
 }

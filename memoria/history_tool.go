@@ -5,6 +5,7 @@ package memoria
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -115,6 +116,8 @@ func (t *HistoryTool) Execute(ctx context.Context, params map[string]interface{}
 		return "", fmt.Errorf("query parameter is required")
 	}
 
+	slog.Debug("HistoryTool execute started", "query", query)
+
 	opts := &types.RetrieveOptions{
 		Query:      query,
 		SourceType: types.SourceTypeChat, // Only search chat content
@@ -153,10 +156,18 @@ func (t *HistoryTool) Execute(ctx context.Context, params map[string]interface{}
 	}
 
 	// Perform search
+	startTime := time.Now()
 	results, err := t.searcher.Search(ctx, query, opts)
 	if err != nil {
+		slog.Error("HistoryTool search failed", "query", query, "error", err)
 		return "", fmt.Errorf("search failed: %w", err)
 	}
+
+	slog.Info("HistoryTool search completed",
+		"query", query,
+		"results", len(results),
+		"days_back", daysBack,
+		"duration", time.Since(startTime).Milliseconds())
 
 	if len(results) == 0 {
 		return formatNoResults(query, daysBack), nil

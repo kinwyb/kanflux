@@ -5,6 +5,7 @@ package memoria
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -140,6 +141,10 @@ func (t *MemoriesTool) Execute(ctx context.Context, params map[string]interface{
 		mode = "semantic"
 	}
 
+	slog.Debug("MemoriesTool execute started",
+		"query", query,
+		"mode", mode)
+
 	// Build search options based on mode
 	opts := &types.RetrieveOptions{
 		Query: query,
@@ -155,6 +160,10 @@ func (t *MemoriesTool) Execute(ctx context.Context, params map[string]interface{
 	if userID, ok := params["user_id"].(string); ok && userID != "" {
 		opts.UserID = userID
 	}
+
+	startTime := time.Now()
+	var result string
+	var err error
 
 	// Mode-specific configuration
 	if mode == "keyword" {
@@ -188,24 +197,39 @@ func (t *MemoriesTool) Execute(ctx context.Context, params map[string]interface{
 			End:   time.Now(),
 		}
 
-		return t.executeKeywordSearch(ctx, query, opts, daysBack)
+		result, err = t.executeKeywordSearch(ctx, query, opts, daysBack)
+	} else {
+		// Semantic mode
+		opts.SearchMode = types.SearchModeSemantic
+		opts.Layers = []types.Layer{types.LayerL2, types.LayerL3}
+
+		// Parse source_type filter
+		if st, ok := params["source_type"].(string); ok && st != "" {
+			opts.SourceType = types.SourceType(st)
+		}
+
+		minScore := 0.5
+		if ms, ok := params["min_score"].(float64); ok && ms > 0 {
+			minScore = ms
+		}
+
+		result, err = t.executeSemanticSearch(ctx, query, opts, minScore)
 	}
 
-	// Semantic mode
-	opts.SearchMode = types.SearchModeSemantic
-	opts.Layers = []types.Layer{types.LayerL2, types.LayerL3}
-
-	// Parse source_type filter
-	if st, ok := params["source_type"].(string); ok && st != "" {
-		opts.SourceType = types.SourceType(st)
+	if err != nil {
+		slog.Error("MemoriesTool execute failed",
+			"query", query,
+			"mode", mode,
+			"error", err)
+		return "", err
 	}
 
-	minScore := 0.5
-	if ms, ok := params["min_score"].(float64); ok && ms > 0 {
-		minScore = ms
-	}
+	slog.Info("MemoriesTool execute completed",
+		"query", query,
+		"mode", mode,
+		"duration", time.Since(startTime).Milliseconds())
 
-	return t.executeSemanticSearch(ctx, query, opts, minScore)
+	return result, nil
 }
 
 // executeKeywordSearch performs keyword-based search (history_query style)
@@ -214,6 +238,11 @@ func (t *MemoriesTool) executeKeywordSearch(ctx context.Context, query string, o
 	if err != nil {
 		return "", fmt.Errorf("keyword search failed: %w", err)
 	}
+
+	slog.Debug("Keyword search completed",
+		"query", query,
+		"results", len(results),
+		"days_back", daysBack)
 
 	if len(results) == 0 {
 		return formatNoKeywordResults(query, daysBack), nil
@@ -236,6 +265,12 @@ func (t *MemoriesTool) executeSemanticSearch(ctx context.Context, query string, 
 			filtered = append(filtered, r)
 		}
 	}
+
+	slog.Debug("Semantic search completed",
+		"query", query,
+		"total_results", len(results),
+		"filtered_results", len(filtered),
+		"min_score", minScore)
 
 	if len(filtered) == 0 {
 		return formatNoSemanticResults(query, minScore), nil
@@ -335,6 +370,8 @@ func formatNoSemanticResults(query string, minScore float64) string {
 // QuickSearch provides a simplified search interface for internal use
 // It automatically selects the best mode based on query characteristics
 func (t *MemoriesTool) QuickSearch(ctx context.Context, query string, limit int) ([]*types.SearchResult, error) {
+	slog.Debug("QuickSearch started", "query", query, "limit", limit)
+
 	// Simple heuristic: short queries with known terms use keyword
 	if len(strings.Fields(query)) <= 3 && !strings.ContainsAny(query, "?") {
 		opts := &types.RetrieveOptions{
@@ -344,7 +381,11 @@ func (t *MemoriesTool) QuickSearch(ctx context.Context, query string, limit int)
 			SourceType: types.SourceTypeChat,
 			Limit:      limit,
 		}
-		return t.searcher.Search(ctx, query, opts)
+		results, err := t.searcher.Search(ctx, query, opts)
+		if err == nil {
+			slog.Debug("QuickSearch completed (keyword mode)", "results", len(results))
+		}
+		return results, err
 	}
 
 	// Longer or question-like queries use semantic
@@ -354,7 +395,11 @@ func (t *MemoriesTool) QuickSearch(ctx context.Context, query string, limit int)
 		Layers:     []types.Layer{types.LayerL2, types.LayerL3},
 		Limit:      limit,
 	}
-	return t.searcher.Search(ctx, query, opts)
+	results, err := t.searcher.Search(ctx, query, opts)
+	if err == nil {
+		slog.Debug("QuickSearch completed (semantic mode)", "results", len(results))
+	}
+	return results, err
 }
 
 // GetL1FactsShortcut provides quick access to L1 facts without search
