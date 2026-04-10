@@ -213,16 +213,22 @@ func (s *SQLiteStore) convertRetrieveOptions(opts *types.RetrieveOptions) *Searc
 		searchOpts.UserID = opts.UserID
 	}
 
-	if len(opts.HallTypes) > 0 {
-		searchOpts.HallType = string(opts.HallTypes[0])
-	}
+	// No HallType filtering - search all types together
+	// searchOpts.HallType is left empty
 
 	if opts.SourceType != "" {
 		searchOpts.SourceType = string(opts.SourceType)
 	}
 
-	// default search L2 and L3 (L2 preferred)
-	searchOpts.Layers = []int{2, 3}
+	// Set layers from opts, default to L2 + L3
+	if len(opts.Layers) > 0 {
+		searchOpts.Layers = make([]int, len(opts.Layers))
+		for i, l := range opts.Layers {
+			searchOpts.Layers[i] = int(l)
+		}
+	} else {
+		searchOpts.Layers = []int{2, 3}
+	}
 	searchOpts.PreferLayer = 2
 
 	return searchOpts

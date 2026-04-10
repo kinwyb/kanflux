@@ -614,28 +614,28 @@ func NewMemorySearchCmd() *cobra.Command {
 	var (
 		configPath string
 		workspace  string
-		mode       string
 		limit      int
 		daysBack   int
 		minScore   float64
 		sourceType string
-		hallTypes  string
 	)
 
 	cmd := &cobra.Command{
 		Use:   "search <query>",
 		Short: "搜索记忆",
-		Long: `搜索已存储的记忆内容。
+		Long: `搜索已存储的记忆内容 (L2 + L3)。
 
-支持两种搜索模式:
-- keyword: 关键词搜索，快速匹配，仅搜索 chat 内容 (L1+L2+L3)
-- semantic: 语义搜索，深度理解，搜索 chat+file 内容 (L2+L3)
+搜索策略:
+1. 语义搜索优先 (向量相似度，理解含义)
+2. 关键词搜索补充 (FTS5，精确匹配)
+3. 层级顺序: L2 (摘要) → L3 (原始内容)
+4. 不区分 Hall 类型 (搜索所有类型)
 
 示例:
-  kanflux memory search "database choice"                    # 关键词搜索
-  kanflux memory search "performance" -m semantic            # 语义搜索
-  kanflux memory search "auth" --days 7 --hall facts         # 最近7天的决策
-  kanflux memory search "cache" -m semantic --min-score 0.7  # 高相关性`,
+  kanflux memory search "database choice"
+  kanflux memory search "performance optimization" --days 7
+  kanflux memory search "auth" --min-score 0.7
+  kanflux memory search "cache" --source chat`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := context.Background()
@@ -668,14 +668,11 @@ func NewMemorySearchCmd() *cobra.Command {
 				memoria.WithInitialScan(false), // 搜索不需要初始化扫描
 			}
 
-			// 语义搜索需要 Embedding 配置
-			if mode == "semantic" {
-				if embCfg := getEmbeddingConfig(resolved); embCfg != nil {
-					opts = append(opts, memoria.WithEmbedding(embCfg))
-				} else {
-					fmt.Println("警告: 无 Embedding 配置，语义搜索将不可用")
-					fmt.Println("提示: 使用 keyword 模式进行关键词搜索")
-				}
+			// 添加 Embedding 配置（语义搜索需要）
+			if embCfg := getEmbeddingConfig(resolved); embCfg != nil {
+				opts = append(opts, memoria.WithEmbedding(embCfg))
+			} else {
+				fmt.Println("警告: 无 Embedding 配置，语义搜索将不可用")
 			}
 
 			// 创建 Memoria 服务
@@ -687,9 +684,6 @@ func NewMemorySearchCmd() *cobra.Command {
 			defer mem.Close()
 
 			// 设置默认值
-			if mode == "" {
-				mode = "keyword"
-			}
 			if limit <= 0 {
 				limit = 10
 			}
@@ -700,52 +694,26 @@ func NewMemorySearchCmd() *cobra.Command {
 				minScore = 0.5
 			}
 
-			fmt.Printf("搜索模式: %s\n", mode)
 			fmt.Printf("查询: %s\n", query)
-			fmt.Printf("限制: %d 条结果\n\n", limit)
+			fmt.Printf("限制: %d 条结果\n", limit)
+			fmt.Printf("时间范围: 最近 %d 天\n", daysBack)
+			if sourceType != "" {
+				fmt.Printf("来源类型: %s\n", sourceType)
+			}
+			fmt.Printf("最小相关性: %.2f\n\n", minScore)
 
-			// 构建搜索选项
+			// 构建搜索选项 (L2 + L3 only, no HallType filter)
 			searchOpts := &types.RetrieveOptions{
 				Query: query,
 				Limit: limit,
-			}
-
-			if mode == "keyword" {
-				searchOpts.SearchMode = types.SearchModeKeyword
-				searchOpts.SourceType = types.SourceTypeChat
-				searchOpts.Layers = []types.Layer{types.LayerL1, types.LayerL2, types.LayerL3}
-				searchOpts.TimeRange = &types.TimeRange{
+				TimeRange: &types.TimeRange{
 					Start: time.Now().AddDate(0, 0, -daysBack),
 					End:   time.Now(),
-				}
+				},
+			}
 
-				// 解析 hallTypes
-				if hallTypes != "" {
-					typesList := strings.Split(hallTypes, ",")
-					searchOpts.HallTypes = make([]types.HallType, 0, len(typesList))
-					for _, t := range typesList {
-						t = strings.TrimSpace(t)
-						if t != "" {
-							// 支持简写: facts, events, discoveries, preferences, advice
-							fullName := "hall_" + t
-							searchOpts.HallTypes = append(searchOpts.HallTypes, types.HallType(fullName))
-						}
-					}
-				}
-
-				fmt.Printf("时间范围: 最近 %d 天\n", daysBack)
-				if len(searchOpts.HallTypes) > 0 {
-					fmt.Printf("Hall 类型: %v\n", searchOpts.HallTypes)
-				}
-			} else {
-				searchOpts.SearchMode = types.SearchModeSemantic
-				searchOpts.Layers = []types.Layer{types.LayerL2, types.LayerL3}
-
-				if sourceType != "" {
-					searchOpts.SourceType = types.SourceType(sourceType)
-					fmt.Printf("来源类型: %s\n", sourceType)
-				}
-				fmt.Printf("最小相关性: %.2f\n", minScore)
+			if sourceType != "" {
+				searchOpts.SourceType = types.SourceType(sourceType)
 			}
 
 			// 执行搜索
@@ -754,8 +722,8 @@ func NewMemorySearchCmd() *cobra.Command {
 				return fmt.Errorf("搜索失败: %w", err)
 			}
 
-			// 过滤语义搜索结果
-			if mode == "semantic" && minScore > 0 {
+			// 过滤低分结果
+			if minScore > 0 {
 				filtered := make([]*types.SearchResult, 0)
 				for _, r := range results {
 					if r.Score >= minScore {
@@ -770,32 +738,21 @@ func NewMemorySearchCmd() *cobra.Command {
 
 			if len(results) == 0 {
 				fmt.Println("未找到匹配的记忆")
-				if mode == "keyword" {
-					fmt.Println("建议: 尝试不同的关键词，增加 days 范围，或使用 semantic 模式")
-				} else {
-					fmt.Println("建议: 尝试自然语言描述，降低 min-score，或使用 keyword 模式")
-				}
+				fmt.Println("建议: 尝试自然语言描述，降低 min-score，或增加 days 范围")
 				return nil
 			}
 
 			fmt.Printf("找到 %d 条记忆:\n\n", len(results))
 
 			for i, r := range results {
-				layerName := "L1"
-				if r.Layer == types.LayerL2 {
-					layerName = "L2"
-				} else if r.Layer == types.LayerL3 {
+				layerName := "L2"
+				if r.Layer == types.LayerL3 {
 					layerName = "L3"
 				}
 
 				// 显示结果
 				fmt.Printf("--- [%d] %s ---\n", i+1, layerName)
 				fmt.Printf("匹配类型: %s (分数: %.2f)\n", r.MatchType, r.Score)
-
-				if r.Item.HallType != "" {
-					hallName := strings.Replace(string(r.Item.HallType), "hall_", "", 1)
-					fmt.Printf("Hall: %s\n", hallName)
-				}
 
 				if r.Item.SourceType != "" {
 					fmt.Printf("来源类型: %s\n", r.Item.SourceType)
@@ -819,12 +776,10 @@ func NewMemorySearchCmd() *cobra.Command {
 
 	cmd.Flags().StringVarP(&configPath, "config", "c", "", "配置文件路径")
 	cmd.Flags().StringVarP(&workspace, "workspace", "w", "", "工作目录")
-	cmd.Flags().StringVarP(&mode, "mode", "m", "keyword", "搜索模式 (keyword/semantic)")
 	cmd.Flags().IntVarP(&limit, "limit", "l", 10, "结果数量限制")
-	cmd.Flags().IntVarP(&daysBack, "days", "d", 30, "keyword模式: 搜索最近天数")
-	cmd.Flags().Float64Var(&minScore, "min-score", 0.5, "semantic模式: 最小相关性分数 (0-1)")
-	cmd.Flags().StringVar(&sourceType, "source", "", "semantic模式: 来源类型过滤 (chat/file)")
-	cmd.Flags().StringVar(&hallTypes, "hall", "", "keyword模式: Hall类型过滤 (facts,events,discoveries,preferences,advice)")
+	cmd.Flags().IntVarP(&daysBack, "days", "d", 30, "搜索最近天数")
+	cmd.Flags().Float64Var(&minScore, "min-score", 0.5, "最小相关性分数 (0-1)")
+	cmd.Flags().StringVar(&sourceType, "source", "", "来源类型过滤 (chat/file)")
 
 	return cmd
 }

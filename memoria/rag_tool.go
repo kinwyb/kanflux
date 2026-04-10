@@ -38,38 +38,34 @@ func (t *RAGTool) Name() string {
 
 // Description returns the tool description with optimized prompts
 func (t *RAGTool) Description() string {
-	return `Deep semantic search across all knowledge (L2 + L3, chat + files).
+	return `Deep search across L2 + L3 knowledge (summaries + raw content).
+
+**Search Strategy**:
+1. semantic search first (vector similarity, understands meaning)
+2. keyword search fallback (FTS5, exact matching)
+3. Layer order: L2 (summaries) → L3 (full content)
 
 **What it searches**:
-- **Source**: Chat conversations + File content
-- **Layers**: L2 + L3 (summaries and full content)
-- **Method**: Semantic vector search (understands meaning, not just keywords)
-
-**Layer Contents**:
-- **L2**: Summaries of chat events and file content
-- **L3**: Full chat history and complete file text (vector indexed)
+- **Layers**: L2 + L3 only (not L1)
+- **Sources**: Chat conversations + File content
+- **Types**: All hall types (facts, events, discoveries, etc.)
 
 **When to Use**:
-- Keyword search didn't find what you need
 - Looking for conceptually related information
+- Keyword search didn't find what you need
 - Searching across both conversations and documents
 - Don't know exact keywords
 
 **Tips for Better Results**:
 - Use natural language queries
 - Describe what you're looking for conceptually
-- Include context and related terms
-- Example: "performance optimization approaches" finds related discussions
-
-**Search Modes**:
-- Default: Searches both chat and file sources
-- Use source_type parameter to filter: "chat" or "file"
+- Example: "performance optimization" finds related discussions
 
 **Difference from history_query**:
-- history_query: Keyword search, chat only, L1+L2+L3, fast
-- knowledge_search: Semantic search, chat+files, L2+L3, comprehensive
-- Use history_query for quick keyword lookup in conversations
-- Use knowledge_search when keywords don't match or searching files`
+- history_query: Chat only, L2+L3, semantic+keyword
+- knowledge_search: Chat+files, L2+L3, semantic+keyword
+- Use history_query for chat-only quick search
+- Use knowledge_search for comprehensive search including files`
 }
 
 // Parameters returns the JSON Schema parameter definition
@@ -167,7 +163,7 @@ func (t *RAGTool) Execute(ctx context.Context, params map[string]interface{}) (s
 func formatRAGResults(results []*types.SearchResult, query string) string {
 	var builder strings.Builder
 
-	builder.WriteString(fmt.Sprintf("Semantic search for '%s' found %d relevant items:\n\n", query, len(results)))
+	builder.WriteString(fmt.Sprintf("Search for '%s' found %d items:\n\n", query, len(results)))
 
 	for i, r := range results {
 		layerName := "L2"
@@ -180,8 +176,8 @@ func formatRAGResults(results []*types.SearchResult, query string) string {
 			sourceType = "file"
 		}
 
-		builder.WriteString(fmt.Sprintf("**[%s/%s] Similarity: %.2f**\n",
-			layerName, sourceType, r.Score))
+		builder.WriteString(fmt.Sprintf("**[%s/%s] Score: %.2f (%s)**\n",
+			layerName, sourceType, r.Score, r.MatchType))
 
 		// Show content based on layer
 		if r.Item.Summary != "" {
@@ -202,19 +198,17 @@ func formatRAGResults(results []*types.SearchResult, query string) string {
 		}
 	}
 
-	builder.WriteString("\n*Tip: Combine with history_query for comprehensive coverage.*")
-
 	return builder.String()
 }
 
 // formatNoRAGResults formats a message when no semantic matches found
 func formatNoRAGResults(query string, minScore float64) string {
-	return fmt.Sprintf("No semantically similar memories found for '%s' (min score: %.2f).\n\n"+
+	return fmt.Sprintf("No matches found for '%s' (min score: %.2f).\n\n"+
 		"Suggestions:\n"+
 		"- Try a more descriptive query with context\n"+
 		"- Lower min_score threshold (current: %.2f)\n"+
 		"- Use different terminology or phrasing\n"+
-		"- Try history_query for keyword-based search",
+		"- Try history_query for chat-only search",
 		query, minScore, minScore)
 }
 

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"strings"
 	"sync"
 	"time"
 
@@ -546,11 +545,10 @@ func (m *Memoria) SearchL3(ctx context.Context, query string, opts *types.Retrie
 
 // ============ 层级搜索 ============
 
-// Search performs hierarchical search across all layers
-// Search behavior is determined by SearchMode:
-// - keyword (default): L1/L2/L3 keyword matching
-// - semantic: L2/L3 vector similarity search
-// Results are filtered by SourceType if specified
+// Search performs hierarchical search across L2 and L3 layers only.
+// Search order: semantic search first, then keyword search fallback.
+// Layer priority: L2 (summaries) first, then L3 (raw content).
+// No HallType filtering - searches all types together.
 func (m *Memoria) Search(ctx context.Context, query string, opts *types.RetrieveOptions) ([]*types.SearchResult, error) {
 	if opts == nil {
 		opts = &types.RetrieveOptions{Limit: 10}
@@ -559,36 +557,42 @@ func (m *Memoria) Search(ctx context.Context, query string, opts *types.Retrieve
 		opts.Limit = 10
 	}
 
-	// Default to keyword search if not specified
-	searchMode := opts.SearchMode
-	if searchMode == "" {
-		searchMode = types.SearchModeKeyword
-	}
+	// Force search to L2 + L3 only (no L1)
+	opts.Layers = []types.Layer{types.LayerL2, types.LayerL3}
 
-	slog.Debug("Memory search started",
-		"query", query,
-		"mode", searchMode,
-		"limit", opts.Limit,
-		"layers", opts.Layers,
-		"source_type", opts.SourceType)
+	// Clear HallType filter - search all types
+	opts.HallTypes = nil
 
 	startTime := time.Now()
-	var results []*types.SearchResult
-	var err error
+	results := make([]*types.SearchResult, 0)
+	seen := make(map[string]bool)
 
-	switch searchMode {
-	case types.SearchModeSemantic:
-		results, err = m.semanticSearch(ctx, query, opts)
-	default:
-		results, err = m.keywordSearch(ctx, query, opts)
+	// 1. Semantic search first (L2 preferred, then L3)
+	semanticResults, err := m.semanticSearch(ctx, query, opts)
+	if err != nil {
+		slog.Warn("Semantic search failed, fallback to keyword", "error", err)
+	} else {
+		for _, r := range semanticResults {
+			if !seen[r.Item.ID] {
+				seen[r.Item.ID] = true
+				results = append(results, r)
+			}
+		}
 	}
 
-	if err != nil {
-		slog.Error("Memory search failed",
-			"query", query,
-			"mode", searchMode,
-			"error", err)
-		return nil, err
+	// 2. Keyword search as supplement if semantic results not enough
+	if len(results) < opts.Limit {
+		keywordResults, err := m.keywordSearch(ctx, query, opts)
+		if err != nil {
+			slog.Warn("Keyword search failed", "error", err)
+		} else {
+			for _, r := range keywordResults {
+				if !seen[r.Item.ID] {
+					seen[r.Item.ID] = true
+					results = append(results, r)
+				}
+			}
+		}
 	}
 
 	// Filter by SourceType if specified
@@ -602,6 +606,9 @@ func (m *Memoria) Search(ctx context.Context, query string, opts *types.Retrieve
 		results = filtered
 	}
 
+	// Sort by score (higher score = more relevant)
+	sortResultsByScore(results)
+
 	// Limit results
 	if len(results) > opts.Limit {
 		results = results[:opts.Limit]
@@ -609,61 +616,44 @@ func (m *Memoria) Search(ctx context.Context, query string, opts *types.Retrieve
 
 	slog.Info("Memory search completed",
 		"query", query,
-		"mode", searchMode,
-		"results", len(results),
+		"semantic_results", len(semanticResults),
+		"total_results", len(results),
 		"duration", time.Since(startTime).Milliseconds())
 
 	return results, nil
 }
 
-// keywordSearch performs keyword-based search across L1/L2/L3
+// keywordSearch performs keyword-based search across L2 and L3 (L2 first, then L3)
+// No L1 search. No HallType filtering.
 func (m *Memoria) keywordSearch(ctx context.Context, query string, opts *types.RetrieveOptions) ([]*types.SearchResult, error) {
 	results := make([]*types.SearchResult, 0)
 	seen := make(map[string]bool)
 
-	// Check which layers to search
-	searchL1 := true
-	searchL2 := true
-	searchL3 := true
-	if len(opts.Layers) > 0 {
-		searchL1 = false
-		searchL2 = false
-		searchL3 = false
-		for _, l := range opts.Layers {
-			if l == types.LayerL1 {
-				searchL1 = true
-			} else if l == types.LayerL2 {
-				searchL2 = true
-			} else if l == types.LayerL3 {
-				searchL3 = true
+	// 1. L2 keyword search first (summaries, faster)
+	if m.sqliteStore != nil {
+		l2Opts := &types.RetrieveOptions{
+			Layers:     []types.Layer{types.LayerL2},
+			UserID:     opts.UserID,
+			SourceType: opts.SourceType,
+			Limit:      opts.Limit * 2, // Get more for merging
+		}
+
+		l2Results, err := m.sqliteStore.KeywordSearch(ctx, query, l2Opts)
+		if err != nil {
+			slog.Warn("L2 keyword search failed", "error", err)
+		} else {
+			for _, r := range l2Results {
+				r.MatchType = "keyword"
+				if !seen[r.Item.ID] {
+					seen[r.Item.ID] = true
+					results = append(results, r)
+				}
 			}
 		}
 	}
 
-	// 1. L1 搜索：精确/关键词匹配（内存缓存，最快）
-	if searchL1 {
-		l1Results := m.searchL1(query, opts)
-		for _, r := range l1Results {
-			if !seen[r.Item.ID] {
-				seen[r.Item.ID] = true
-				results = append(results, r)
-			}
-		}
-	}
-
-	// 2. L2 搜索：FTS5 关键词搜索（SQLite）
-	if searchL2 && len(results) < opts.Limit {
-		l2Results := m.searchL2Keyword(ctx, query, opts)
-		for _, r := range l2Results {
-			if !seen[r.Item.ID] {
-				seen[r.Item.ID] = true
-				results = append(results, r)
-			}
-		}
-	}
-
-	// 3. L3 搜索：关键词匹配（如果有 L3）
-	if searchL3 && len(results) < opts.Limit && m.l3 != nil {
+	// 2. L3 keyword search if L2 results not enough (raw content, deeper)
+	if len(results) < opts.Limit && m.l3 != nil {
 		l3Results, err := m.searchL3Keyword(ctx, query, opts)
 		if err != nil {
 			slog.Warn("L3 keyword search failed", "error", err)
@@ -680,44 +670,55 @@ func (m *Memoria) keywordSearch(ctx context.Context, query string, opts *types.R
 	return results, nil
 }
 
-// semanticSearch performs vector similarity search across L2/L3
+// semanticSearch performs vector similarity search across L2/L3 (L2 first, then L3)
+// No HallType filtering.
 func (m *Memoria) semanticSearch(ctx context.Context, query string, opts *types.RetrieveOptions) ([]*types.SearchResult, error) {
 	results := make([]*types.SearchResult, 0)
 	seen := make(map[string]bool)
 
-	// Check which layers to search
-	searchL2 := true
-	searchL3 := true
-	if len(opts.Layers) > 0 {
-		searchL2 = false
-		searchL3 = false
-		for _, l := range opts.Layers {
-			if l == types.LayerL2 {
-				searchL2 = true
-			} else if l == types.LayerL3 {
-				searchL3 = true
-			}
-		}
-	}
-
 	// Use unified SQLite search for L2/L3 (prefer L2)
-	if (searchL2 || searchL3) && m.sqliteStore != nil {
-		layers := make([]int, 0)
-		if searchL2 {
-			layers = append(layers, 2)
-		}
-		if searchL3 {
-			layers = append(layers, 3)
+	if m.sqliteStore != nil {
+		// Search L2 first (summaries, more precise)
+		l2Opts := &types.RetrieveOptions{
+			Layers:     []types.Layer{types.LayerL2},
+			UserID:     opts.UserID,
+			SourceType: opts.SourceType,
+			Limit:      opts.Limit,
 		}
 
-		sqliteResults, err := m.sqliteStore.Search(ctx, query, opts)
+		l2Results, err := m.sqliteStore.Search(ctx, query, l2Opts)
 		if err != nil {
-			slog.Warn("SQLite semantic search failed", "error", err)
+			slog.Warn("L2 semantic search failed", "error", err)
 		} else {
-			for _, r := range sqliteResults {
+			for _, r := range l2Results {
+				r.MatchType = "semantic"
 				if !seen[r.Item.ID] {
 					seen[r.Item.ID] = true
 					results = append(results, r)
+				}
+			}
+		}
+
+		// Search L3 if L2 results not enough (raw content, deeper)
+		if len(results) < opts.Limit {
+			remaining := opts.Limit - len(results)
+			l3Opts := &types.RetrieveOptions{
+				Layers:     []types.Layer{types.LayerL3},
+				UserID:     opts.UserID,
+				SourceType: opts.SourceType,
+				Limit:      remaining + 5, // Get extra for deduplication
+			}
+
+			l3Results, err := m.sqliteStore.Search(ctx, query, l3Opts)
+			if err != nil {
+				slog.Warn("L3 semantic search failed", "error", err)
+			} else {
+				for _, r := range l3Results {
+					r.MatchType = "semantic"
+					if !seen[r.Item.ID] {
+						seen[r.Item.ID] = true
+						results = append(results, r)
+					}
 				}
 			}
 		}
@@ -728,231 +729,32 @@ func (m *Memoria) semanticSearch(ctx context.Context, query string, opts *types.
 	return results, nil
 }
 
-// searchL1 searches L1 layer (exact/keyword match)
-func (m *Memoria) searchL1(query string, opts *types.RetrieveOptions) []*types.SearchResult {
-	results := make([]*types.SearchResult, 0)
-	queryLower := strings.ToLower(query)
-	queryTerms := strings.Fields(queryLower)
-
-	var items []*types.MemoryItem
-	if opts.UserID != "" {
-		items = m.l1.GetForUser(opts.UserID)
-	} else {
-		items = m.l1.GetAll()
-	}
-
-	for _, item := range items {
-		// 过滤 HallType
-		if len(opts.HallTypes) > 0 {
-			found := false
-			for _, ht := range opts.HallTypes {
-				if item.HallType == ht {
-					found = true
-					break
-				}
-			}
-			if !found {
-				continue
-			}
-		}
-
-		// 过滤 SourceType (L1 only has chat content, but check anyway)
-		if opts.SourceType != "" && item.SourceType != opts.SourceType {
-			continue
-		}
-
-		score := m.calculateKeywordScore(item, queryLower, queryTerms)
-		if score > 0 {
-			matchType := "keyword"
-			if score >= 0.8 {
-				matchType = "exact"
-			}
-			results = append(results, &types.SearchResult{
-				Item:      item,
-				Score:     score,
-				Layer:     types.LayerL1,
-				MatchType: matchType,
-			})
-		}
-	}
-
-	// 按分数排序
-	sortResultsByScore(results)
-	return results
-}
-
-// searchL2Keyword searches L2 layer using SQLite FTS5 keyword search
-func (m *Memoria) searchL2Keyword(ctx context.Context, query string, opts *types.RetrieveOptions) []*types.SearchResult {
-	results := make([]*types.SearchResult, 0)
-
-	// Use SQLite FTS5 search if available
-	if m.sqliteStore != nil {
-		l2Opts := &types.RetrieveOptions{
-			Layers:     []types.Layer{types.LayerL2},
-			UserID:     opts.UserID,
-			SourceType: opts.SourceType,
-			Limit:      opts.Limit * 2, // Get more for filtering
-			HallTypes:  opts.HallTypes,
-		}
-
-		sqliteResults, err := m.sqliteStore.KeywordSearch(ctx, query, l2Opts)
-		if err != nil {
-			slog.Warn("L2 FTS search failed", "error", err)
-		} else {
-			for _, r := range sqliteResults {
-				r.MatchType = "keyword"
-				results = append(results, r)
-			}
-			sortResultsByScore(results)
-			return results
-		}
-	}
-
-	// Fallback to MD storage
-	return m.searchL2Fallback(ctx, query, opts)
-}
-
-// searchL2Fallback searches L2 using MD storage (fallback)
-func (m *Memoria) searchL2Fallback(ctx context.Context, query string, opts *types.RetrieveOptions) []*types.SearchResult {
-	results := make([]*types.SearchResult, 0)
-	queryLower := strings.ToLower(query)
-	queryTerms := strings.Fields(queryLower)
-
-	l2Opts := &types.RetrieveOptions{
-		Layers:     []types.Layer{types.LayerL2},
-		UserID:     opts.UserID,
-		SourceType: opts.SourceType,
-		Limit:      50,
-		HallTypes:  opts.HallTypes,
-		TimeRange:  opts.TimeRange,
-	}
-
-	items, err := m.storage.Retrieve(ctx, l2Opts)
-	if err != nil {
-		slog.Warn("L2 retrieval failed", "error", err)
-		return results
-	}
-
-	for _, item := range items {
-		score := m.calculateKeywordScore(item, queryLower, queryTerms)
-		if score > 0 {
-			results = append(results, &types.SearchResult{
-				Item:      item,
-				Score:     score,
-				Layer:     types.LayerL2,
-				MatchType: "keyword",
-			})
-		}
-	}
-
-	sortResultsByScore(results)
-	return results
-}
-
-// searchL3 searches L3 layer (semantic search)
-func (m *Memoria) searchL3(ctx context.Context, query string, opts *types.RetrieveOptions) ([]*types.SearchResult, error) {
-	if m.l3 == nil {
-		return nil, fmt.Errorf("L3 not initialized: set embedder first")
-	}
-
-	// 使用 L3 层的语义搜索
-	return m.l3.SearchWithScores(ctx, query, opts)
-}
-
 // searchL3Keyword performs keyword-based search on L3 content
-// This is used when SearchMode is "keyword" but we need to search L3
+// This is used when semantic results are not enough
 func (m *Memoria) searchL3Keyword(ctx context.Context, query string, opts *types.RetrieveOptions) ([]*types.SearchResult, error) {
-	if m.l3 == nil {
+	if m.l3 == nil || m.sqliteStore == nil {
 		return nil, nil // L3 not initialized, skip
 	}
 
-	// L3 doesn't support native keyword search, so we do semantic search
-	// and filter results by keyword presence
-	results, err := m.l3.SearchWithScores(ctx, query, opts)
+	// Use SQLite FTS5 for L3 keyword search
+	l3Opts := &types.RetrieveOptions{
+		Layers:     []types.Layer{types.LayerL3},
+		UserID:     opts.UserID,
+		SourceType: opts.SourceType,
+		Limit:      opts.Limit,
+	}
+
+	results, err := m.sqliteStore.KeywordSearch(ctx, query, l3Opts)
 	if err != nil {
+		slog.Warn("L3 keyword search failed", "error", err)
 		return nil, err
 	}
 
-	// Filter results by keyword presence
-	queryLower := strings.ToLower(query)
-	queryTerms := strings.Fields(queryLower)
-	filtered := make([]*types.SearchResult, 0)
-
 	for _, r := range results {
-		// Check if query or any query term appears in content
-		contentLower := strings.ToLower(r.Item.Content)
-		summaryLower := strings.ToLower(r.Item.Summary)
-
-		hasMatch := false
-		if strings.Contains(contentLower, queryLower) || strings.Contains(summaryLower, queryLower) {
-			hasMatch = true
-		} else {
-			for _, term := range queryTerms {
-				if strings.Contains(contentLower, term) || strings.Contains(summaryLower, term) {
-					hasMatch = true
-					break
-				}
-			}
-		}
-
-		if hasMatch {
-			r.MatchType = "keyword" // Override match type
-			filtered = append(filtered, r)
-		}
+		r.MatchType = "keyword"
 	}
 
-	return filtered, nil
-}
-
-// calculateKeywordScore calculates keyword match score
-func (m *Memoria) calculateKeywordScore(item *types.MemoryItem, queryLower string, queryTerms []string) float64 {
-	summaryLower := strings.ToLower(item.Summary)
-
-	// 完全匹配 Summary
-	if strings.Contains(summaryLower, queryLower) {
-		return 1.0
-	}
-
-	// L1/L2 only have Summary, L3 has Content for semantic search
-	contentLower := strings.ToLower(item.Content)
-	if contentLower != "" && strings.Contains(contentLower, queryLower) {
-		return 0.9
-	}
-
-	// 关键词匹配
-	summaryTerms := strings.Fields(summaryLower)
-
-	summaryMatch := 0
-	for _, qt := range queryTerms {
-		for _, st := range summaryTerms {
-			if st == qt {
-				summaryMatch++
-			}
-		}
-	}
-
-	if len(queryTerms) == 0 {
-		return 0
-	}
-
-	summaryScore := float64(summaryMatch) / float64(len(queryTerms))
-
-	// If Content exists (L3), include it in scoring with lower weight
-	if contentLower != "" {
-		contentTerms := strings.Fields(contentLower)
-		contentMatch := 0
-		for _, qt := range queryTerms {
-			for _, ct := range contentTerms {
-				if ct == qt {
-					contentMatch++
-				}
-			}
-		}
-		contentScore := float64(contentMatch) / float64(len(queryTerms)*2)
-		return summaryScore*0.7 + contentScore*0.3
-	}
-
-	return summaryScore
+	return results, nil
 }
 
 // sortResultsByScore sorts results by score descending

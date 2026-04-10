@@ -41,36 +41,39 @@ func (t *HistoryTool) Name() string {
 
 // Description returns the tool description with optimized prompts
 func (t *HistoryTool) Description() string {
-	return `Keyword search for user memories (chat history only).
+	return `Search for user memories (chat history only).
+
+**Search Strategy**:
+1. Semantic search first (vector similarity)
+2. Keyword search fallback (FTS5)
+3. Layer order: L2 (summaries) → L3 (full content)
 
 **What it searches**:
 - **Source**: Chat conversations only (no files)
-- **Layers**: L1 + L2 + L3 (key facts, events, raw chat history)
-- **Method**: Keyword matching (fast, exact)
+- **Layers**: L2 + L3 only (not L1)
+- **Types**: All hall types together (no filtering)
 
 **Layer Contents**:
-- **L1**: Critical decisions, user preferences, must-remember facts
-- **L2**: Session events, milestones, discoveries
-- **L3**: Full chat history for deep keyword search
+- **L2**: Summaries of session events, milestones, discoveries
+- **L3**: Full chat history for deep search
 
 **Use Cases**:
-- Find previous decisions: "database choice", "auth method"
-- Look up user preferences: "coding style", "testing preference"
+- Find previous discussions: "database choice", "auth method"
 - Recall session events: "debug session", "deployment"
 - Search chat history: "we discussed", "you mentioned"
 
 **When to Use**:
-- You know specific keywords to search
-- Need fast results
+- Quick search for specific conversations
 - Looking for user-specific memories
+- You know keywords to search
 
 **Time Filtering**: Use "days_back" to limit search time range.
 
 **Difference from knowledge_search**:
-- history_query: Keyword search, chat only, L1+L2+L3
-- knowledge_search: Semantic search, chat+files, L2+L3
-- Use history_query for quick keyword lookup in conversations
-- Use knowledge_search for conceptual search or file content`
+- history_query: Chat only, L2+L3, semantic+keyword
+- knowledge_search: Chat+files, L2+L3, semantic+keyword
+- Use history_query for chat-only quick search
+- Use knowledge_search for comprehensive search including files`
 }
 
 // Parameters returns the JSON Schema parameter definition
@@ -80,15 +83,7 @@ func (t *HistoryTool) Parameters() map[string]interface{} {
 		"properties": map[string]interface{}{
 			"query": map[string]interface{}{
 				"type":        "string",
-				"description": "Search query. Use keywords for best results. Examples: 'database choice', 'auth preference', 'last session'",
-			},
-			"hall_types": map[string]interface{}{
-				"type":        "array",
-				"description": "Optional. Filter by hall types: 'hall_facts', 'hall_events', 'hall_discoveries', 'hall_preferences', 'hall_advice'",
-				"items": map[string]interface{}{
-					"type": "string",
-					"enum": []string{"hall_facts", "hall_events", "hall_discoveries", "hall_preferences", "hall_advice"},
-				},
+				"description": "Search query. Use keywords or natural language. Examples: 'database choice', 'auth preference', 'last session'",
 			},
 			"days_back": map[string]interface{}{
 				"type":        "integer",
@@ -121,7 +116,6 @@ func (t *HistoryTool) Execute(ctx context.Context, params map[string]interface{}
 	opts := &types.RetrieveOptions{
 		Query:      query,
 		SourceType: types.SourceTypeChat, // Only search chat content
-		SearchMode: types.SearchModeKeyword,
 	}
 
 	// Parse optional parameters
@@ -133,16 +127,6 @@ func (t *HistoryTool) Execute(ctx context.Context, params map[string]interface{}
 
 	if userID, ok := params["user_id"].(string); ok && userID != "" {
 		opts.UserID = userID
-	}
-
-	// Parse hall_types
-	if hallTypesRaw, ok := params["hall_types"].([]interface{}); ok {
-		opts.HallTypes = make([]types.HallType, 0, len(hallTypesRaw))
-		for _, ht := range hallTypesRaw {
-			if htStr, ok := ht.(string); ok {
-				opts.HallTypes = append(opts.HallTypes, types.HallType(htStr))
-			}
-		}
 	}
 
 	// Parse days_back for time range
@@ -183,17 +167,13 @@ func formatHistoryResults(results []*types.SearchResult, query string) string {
 	builder.WriteString(fmt.Sprintf("Found %d chat memories matching '%s':\n\n", len(results), query))
 
 	for i, r := range results {
-		layerName := "L1"
-		if r.Layer == types.LayerL2 {
-			layerName = "L2"
-		} else if r.Layer == types.LayerL3 {
+		layerName := "L2"
+		if r.Layer == types.LayerL3 {
 			layerName = "L3"
 		}
 
-		hallName := strings.Replace(string(r.Item.HallType), "hall_", "", 1)
-
-		builder.WriteString(fmt.Sprintf("**[%s/%s] Score: %.2f (%s)**\n",
-			layerName, hallName, r.Score, r.MatchType))
+		builder.WriteString(fmt.Sprintf("**[%s/%s] Score: %.2f**\n",
+			layerName, r.MatchType, r.Score))
 
 		if r.Item.Summary != "" {
 			builder.WriteString(fmt.Sprintf("%s\n", r.Item.Summary))
@@ -223,7 +203,6 @@ func formatNoResults(query string, daysBack int) string {
 		"Suggestions:\n"+
 		"- Try different keywords or broader terms\n"+
 		"- Increase days_back for older memories (current: %d)\n"+
-		"- Remove hall_types filter to search all categories\n"+
-		"- Try knowledge_search for file content or semantic search",
+		"- Try knowledge_search for file content",
 		query, daysBack, daysBack)
 }

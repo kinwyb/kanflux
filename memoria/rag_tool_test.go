@@ -104,8 +104,8 @@ func TestRAGTool(t *testing.T) {
 			t.Error("output should not be empty")
 		}
 
-		if !contains(output, "Semantic search") {
-			t.Error("output should indicate semantic search")
+		if !contains(output, "Search for") {
+			t.Error("output should indicate search")
 		}
 
 		// Should show both L2 and L3 results
@@ -194,7 +194,7 @@ func TestRAGTool(t *testing.T) {
 			t.Errorf("unexpected error: %v", err)
 		}
 
-		if !contains(output, "No semantically similar") {
+		if !contains(output, "No matches found") {
 			t.Error("should show no results message for low scores")
 		}
 	})
