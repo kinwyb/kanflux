@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -238,7 +239,7 @@ func (s *SummarizerImpl) ProcessFileContentRaw(ctx context.Context, content, fil
 
 	return &types.MemoryItem{
 		ID:         generateID(),
-		HallType:   types.HallFacts, // Default, not really used for files
+		HallType:   types.HallDiscoveries, // Files use discoveries (knowledge found)
 		Layer:      types.LayerL3,
 		SourceType: types.SourceTypeFile,
 		Content:    content,
@@ -461,6 +462,11 @@ func parseChatResponse(response string, userCtx types.UserIdentity) []*types.Mem
 	response = strings.TrimSpace(response)
 	response = cleanCodeBlock(response)
 
+	// Check if response is a JSON array - redirect to batch parser
+	if strings.HasPrefix(response, "[") {
+		return parseChatBatchResponse(response, userCtx)
+	}
+
 	var result struct {
 		HallType string   `json:"hall_type"`
 		Layer    string   `json:"layer"`
@@ -469,18 +475,14 @@ func parseChatResponse(response string, userCtx types.UserIdentity) []*types.Mem
 	}
 
 	if err := json.Unmarshal([]byte(response), &result); err != nil {
-		// Fall back to simple parsing
-		return []*types.MemoryItem{{
-			ID:        generateID(),
-			HallType:  types.HallEvents,
-			Layer:     types.LayerL2,
-			Content:   response,
-			Summary:   response,
-			Source:    "chat",
-			UserID:    userCtx.GetUserID(),
-			Timestamp: time.Now(),
-			Tokens:    estimateTokens(response),
-		}}
+		// JSON parsing failed, try to extract useful content
+		// Don't store raw JSON as summary - it's not useful for search
+		slog.Warn("Failed to parse chat response as JSON", "response_preview", truncateString(response, 100))
+		return nil
+	}
+
+	if result.Summary == "" {
+		return nil
 	}
 
 	hallType := types.HallEvents
@@ -517,6 +519,13 @@ func parseChatResponse(response string, userCtx types.UserIdentity) []*types.Mem
 	}}
 }
 
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
+}
+
 func parseChatBatchResponse(response string, userCtx types.UserIdentity) []*types.MemoryItem {
 	response = strings.TrimSpace(response)
 	response = cleanCodeBlock(response)
@@ -526,27 +535,42 @@ func parseChatBatchResponse(response string, userCtx types.UserIdentity) []*type
 		return nil
 	}
 
-	var items []struct {
-		QAIndex  int      `json:"qa_index"`
-		HallType string   `json:"hall_type"`
-		Layer    string   `json:"layer"`
-		Summary  string   `json:"summary"`
-		Keywords []string `json:"keywords"`
-	}
-
-	if err := json.Unmarshal([]byte(response), &items); err != nil {
-		// Fall back to single parsing if batch fails
+	// Try to parse as array first
+	var rawItems []map[string]interface{}
+	if err := json.Unmarshal([]byte(response), &rawItems); err != nil {
+		// Not an array, try single object
 		return parseChatResponse(response, userCtx)
 	}
 
-	result := make([]*types.MemoryItem, 0, len(items))
-	for _, item := range items {
-		if item.Summary == "" {
+	result := make([]*types.MemoryItem, 0, len(rawItems))
+	for _, rawItem := range rawItems {
+		// Extract fields from map
+		hallTypeStr, _ := rawItem["hall_type"].(string)
+		layerStr, _ := rawItem["layer"].(string)
+		summary, _ := rawItem["summary"].(string)
+
+		if summary == "" {
 			continue
 		}
 
+		// Extract keywords
+		var keywords []string
+		if kw, ok := rawItem["keywords"].([]interface{}); ok {
+			for _, k := range kw {
+				if ks, ok := k.(string); ok {
+					keywords = append(keywords, ks)
+				}
+			}
+		}
+
+		// Extract qa_index
+		qaIndex := 0
+		if qi, ok := rawItem["qa_index"].(float64); ok {
+			qaIndex = int(qi)
+		}
+
 		hallType := types.HallEvents
-		switch item.HallType {
+		switch hallTypeStr {
 		case "hall_facts":
 			hallType = types.HallFacts
 		case "hall_preferences":
@@ -558,9 +582,9 @@ func parseChatBatchResponse(response string, userCtx types.UserIdentity) []*type
 		}
 
 		layer := types.LayerL2
-		if item.Layer == "L1" {
+		if layerStr == "L1" {
 			layer = types.LayerL1
-		} else if item.Layer == "L3" {
+		} else if layerStr == "L3" {
 			layer = types.LayerL3
 		}
 
@@ -569,13 +593,13 @@ func parseChatBatchResponse(response string, userCtx types.UserIdentity) []*type
 			HallType:   hallType,
 			Layer:      layer,
 			SourceType: types.SourceTypeChat,
-			Content:    item.Summary,
-			Summary:    item.Summary,
+			Content:    summary,
+			Summary:    summary,
 			Source:     "chat",
 			UserID:     userCtx.GetUserID(),
 			Timestamp:  time.Now(),
-			Tokens:     estimateTokens(item.Summary),
-			Metadata:   map[string]any{"keywords": item.Keywords, "qa_index": item.QAIndex},
+			Tokens:     estimateTokens(summary),
+			Metadata:   map[string]any{"keywords": keywords, "qa_index": qaIndex},
 		})
 	}
 
@@ -588,6 +612,7 @@ func parseFileResponse(response string, userCtx types.UserIdentity) []*types.Mem
 }
 
 // parseSimpleFileResponse parses the simplified file response (no HallType)
+// Files are stored as hall_discoveries in L2 (knowledge discovered from files)
 func parseSimpleFileResponse(response string, userCtx types.UserIdentity) []*types.MemoryItem {
 	response = strings.TrimSpace(response)
 	response = cleanCodeBlock(response)
@@ -599,10 +624,10 @@ func parseSimpleFileResponse(response string, userCtx types.UserIdentity) []*typ
 	}
 
 	if err := json.Unmarshal([]byte(response), &result); err != nil {
-		// Fall back to simple parsing
+		// Fall back to simple parsing (use hall_discoveries for files)
 		return []*types.MemoryItem{{
 			ID:         generateID(),
-			HallType:   types.HallFacts,
+			HallType:   types.HallDiscoveries, // Files use discoveries for L2
 			Layer:      types.LayerL2,
 			SourceType: types.SourceTypeFile,
 			Content:    response,
@@ -628,7 +653,7 @@ func parseSimpleFileResponse(response string, userCtx types.UserIdentity) []*typ
 
 	return []*types.MemoryItem{{
 		ID:         generateID(),
-		HallType:   types.HallFacts, // Default for files, not really used
+		HallType:   types.HallDiscoveries, // Files use discoveries for L2
 		Layer:      types.LayerL2,
 		SourceType: types.SourceTypeFile,
 		Content:    result.Summary,

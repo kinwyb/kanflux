@@ -101,10 +101,11 @@ func (s *MDStore) loadCache() error {
 				continue
 			}
 			s.fileCache[file] = items
+			slog.Debug("Loaded L1 cache", "file", file, "items", len(items))
 		}
 	}
 
-	l2Dirs := []string{s.baseDir + "/l2/events", s.baseDir + "/l2/discovery"}
+	l2Dirs := []string{s.baseDir + "/l2/events", s.baseDir + "/l2/discoveries"}
 	for _, dir := range l2Dirs {
 		files, err := filepath.Glob(dir + "/*.md")
 		if err != nil {
@@ -117,9 +118,11 @@ func (s *MDStore) loadCache() error {
 				continue
 			}
 			s.fileCache[file] = items
+			slog.Debug("Loaded L2 cache", "file", file, "items", len(items))
 		}
 	}
 
+	slog.Info("Cache loaded", "total_files", len(s.fileCache))
 	return nil
 }
 
@@ -180,10 +183,10 @@ type itemKey struct {
 func (s *MDStore) groupItems(items []*types.MemoryItem) map[itemKey][]*types.MemoryItem {
 	groups := make(map[itemKey][]*types.MemoryItem)
 	for _, item := range items {
-		// 判断来源类型
+		// 根据 SourceType 字段判断来源类型
 		sourceType := "chat"
 		sourcePath := ""
-		if strings.HasPrefix(item.Source, "/") || strings.Contains(item.Source, string(filepath.Separator)) {
+		if item.SourceType == types.SourceTypeFile {
 			sourceType = "file"
 			sourcePath = item.Source
 		}
@@ -287,6 +290,7 @@ func (s *MDStore) generateMarkdown(items []*types.MemoryItem, layer types.Layer)
 		sb.WriteString("---\n\n")
 		sb.WriteString(fmt.Sprintf("**ID**: `%s`\n", item.ID))
 		sb.WriteString(fmt.Sprintf("**Hall**: %s\n", item.HallType))
+		sb.WriteString(fmt.Sprintf("**Layer**: L%d\n", item.Layer))
 		sb.WriteString(fmt.Sprintf("**SourceType**: %s\n", item.SourceType))
 		sb.WriteString(fmt.Sprintf("**Timestamp**: %s\n", item.Timestamp.Format(time.RFC3339)))
 		sb.WriteString(fmt.Sprintf("**Source**: %s\n\n", item.Source))
@@ -320,6 +324,9 @@ func (s *MDStore) parseMDFile(file string) ([]*types.MemoryItem, error) {
 	content := string(data)
 	items := make([]*types.MemoryItem, 0)
 
+	// Parse layer from file header or path
+	layer := s.detectLayerFromPath(file)
+
 	sections := strings.Split(content, "---")
 	for _, section := range sections {
 		if strings.TrimSpace(section) == "" {
@@ -327,11 +334,41 @@ func (s *MDStore) parseMDFile(file string) ([]*types.MemoryItem, error) {
 		}
 		item := s.parseSection(section)
 		if item != nil && item.ID != "" {
+			// Set layer from file path if not set (Layer default is 0, valid values are 1,2,3)
+			if item.Layer == 0 {
+				item.Layer = layer
+			}
 			items = append(items, item)
 		}
 	}
 
 	return items, nil
+}
+
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
+}
+
+// detectLayerFromPath determines layer from file path
+func (s *MDStore) detectLayerFromPath(filePath string) types.Layer {
+	if strings.Contains(filePath, "/l1/") || strings.Contains(filePath, "\\l1\\") {
+		return types.LayerL1
+	}
+	if strings.Contains(filePath, "/l2/") || strings.Contains(filePath, "\\l2\\") {
+		return types.LayerL2
+	}
+	if strings.Contains(filePath, "/l3/") || strings.Contains(filePath, "\\l3\\") {
+		return types.LayerL3
+	}
+	if strings.Contains(filePath, "/files/") || strings.Contains(filePath, "\\files\\") {
+		// Files directory, need to check sub-path
+		// Files are stored in L2 for summary, L3 for raw content
+		return types.LayerL2
+	}
+	return types.LayerL1
 }
 
 func (s *MDStore) parseSection(section string) *types.MemoryItem {
@@ -352,17 +389,27 @@ func (s *MDStore) parseSection(section string) *types.MemoryItem {
 		if strings.HasPrefix(line, "**ID**:") {
 			item.ID = strings.Trim(strings.TrimPrefix(line, "**ID**:"), " `")
 		} else if strings.HasPrefix(line, "**Hall**:") {
-			item.HallType = types.HallType(strings.TrimPrefix(line, "**Hall**:"))
+			item.HallType = types.HallType(strings.TrimSpace(strings.TrimPrefix(line, "**Hall**:")))
+		} else if strings.HasPrefix(line, "**Layer**:") {
+			layerStr := strings.TrimSpace(strings.TrimPrefix(line, "**Layer**:"))
+			switch layerStr {
+			case "L1", "1":
+				item.Layer = types.LayerL1
+			case "L2", "2":
+				item.Layer = types.LayerL2
+			case "L3", "3":
+				item.Layer = types.LayerL3
+			}
 		} else if strings.HasPrefix(line, "**SourceType**:") {
-			st := strings.TrimPrefix(line, "**SourceType**:")
+			st := strings.TrimSpace(strings.TrimPrefix(line, "**SourceType**:"))
 			item.SourceType = types.SourceType(st)
 		} else if strings.HasPrefix(line, "**Timestamp**:") {
-			ts := strings.TrimPrefix(line, "**Timestamp**:")
+			ts := strings.TrimSpace(strings.TrimPrefix(line, "**Timestamp**:"))
 			if t, err := time.Parse(time.RFC3339, ts); err == nil {
 				item.Timestamp = t
 			}
 		} else if strings.HasPrefix(line, "**Source**:") {
-			item.Source = strings.TrimPrefix(line, "**Source**:")
+			item.Source = strings.TrimSpace(strings.TrimPrefix(line, "**Source**:"))
 		} else if line == "### Summary" {
 			inSummary = true
 			inContent = false
@@ -505,7 +552,7 @@ func (s *MDStore) DeleteByUser(ctx context.Context, userID string) error {
 		s.baseDir + "/l1/facts/" + userPart + ".md",
 		s.baseDir + "/l1/preferences/" + userPart + ".md",
 		s.baseDir + "/l2/events/*_" + userPart + ".md",
-		s.baseDir + "/l2/discovery/*_" + userPart + ".md",
+		s.baseDir + "/l2/discoveries/*_" + userPart + ".md",
 	}
 
 	for _, pattern := range patterns {

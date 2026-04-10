@@ -68,10 +68,10 @@ func (p *FileProcessor) Process(ctx context.Context, source string, content stri
 		// 1. Generate L2 summary using simplified file prompt
 		items, err := summarizer.ProcessFileContent(ctx, chunk, source, userCtx)
 		if err != nil {
-			// Fallback: create simple L2 item
+			// Fallback: create simple L2 item (files use hall_discoveries for L2)
 			items = []*types.MemoryItem{{
 				ID:         fmt.Sprintf("mem_%d", time.Now().UnixNano()),
-				HallType:   types.HallFacts,
+				HallType:   types.HallDiscoveries, // Files use discoveries for L2
 				Layer:      types.LayerL2,
 				SourceType: types.SourceTypeFile,
 				Content:    chunk,
