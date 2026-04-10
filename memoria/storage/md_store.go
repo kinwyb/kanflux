@@ -289,6 +289,18 @@ func (s *MDStore) writeToFile(file string, items []*types.MemoryItem, layer type
 func (s *MDStore) generateMarkdown(items []*types.MemoryItem, layer types.Layer) string {
 	var sb strings.Builder
 
+	// L1 preferences: ultra-concise format, just list each preference
+	if layer == types.LayerL1 {
+		sb.WriteString("# User Preferences\n\n")
+		for _, item := range items {
+			if item.Summary != "" {
+				sb.WriteString("- " + strings.TrimSpace(item.Summary) + "\n")
+			}
+		}
+		return sb.String()
+	}
+
+	// L2/L3: use detailed format
 	sb.WriteString("# Memory Store\n\n")
 	sb.WriteString(fmt.Sprintf("Layer: L%d\n", layer))
 	sb.WriteString(fmt.Sprintf("Generated: %s\n\n", time.Now().Format(time.RFC3339)))
@@ -337,6 +349,12 @@ func (s *MDStore) parseMDFile(file string) ([]*types.MemoryItem, error) {
 	// Parse layer from file header or path
 	layer := s.detectLayerFromPath(file)
 
+	// L1 preferences: parse simple list format
+	if layer == types.LayerL1 {
+		return s.parseL1SimpleFormat(content), nil
+	}
+
+	// L2/L3: parse detailed format with "---" sections
 	sections := strings.Split(content, "---")
 	for _, section := range sections {
 		if strings.TrimSpace(section) == "" {
@@ -353,6 +371,48 @@ func (s *MDStore) parseMDFile(file string) ([]*types.MemoryItem, error) {
 	}
 
 	return items, nil
+}
+
+// parseL1SimpleFormat parses the ultra-concise L1 format:
+// # User Preferences
+//
+// - preference 1
+// - preference 2
+func (s *MDStore) parseL1SimpleFormat(content string) []*types.MemoryItem {
+	items := make([]*types.MemoryItem, 0)
+	lines := strings.Split(content, "\n")
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		// Skip headers and empty lines
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		// Parse preference lines (starts with "- ")
+		if strings.HasPrefix(line, "- ") {
+			summary := strings.TrimPrefix(line, "- ")
+			summary = strings.TrimSpace(summary)
+			if summary != "" {
+				items = append(items, &types.MemoryItem{
+					ID:         generateID(),
+					HallType:   types.HallPreferences,
+					Layer:      types.LayerL1,
+					Summary:    summary,
+					Content:    summary,
+					SourceType: types.SourceTypeChat,
+					Source:     "preferences",
+					Timestamp:  time.Now(),
+					Tokens:     len(summary) / 4,
+				})
+			}
+		}
+	}
+
+	return items
+}
+
+func generateID() string {
+	return fmt.Sprintf("mem_%d", time.Now().UnixNano())
 }
 
 func truncateString(s string, maxLen int) string {
