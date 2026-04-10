@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/kinwyb/kanflux/memoria/llm"
 	"github.com/kinwyb/kanflux/memoria/processor"
@@ -136,8 +137,139 @@ func (m *Memoria) Start(ctx context.Context) error {
 		}
 	}
 
+	// 初始化时进行异步解析
+	if m.config.InitialScan {
+		go m.initialScan()
+	}
+
 	slog.Info("Memoria service started")
 	return nil
+}
+
+// initialScan performs initial scan of knowledge files and chat sessions
+func (m *Memoria) initialScan() {
+	ctx := m.ctx
+	slog.Info("Starting initial memory scan")
+
+	// 1. 扫描并解析知识文件
+	m.scanKnowledgeFiles(ctx)
+
+	// 2. 扫描并解析聊天记录
+	m.scanChatSessions(ctx)
+
+	slog.Info("Initial memory scan completed")
+}
+
+// scanKnowledgeFiles 扫描并解析知识库文件
+func (m *Memoria) scanKnowledgeFiles(ctx context.Context) {
+	if m.fileProcessor == nil {
+		slog.Warn("File processor not initialized, skipping knowledge scan")
+		return
+	}
+
+	// 获取所有需要扫描的路径
+	watchPaths := m.config.GetAllWatchPaths()
+	if len(watchPaths) == 0 {
+		slog.Debug("No knowledge paths configured")
+		return
+	}
+
+	slog.Info("Scanning knowledge files", "paths", len(watchPaths))
+
+	// Cast to FileProcessor to access ScanModifiedFiles
+	fileProc, ok := m.fileProcessor.(*processor.FileProcessor)
+	if !ok {
+		slog.Warn("File processor type mismatch")
+		return
+	}
+
+	// 使用时间零点扫描所有文件（不限修改时间）
+	items, err := fileProc.ScanModifiedFiles(ctx, time.Time{})
+	if err != nil {
+		slog.Error("Failed to scan knowledge files", "error", err)
+		return
+	}
+
+	if len(items) == 0 {
+		slog.Debug("No knowledge files found")
+		return
+	}
+
+	slog.Info("Processing knowledge files", "count", len(items))
+
+	// 批量处理
+	result, err := m.fileProcessor.ProcessBatch(ctx, items)
+	if err != nil {
+		slog.Error("Failed to process knowledge files", "error", err)
+		return
+	}
+
+	// 存储到各层
+	for _, item := range result.Items {
+		if err := m.AddMemory(ctx, item); err != nil {
+			slog.Warn("Failed to store memory item", "id", item.ID, "error", err)
+		}
+	}
+
+	slog.Info("Knowledge files processed",
+		"items", len(result.Items),
+		"l1", result.LayerCounts[types.LayerL1],
+		"l2", result.LayerCounts[types.LayerL2],
+		"l3", result.LayerCounts[types.LayerL3],
+		"errors", len(result.Errors))
+}
+
+// scanChatSessions 扫描并解析聊天记录
+func (m *Memoria) scanChatSessions(ctx context.Context) {
+	if m.chatProcessor == nil {
+		slog.Warn("Chat processor not initialized, skipping session scan")
+		return
+	}
+
+	sessionDir := m.config.GetSessionDir()
+	slog.Info("Scanning chat sessions", "dir", sessionDir)
+
+	// Cast to ChatProcessor to access ScanSessions
+	chatProc, ok := m.chatProcessor.(*processor.ChatProcessor)
+	if !ok {
+		slog.Warn("Chat processor type mismatch")
+		return
+	}
+
+	// 扫描所有 session 文件（使用时间零点扫描全部）
+	items, err := chatProc.ScanSessions(ctx, time.Time{})
+	if err != nil {
+		slog.Error("Failed to scan chat sessions", "error", err)
+		return
+	}
+
+	if len(items) == 0 {
+		slog.Debug("No chat sessions found")
+		return
+	}
+
+	slog.Info("Processing chat sessions", "count", len(items))
+
+	// 批量处理
+	result, err := m.chatProcessor.ProcessBatch(ctx, items)
+	if err != nil {
+		slog.Error("Failed to process chat sessions", "error", err)
+		return
+	}
+
+	// 存储到各层
+	for _, item := range result.Items {
+		if err := m.AddMemory(ctx, item); err != nil {
+			slog.Warn("Failed to store memory item", "id", item.ID, "error", err)
+		}
+	}
+
+	slog.Info("Chat sessions processed",
+		"items", len(result.Items),
+		"l1", result.LayerCounts[types.LayerL1],
+		"l2", result.LayerCounts[types.LayerL2],
+		"l3", result.LayerCounts[types.LayerL3],
+		"errors", len(result.Errors))
 }
 
 // Stop stops the Memoria service

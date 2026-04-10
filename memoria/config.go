@@ -4,6 +4,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/kinwyb/kanflux/config"
 	"github.com/kinwyb/kanflux/memoria/types"
 )
 
@@ -14,6 +15,10 @@ type Config struct {
 	StorageConfig   *types.StorageConfig   `json:"storage_config"`
 	ProcessorConfig *types.ProcessorConfig `json:"processor_config"`
 	WatchPaths      []types.WatchPath      `json:"watch_paths"`
+	// KnowledgePaths 知识库路径配置（从主配置继承）
+	KnowledgePaths  []config.KnowledgePathConfig `json:"knowledge_paths"`
+	// InitialScan 初始化时是否扫描（默认 true）
+	InitialScan     bool `json:"initial_scan"`
 }
 
 // ScheduleConfig for periodic scheduling
@@ -46,6 +51,7 @@ func DefaultConfig() *Config {
 			EnableParallel: true,
 			MaxRetries:     3,
 		},
+		InitialScan: true, // 默认初始化时扫描
 	}
 }
 
@@ -92,6 +98,16 @@ func WithProcessorConfig(pc *types.ProcessorConfig) ConfigOption {
 // WithWatchPaths sets the watch paths
 func WithWatchPaths(paths []types.WatchPath) ConfigOption {
 	return func(c *Config) { c.WatchPaths = paths }
+}
+
+// WithKnowledgePaths sets the knowledge paths from main config
+func WithKnowledgePaths(paths []config.KnowledgePathConfig) ConfigOption {
+	return func(c *Config) { c.KnowledgePaths = paths }
+}
+
+// WithInitialScan sets whether to scan on initialization
+func WithInitialScan(scan bool) ConfigOption {
+	return func(c *Config) { c.InitialScan = scan }
 }
 
 // ApplyOptions applies options to the config
@@ -160,4 +176,48 @@ func (c *Config) GetSessionDir() string {
 		return c.ProcessorConfig.SessionDir
 	}
 	return c.Workspace + "/.kanflux/sessions"
+}
+
+// GetKnowledgeWatchPaths converts KnowledgePathConfig to WatchPath format
+func (c *Config) GetKnowledgeWatchPaths() []types.WatchPath {
+	result := make([]types.WatchPath, 0, len(c.KnowledgePaths))
+
+	for _, kp := range c.KnowledgePaths {
+		// 处理相对路径：如果不是绝对路径，则相对于 workspace
+		path := kp.Path
+		if path[0] != '/' && path[0] != '~' {
+			path = c.Workspace + "/" + path
+		}
+
+		// 转换扩展名格式：添加 "."
+		extensions := make([]string, len(kp.Extensions))
+		for i, ext := range kp.Extensions {
+			if ext[0] != '.' {
+				extensions[i] = "." + ext
+			} else {
+				extensions[i] = ext
+			}
+		}
+
+		result = append(result, types.WatchPath{
+			Path:       path,
+			Extensions: extensions,
+			Recursive:  kp.Recursive,
+			Exclude:    kp.Exclude,
+		})
+	}
+
+	return result
+}
+
+// GetAllWatchPaths returns combined watch paths (KnowledgePaths + default paths)
+func (c *Config) GetAllWatchPaths() []types.WatchPath {
+	result := c.GetKnowledgeWatchPaths()
+
+	// 如果没有配置知识库路径，使用默认路径
+	if len(result) == 0 {
+		result = GetDefaultWatchPaths(c.Workspace)
+	}
+
+	return result
 }
