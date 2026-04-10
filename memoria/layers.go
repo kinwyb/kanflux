@@ -228,17 +228,25 @@ func (l *L1FactsLayer) Close() error {
 // ============ L2 Events Layer ============
 
 // L2EventsLayer implements the L2 (Room Memories) layer
+// Uses SQLite for storage with semantic search capability
+// Also outputs MD files for validation
 type L2EventsLayer struct {
-	storage   types.Storage
+	mdStore   types.Storage   // MD file storage for validation
+	sqlite    *storage.SQLiteStore // SQLite storage for semantic search
 	maxTokens int
 }
 
 // NewL2EventsLayer creates an L2 layer instance
-func NewL2EventsLayer(storage types.Storage, maxTokens int) *L2EventsLayer {
+func NewL2EventsLayer(mdStore types.Storage, maxTokens int) *L2EventsLayer {
 	return &L2EventsLayer{
-		storage:   storage,
+		mdStore:   mdStore,
 		maxTokens: maxTokens,
 	}
+}
+
+// SetSQLiteStore sets the SQLite store for L2
+func (l *L2EventsLayer) SetSQLiteStore(sqlite *storage.SQLiteStore) {
+	l.sqlite = sqlite
 }
 
 // Initialize initializes the L2 layer
@@ -247,6 +255,7 @@ func (l *L2EventsLayer) Initialize(ctx context.Context) error {
 }
 
 // Add adds a new L2 memory item
+// Stores to both SQLite (for semantic search) and MD files (for validation)
 func (l *L2EventsLayer) Add(ctx context.Context, item *types.MemoryItem) error {
 	if item.Layer != types.LayerL2 {
 		return fmt.Errorf("invalid layer for L2: expected L2, got %d", item.Layer)
@@ -256,7 +265,22 @@ func (l *L2EventsLayer) Add(ctx context.Context, item *types.MemoryItem) error {
 		return fmt.Errorf("invalid hall type for L2: expected events or discoveries, got %s", item.HallType)
 	}
 
-	return l.storage.Store(ctx, item)
+	// Store to SQLite first (primary storage for semantic search)
+	if l.sqlite != nil {
+		if err := l.sqlite.Store(ctx, item); err != nil {
+			slog.Warn("failed to store L2 to SQLite", "id", item.ID, "error", err)
+			// Continue to MD storage even if SQLite fails
+		}
+	}
+
+	// Also store to MD files for validation
+	if l.mdStore != nil {
+		if err := l.mdStore.Store(ctx, item); err != nil {
+			slog.Warn("failed to store L2 to MD", "id", item.ID, "error", err)
+		}
+	}
+
+	return nil
 }
 
 // Retrieve retrieves L2 memories matching criteria
@@ -264,7 +288,23 @@ func (l *L2EventsLayer) Retrieve(ctx context.Context, opts *types.RetrieveOption
 	if len(opts.Layers) == 0 {
 		opts.Layers = []types.Layer{types.LayerL2}
 	}
-	return l.storage.Retrieve(ctx, opts)
+
+	// Prefer SQLite for retrieval
+	if l.sqlite != nil {
+		items, err := l.sqlite.GetByLayer(ctx, 2, opts.UserID, opts.Limit)
+		if err != nil {
+			slog.Warn("failed to retrieve L2 from SQLite, fallback to MD", "error", err)
+		} else if len(items) > 0 {
+			return items, nil
+		}
+	}
+
+	// Fallback to MD storage
+	if l.mdStore != nil {
+		return l.mdStore.Retrieve(ctx, opts)
+	}
+
+	return []*types.MemoryItem{}, nil
 }
 
 // LoadRecent loads recent L2 memories
@@ -279,7 +319,7 @@ func (l *L2EventsLayer) LoadRecent(ctx context.Context, userID string, days int)
 		},
 		Limit: 100,
 	}
-	return l.storage.Retrieve(ctx, opts)
+	return l.Retrieve(ctx, opts)
 }
 
 // GetAll returns all L2 memories
@@ -315,7 +355,7 @@ func (l *L2EventsLayer) Close() error {
 
 // L3RawLayer implements the L3 (Deep Search) layer
 type L3RawLayer struct {
-	store     *storage.L3SQLiteStore
+	store     *storage.SQLiteStore
 	embedder  types.Embedder
 	workspace string
 }
@@ -328,13 +368,23 @@ func NewL3RawLayer(workspace string, embedder types.Embedder) *L3RawLayer {
 	}
 }
 
+// SetSQLiteStore sets the SQLite store for L3 (shares with L2)
+func (l *L3RawLayer) SetSQLiteStore(store *storage.SQLiteStore) {
+	l.store = store
+}
+
 // Initialize initializes the L3 layer
 func (l *L3RawLayer) Initialize(ctx context.Context) error {
 	if l.workspace == "" {
 		return nil // No workspace, skip initialization
 	}
 
-	store, err := storage.NewL3SQLiteStore(l.workspace, l.embedder)
+	// If store already set (shared with L2), skip creation
+	if l.store != nil {
+		return nil
+	}
+
+	store, err := storage.NewSQLiteStore(l.workspace, l.embedder)
 	if err != nil {
 		return fmt.Errorf("failed to create L3 store: %w", err)
 	}
@@ -420,7 +470,7 @@ func (l *L3RawLayer) DeleteBySource(ctx context.Context, source string) error {
 }
 
 // GetStore returns the underlying L3 store
-func (l *L3RawLayer) GetStore() *storage.L3SQLiteStore {
+func (l *L3RawLayer) GetStore() *storage.SQLiteStore {
 	return l.store
 }
 

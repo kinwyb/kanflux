@@ -91,8 +91,10 @@ memoria/
 │   └── file_processor.go # 文件处理器（L2+L3 存储）
 │   └── watcher.go        # 文件监听器
 └── storage/
-    ├── md_store.go       # MD 文件存储管理
-    └── l3_sqlite.go      # L3 SQLite 向量存储
+    ├── md_store.go       # MD 文件存储管理（L1/L2）
+    ├── sqlite_types.go   # SQLite 存储类型定义
+    ├── sqlite_store.go   # SQLiteVectorStore 核心实现
+    └── sqlite_l3.go      # SQLiteStore 门面（L2/L3 共用）
 ```
 
 ## 存储结构
@@ -103,15 +105,25 @@ memoria/
 │   ├── facts/<user>.md        # L1 关键事实（Chat only）
 │   └── preferences/<user>.md  # L1 用户偏好（Chat only）
 ├── l2/
-│   ├── events/<date>_<user>.md   # L2 聊天事件
-│   ├── discoveries/<date>_<user>.md # L2 聊天发现
-│   └── files/<hash>.md           # L2 文件总结
+│   ├── events/<date>_<user>.md   # L2 聊天事件（校验用）
+│   ├── discoveries/<date>_<user>.md # L2 聊天发现（校验用）
+│   └── files/<hash>.md           # L2 文件总结（校验用）
 ├── l3/                        # L3 向量索引
-│   └── l3.db                  # SQLite + 向量存储
+│   └── memoria.db             # SQLite + 向量存储（L2 + L3 共用）
 └── metadata/
     ├── users.json           # 用户注册表
     └── file_index.json      # 文件处理状态索引
 ```
+
+**SQLite 数据库结构：**
+
+`memoria.db` 包含三张表：
+
+| 表名 | 用途 | 说明 |
+|------|------|------|
+| `documents` | 文档存储 | L1/L2/L3 共用，`layer` 字段区分层级 |
+| `embeddings` | 向量存储 | L2/L3 的 embedding 向量 |
+| `documents_fts` | FTS5 索引 | 全文搜索索引 |
 
 **存储区分：**
 
@@ -119,6 +131,11 @@ memoria/
 |------|-----|-----|-----|------|
 | 聊天记录 | ✅ 用户关键决策、偏好 | ✅ 事件、发现 | ✅ 原始聊天记录 | 复杂 HallType 分类 |
 | 文件内容 | ❌ 不存储 | ✅ 内容总结 | ✅ 全文向量 | 简单总结，无 HallType |
+
+**L2 存储特点：**
+- 同时存入 SQLite（用于语义搜索）和 MD 文件（用于校验）
+- 存储摘要内容 + embedding 向量
+- 搜索时优先匹配 L2（摘要更精确）
 
 **文件索引** (`metadata/file_index.json`)：
 - 记录每个已处理文件的内容 hash
@@ -327,8 +344,13 @@ results, err := service.Search(ctx, "性能优化方案", &types.RetrieveOptions
 | 层级 | 搜索方式 | 速度 | 说明 |
 |------|---------|------|------|
 | L1 | 精确/关键词 | 最快 | 始终加载在内存，优先返回 |
-| L2 | 关键词过滤 | 中等 | 按需加载，时间范围过滤 |
-| L3 | 语义搜索 | 最慢 | 向量搜索，最全面 |
+| L2 | 向量语义搜索 + FTS5 | 中等 | 摘要精确，搜索优先级最高 |
+| L3 | 向量语义搜索 + FTS5 | 最慢 | 原始内容，可能有文档切割问题 |
+
+**语义搜索策略：**
+- 优先搜索 L2（摘要层，语义更精确）
+- L2 结果不足时补充 L3（原始内容层）
+- L3 可能有文档切割导致的上下文异常，故优先级较低
 
 **匹配类型：**
 
@@ -336,9 +358,9 @@ results, err := service.Search(ctx, "性能优化方案", &types.RetrieveOptions
 - `keyword`: 关键词匹配
 - `semantic`: 语义向量匹配（需要配置 Embedder）
 
-### 启用 L3 语义搜索
+### 启用 L2/L3 语义搜索
 
-L3 使用 SQLite + 向量存储原始内容和 embedding：
+L2 和 L3 共用 SQLite + 向量存储，存储摘要和原始内容的 embedding：
 
 ```go
 // 1. 实现 Embedder 接口
@@ -348,24 +370,41 @@ func (e *MyEmbedder) Embed(ctx context.Context, text string) ([]float32, error) 
     // 调用 embedding API
 }
 
+func (e *MyEmbedder) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
+    // 批量 embedding（可选，提升效率）
+}
+
 func (e *MyEmbedder) Dimension() int { return 1536 }  // embedding 维度
 
-// 2. 设置 Embedder（会自动初始化 L3 层）
-service.SetEmbedder(&MyEmbedder{})
+// 2. 配置 Embedding（会自动初始化 SQLite 存储）
+config.Embedding = &types.EmbeddingConfig{
+    Provider: "openai",
+    Model:    "text-embedding-3-small",
+}
 
-// 3. 搜索时自动使用 L3 语义搜索
+// 3. 创建服务时自动初始化 L2/L3 语义搜索
+service := memoria.New(config)
+
+// 4. 搜索时自动使用 L2 优先、L3 补充的语义搜索
 results, err := service.Search(ctx, "那个数据库问题怎么解决的", &types.RetrieveOptions{
     UserID: "user123",
     Limit:  10,
 })
 ```
 
-**L3 存储内容：**
-- 原始对话/文件内容
-- 自动生成的 embedding 向量
-- 元数据（用户ID、来源、时间等）
+**L2/L3 存储内容：**
 
-**存储位置：** `<workspace>/memoria/l3/`
+| 层级 | 存储内容 | 向量 | 说明 |
+|------|---------|------|------|
+| L2 | 摘要（~200-500 tokens） | ✅ | 语义精确，搜索优先 |
+| L3 | 原始内容（无限制） | ✅ | 全面覆盖，补充搜索 |
+
+**存储位置：** `<workspace>/memoria/memoria.db`
+
+**L2 同步输出 MD 文件：**
+- 存储时同步输出 MD 文件到 `l2/events/` 或 `l2/discoveries/`
+- 用于校验 SQLite 存储的搜索结果
+- 路径格式：`l2/{events\|discoveries}/{date}_{user}.md`
 
 ### 直接检索记忆
 
@@ -584,3 +623,45 @@ go test -v -run TestMemoriaService ./memoria/
 3. **用户分区**：所有记忆按 UserID 分区存储，不同用户数据隔离
 4. **文件监听**：使用定时扫描而非 fsnotify，减少系统资源占用
 5. **Session 格式**：JSONL 格式，每行一条消息，包含 `role` 和 `content` 字段
+6. **L2/L3 存储**：共用 SQLite 数据库，L2 存摘要，L3 存原文，搜索时 L2 优先
+7. **MD 校验文件**：L2 存储时同步输出 MD 文件，用于对比验证 SQLite 搜索结果
+
+## 架构说明
+
+### 存储架构
+
+```
+┌────────────────────────────────────────────────────────┐
+│                    memoria.db (SQLite)                  │
+├────────────────────────────────────────────────────────┤
+│ documents (L1/L2/L3)  embeddings (L2/L3)  FTS5 索引     │
+└────────────────────────────────────────────────────────┘
+          ↑                           ↑
+          │ 存储                       │ 搜索
+          │                           │
+   ┌──────┴──────┐            ┌───────┴───────┐
+   │ L2EventsLayer│            │ KeywordSearch │ (FTS5)
+   │ L3RawLayer   │            │ Search        │ (向量)
+   └─────────────┘            └───────────────┘
+          │
+          ↓ 同步输出
+   ┌─────────────┐
+   │ MD 文件      │ ← 校验用
+   │ l2/events/  │
+   │ l2/discov/  │
+   └─────────────┘
+```
+
+### 搜索策略
+
+| 搜索模式 | L1 | L2 | L3 | 说明 |
+|---------|----|----|----|----|
+| 关键词 | 内存匹配 | FTS5 | FTS5 | 快速精确匹配 |
+| 语义 | ❌ | 向量搜索 | 向量搜索 | L2 优先，L3 补充 |
+
+### 依赖说明
+
+memoria 包内部实现了 SQLite 向量存储，不再依赖 mempalace-go：
+- `sqlite_store.go`：SQLiteVectorStore 核心实现
+- `sqlite_types.go`：Document、SearchResult 等类型定义
+- `sqlite_l3.go`：SQLiteStore 门面，L2/L3 共用

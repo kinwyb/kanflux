@@ -25,9 +25,10 @@ type Memoria struct {
 	fileProcessor types.Processor
 	scheduler     *Scheduler
 
-	l1 *L1FactsLayer
-	l2 *L2EventsLayer
-	l3 *L3RawLayer
+	l1         *L1FactsLayer
+	l2         *L2EventsLayer
+	l3         *L3RawLayer
+	sqliteStore *storage.SQLiteStore // Shared SQLite store for L2 and L3
 
 	// L3 语义搜索
 	embedder types.Embedder
@@ -69,10 +70,10 @@ func (m *Memoria) initialize() error {
 	m.l1 = NewL1FactsLayer(mdStore, m.config.StorageConfig.MaxL1Tokens)
 	m.l2 = NewL2EventsLayer(mdStore, m.config.StorageConfig.MaxL2Tokens)
 
-	// 自动初始化 L3 层（如果有 Embedding 配置）
+	// 自动初始化 SQLite 存储（L2 + L3 共用）
 	if m.config.Embedding != nil {
-		if err := m.initL3FromConfig(); err != nil {
-			slog.Warn("Failed to initialize L3 layer from config", "error", err)
+		if err := m.initSQLiteStore(); err != nil {
+			slog.Warn("Failed to initialize SQLite store", "error", err)
 		}
 	}
 
@@ -80,21 +81,34 @@ func (m *Memoria) initialize() error {
 	return nil
 }
 
-// initL3FromConfig 根据 Embedding 配置初始化 L3 层
-func (m *Memoria) initL3FromConfig() error {
+// initSQLiteStore initializes SQLite store for L2 and L3
+func (m *Memoria) initSQLiteStore() error {
 	ctx := context.Background()
 	embedder, err := NewEmbedderFromConfig(ctx, m.config.Embedding)
 	if err != nil {
 		return fmt.Errorf("failed to create embedder: %w", err)
 	}
-
 	m.embedder = embedder
-	m.l3 = NewL3RawLayer(m.config.GetMemoriaDir()+"/l3", embedder)
-	if err := m.l3.Initialize(ctx); err != nil {
-		return fmt.Errorf("failed to initialize L3 layer: %w", err)
+
+	// Create shared SQLite store
+	sqliteStore, err := storage.NewSQLiteStore(m.config.GetMemoriaDir(), embedder)
+	if err != nil {
+		return fmt.Errorf("failed to create SQLite store: %w", err)
 	}
 
-	slog.Info("L3 layer initialized from config",
+	if err := sqliteStore.Initialize(ctx); err != nil {
+		return fmt.Errorf("failed to initialize SQLite store: %w", err)
+	}
+
+	m.sqliteStore = sqliteStore
+
+	// Share SQLite store with L2 and L3
+	m.l2.SetSQLiteStore(sqliteStore)
+
+	m.l3 = NewL3RawLayer(m.config.GetMemoriaDir(), embedder)
+	m.l3.SetSQLiteStore(sqliteStore)
+
+	slog.Info("SQLite store initialized for L2 and L3",
 		"provider", m.config.Embedding.Provider,
 		"model", m.config.Embedding.Model)
 	return nil
@@ -121,26 +135,37 @@ func (m *Memoria) SetChatModel(model types.ChatModel) {
 	}
 }
 
-// SetEmbedder sets the embedder for L3 semantic search
+// SetEmbedder sets the embedder for L2/L3 semantic search
 func (m *Memoria) SetEmbedder(emb types.Embedder) {
 	m.embedder = emb
 
-	// Initialize L3 layer with embedder
-	if m.l3 == nil && emb != nil {
-		m.l3 = NewL3RawLayer(m.config.GetMemoriaDir()+"/l3", emb)
-		if err := m.l3.Initialize(context.Background()); err != nil {
-			slog.Warn("Failed to initialize L3 layer", "error", err)
+	// Initialize SQLite store if not already initialized
+	if m.sqliteStore == nil && emb != nil {
+		sqliteStore, err := storage.NewSQLiteStore(m.config.GetMemoriaDir(), emb)
+		if err != nil {
+			slog.Warn("Failed to create SQLite store", "error", err)
+			return
 		}
+		if err := sqliteStore.Initialize(context.Background()); err != nil {
+			slog.Warn("Failed to initialize SQLite store", "error", err)
+			return
+		}
+		m.sqliteStore = sqliteStore
+		m.l2.SetSQLiteStore(sqliteStore)
+	}
+
+	// Initialize L3 layer
+	if m.l3 == nil && emb != nil {
+		m.l3 = NewL3RawLayer(m.config.GetMemoriaDir(), emb)
+		m.l3.SetSQLiteStore(m.sqliteStore)
 	}
 }
 
 // SetL3KnowledgeBase initializes L3 layer with embedder
 func (m *Memoria) SetL3KnowledgeBase() {
 	if m.embedder != nil && m.l3 == nil {
-		m.l3 = NewL3RawLayer(m.config.GetMemoriaDir()+"/l3", m.embedder)
-		if err := m.l3.Initialize(context.Background()); err != nil {
-			slog.Warn("Failed to initialize L3 layer", "error", err)
-		}
+		m.l3 = NewL3RawLayer(m.config.GetMemoriaDir(), m.embedder)
+		m.l3.SetSQLiteStore(m.sqliteStore)
 	}
 }
 
@@ -460,6 +485,10 @@ func (m *Memoria) Close() error {
 	if m.l3 != nil {
 		m.l3.Close()
 	}
+	// Close SQLite store (shared by L2 and L3)
+	if m.sqliteStore != nil {
+		m.sqliteStore.Close()
+	}
 	if m.storage != nil {
 		m.storage.Close()
 	}
@@ -611,7 +640,7 @@ func (m *Memoria) keywordSearch(ctx context.Context, query string, opts *types.R
 		}
 	}
 
-	// 1. L1 搜索：精确/关键词匹配（始终加载，最快）
+	// 1. L1 搜索：精确/关键词匹配（内存缓存，最快）
 	if searchL1 {
 		l1Results := m.searchL1(query, opts)
 		for _, r := range l1Results {
@@ -622,9 +651,9 @@ func (m *Memoria) keywordSearch(ctx context.Context, query string, opts *types.R
 		}
 	}
 
-	// 2. L2 搜索：关键词过滤（按需加载）
+	// 2. L2 搜索：FTS5 关键词搜索（SQLite）
 	if searchL2 && len(results) < opts.Limit {
-		l2Results := m.searchL2(ctx, query, opts)
+		l2Results := m.searchL2Keyword(ctx, query, opts)
 		for _, r := range l2Results {
 			if !seen[r.Item.ID] {
 				seen[r.Item.ID] = true
@@ -671,27 +700,21 @@ func (m *Memoria) semanticSearch(ctx context.Context, query string, opts *types.
 		}
 	}
 
-	// L2 semantic search (if embedder available)
-	// Note: L2 doesn't have vectors by default, so this is a keyword fallback
-	if searchL2 && len(results) < opts.Limit {
-		l2Results := m.searchL2(ctx, query, opts)
-		for _, r := range l2Results {
-			if !seen[r.Item.ID] {
-				seen[r.Item.ID] = true
-				// Mark as semantic even though it's keyword-based for L2
-				r.MatchType = "semantic"
-				results = append(results, r)
-			}
+	// Use unified SQLite search for L2/L3 (prefer L2)
+	if (searchL2 || searchL3) && m.sqliteStore != nil {
+		layers := make([]int, 0)
+		if searchL2 {
+			layers = append(layers, 2)
 		}
-	}
+		if searchL3 {
+			layers = append(layers, 3)
+		}
 
-	// L3 semantic search
-	if searchL3 && len(results) < opts.Limit && m.l3 != nil {
-		l3Results, err := m.searchL3(ctx, query, opts)
+		sqliteResults, err := m.sqliteStore.Search(ctx, query, opts)
 		if err != nil {
-			slog.Warn("L3 semantic search failed", "error", err)
+			slog.Warn("SQLite semantic search failed", "error", err)
 		} else {
-			for _, r := range l3Results {
+			for _, r := range sqliteResults {
 				if !seen[r.Item.ID] {
 					seen[r.Item.ID] = true
 					results = append(results, r)
@@ -758,23 +781,50 @@ func (m *Memoria) searchL1(query string, opts *types.RetrieveOptions) []*types.S
 	return results
 }
 
-// searchL2 searches L2 layer (keyword match)
-func (m *Memoria) searchL2(ctx context.Context, query string, opts *types.RetrieveOptions) []*types.SearchResult {
+// searchL2Keyword searches L2 layer using SQLite FTS5 keyword search
+func (m *Memoria) searchL2Keyword(ctx context.Context, query string, opts *types.RetrieveOptions) []*types.SearchResult {
+	results := make([]*types.SearchResult, 0)
+
+	// Use SQLite FTS5 search if available
+	if m.sqliteStore != nil {
+		l2Opts := &types.RetrieveOptions{
+			Layers:     []types.Layer{types.LayerL2},
+			UserID:     opts.UserID,
+			SourceType: opts.SourceType,
+			Limit:      opts.Limit * 2, // Get more for filtering
+			HallTypes:  opts.HallTypes,
+		}
+
+		sqliteResults, err := m.sqliteStore.KeywordSearch(ctx, query, l2Opts)
+		if err != nil {
+			slog.Warn("L2 FTS search failed", "error", err)
+		} else {
+			for _, r := range sqliteResults {
+				r.MatchType = "keyword"
+				results = append(results, r)
+			}
+			sortResultsByScore(results)
+			return results
+		}
+	}
+
+	// Fallback to MD storage
+	return m.searchL2Fallback(ctx, query, opts)
+}
+
+// searchL2Fallback searches L2 using MD storage (fallback)
+func (m *Memoria) searchL2Fallback(ctx context.Context, query string, opts *types.RetrieveOptions) []*types.SearchResult {
 	results := make([]*types.SearchResult, 0)
 	queryLower := strings.ToLower(query)
 	queryTerms := strings.Fields(queryLower)
 
-	// 设置 L2 检索选项
 	l2Opts := &types.RetrieveOptions{
 		Layers:     []types.Layer{types.LayerL2},
 		UserID:     opts.UserID,
-		SourceType: opts.SourceType, // Pass through SourceType filter
-		Limit:      50,               // L2 取更多，然后过滤
+		SourceType: opts.SourceType,
+		Limit:      50,
+		HallTypes:  opts.HallTypes,
 		TimeRange:  opts.TimeRange,
-	}
-
-	if len(opts.HallTypes) > 0 {
-		l2Opts.HallTypes = opts.HallTypes
 	}
 
 	items, err := m.storage.Retrieve(ctx, l2Opts)
