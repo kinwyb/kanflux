@@ -263,9 +263,9 @@ func (l *L2EventsLayer) Add(ctx context.Context, item *types.MemoryItem) error {
 		return fmt.Errorf("invalid layer for L2: expected L2, got %d", item.Layer)
 	}
 
-	// L2 accepts facts, events, and discoveries
-	if item.HallType != types.HallFacts && item.HallType != types.HallEvents && item.HallType != types.HallDiscoveries {
-		return fmt.Errorf("invalid hall type for L2: expected facts, events or discoveries, got %s", item.HallType)
+	// L2 accepts facts, events, discoveries, and advice
+	if item.HallType != types.HallFacts && item.HallType != types.HallEvents && item.HallType != types.HallDiscoveries && item.HallType != types.HallAdvice {
+		return fmt.Errorf("invalid hall type for L2: expected facts, events, discoveries or advice, got %s", item.HallType)
 	}
 
 	// Store to SQLite first (primary storage for semantic search)
@@ -359,6 +359,7 @@ func (l *L2EventsLayer) Close() error {
 // L3RawLayer implements the L3 (Deep Search) layer
 type L3RawLayer struct {
 	store     *storage.SQLiteStore
+	mdStore   types.Storage // MD file storage for inspection
 	embedder  types.Embedder
 	workspace string
 }
@@ -374,6 +375,11 @@ func NewL3RawLayer(workspace string, embedder types.Embedder) *L3RawLayer {
 // SetSQLiteStore sets the SQLite store for L3 (shares with L2)
 func (l *L3RawLayer) SetSQLiteStore(store *storage.SQLiteStore) {
 	l.store = store
+}
+
+// SetMDStore sets the MD file storage for L3 (for inspection/debugging)
+func (l *L3RawLayer) SetMDStore(mdStore types.Storage) {
+	l.mdStore = mdStore
 }
 
 // Initialize initializes the L3 layer
@@ -401,6 +407,7 @@ func (l *L3RawLayer) Initialize(ctx context.Context) error {
 }
 
 // Add adds raw content to L3 with embedding
+// Stores to both SQLite (for semantic search) and MD files (for inspection)
 func (l *L3RawLayer) Add(ctx context.Context, item *types.MemoryItem) error {
 	if l.store == nil {
 		return fmt.Errorf("L3 store not initialized")
@@ -410,7 +417,19 @@ func (l *L3RawLayer) Add(ctx context.Context, item *types.MemoryItem) error {
 		return fmt.Errorf("invalid layer for L3: expected L3, got %d", item.Layer)
 	}
 
-	return l.store.Store(ctx, item)
+	// Store to SQLite (primary storage for semantic search)
+	if err := l.store.Store(ctx, item); err != nil {
+		return err
+	}
+
+	// Also store to MD files for inspection/debugging
+	if l.mdStore != nil {
+		if err := l.mdStore.Store(ctx, item); err != nil {
+			slog.Warn("failed to store L3 to MD", "id", item.ID, "error", err)
+		}
+	}
+
+	return nil
 }
 
 // Search performs semantic search in L3

@@ -323,16 +323,16 @@ func (p *ChatProcessor) findFinalAnswer(messages []ChatMessage, startPos int) st
 // extractMessageText extracts text content from a message
 func (p *ChatProcessor) extractMessageText(msg ChatMessage) string {
 	if msg.Content != "" {
-		return msg.Content
+		return strings.TrimSpace(msg.Content)
 	}
 	if len(msg.MultiContent) > 0 {
 		var texts []string
 		for _, part := range msg.MultiContent {
 			if part.Type == "text" && part.Text != "" {
-				texts = append(texts, part.Text)
+				texts = append(texts, strings.TrimSpace(part.Text))
 			}
 		}
-		return strings.Join(texts, "\n")
+		return strings.TrimSpace(strings.Join(texts, "\n"))
 	}
 	return ""
 }

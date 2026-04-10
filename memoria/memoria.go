@@ -106,6 +106,7 @@ func (m *Memoria) initSQLiteStore() error {
 
 	m.l3 = NewL3RawLayer(m.config.GetMemoriaDir(), embedder)
 	m.l3.SetSQLiteStore(sqliteStore)
+	m.l3.SetMDStore(m.storage) // Also store to MD files for inspection
 
 	slog.Info("SQLite store initialized for L2 and L3",
 		"provider", m.config.Embedding.Provider,
@@ -157,6 +158,7 @@ func (m *Memoria) SetEmbedder(emb types.Embedder) {
 	if m.l3 == nil && emb != nil {
 		m.l3 = NewL3RawLayer(m.config.GetMemoriaDir(), emb)
 		m.l3.SetSQLiteStore(m.sqliteStore)
+		m.l3.SetMDStore(m.storage) // Also store to MD files for inspection
 	}
 }
 
@@ -165,6 +167,7 @@ func (m *Memoria) SetL3KnowledgeBase() {
 	if m.embedder != nil && m.l3 == nil {
 		m.l3 = NewL3RawLayer(m.config.GetMemoriaDir(), m.embedder)
 		m.l3.SetSQLiteStore(m.sqliteStore)
+		m.l3.SetMDStore(m.storage) // Also store to MD files for inspection
 	}
 }
 

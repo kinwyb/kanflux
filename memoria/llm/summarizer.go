@@ -187,8 +187,11 @@ func (s *SummarizerImpl) ProcessChatContent(ctx context.Context, question, answe
 	// Parse response
 	result := parseChatResponse(response, userCtx)
 
-	// Add L3 item with raw content if we have L1/L2 items
-	if len(result) > 0 {
+	// Only store to L3 if LLM found valuable information (has summary)
+	if len(result) > 0 && result[0].Summary != "" {
+		// Trim whitespace from question and answer
+		question = strings.TrimSpace(question)
+		answer = strings.TrimSpace(answer)
 		rawContent := "Q: " + question + "\n\nA: " + answer
 		l3Item := &types.MemoryItem{
 			ID:         generateID(),
@@ -230,9 +233,33 @@ func (s *SummarizerImpl) ProcessChatBatchContent(ctx context.Context, qaPairs []
 	// Parse batch response
 	result := parseChatBatchResponse(response, userCtx)
 
-	// Add L3 items with raw content for each Q&A pair
-	for _, qa := range qaPairs {
-		rawContent := "Q: " + qa.Question + "\n\nA: " + qa.Answer
+	// Only create L3 items for Q&A pairs that LLM confirmed as valuable
+	// Extract qa_index from each result to know which pairs are worth storing
+	// Note: qa_index from LLM is 1-based (Q&A 1, Q&A 2...), convert to 0-based for array indexing
+	validQAIndexes := make(map[int]bool)
+	for _, item := range result {
+		if qaIndex, ok := item.Metadata["qa_index"].(int); ok {
+			// Convert 1-based to 0-based index
+			if qaIndex > 0 {
+				validQAIndexes[qaIndex-1] = true
+			}
+		}
+	}
+
+	// Add L3 items ONLY for Q&A pairs confirmed by LLM (has corresponding summary)
+	for i, qa := range qaPairs {
+		// Only store to L3 if LLM extracted a summary for this Q&A pair
+		if !validQAIndexes[i] {
+			slog.Debug("Skipping L3 storage for low-value Q&A pair",
+				"qa_index", i,
+				"question_preview", truncateString(qa.Question, 50))
+			continue
+		}
+
+		// Trim whitespace from question and answer
+		question := strings.TrimSpace(qa.Question)
+		answer := strings.TrimSpace(qa.Answer)
+		rawContent := "Q: " + question + "\n\nA: " + answer
 		l3Item := &types.MemoryItem{
 			ID:         generateID(),
 			HallType:   types.HallEvents,
@@ -587,8 +614,23 @@ func parseChatBatchResponse(response string, userCtx types.UserIdentity) []*type
 	// Try to parse as array first
 	var rawItems []map[string]interface{}
 	if err := json.Unmarshal([]byte(response), &rawItems); err != nil {
-		// Not an array, try single object
-		return parseChatResponse(response, userCtx)
+		// Log the actual error for debugging
+		slog.Warn("Failed to parse batch response as JSON array",
+			"error", err,
+			"response_preview", truncateString(response, 200))
+
+		// Try to fix common JSON issues
+		fixedResponse := fixJSONResponse(response)
+		if fixedResponse != response {
+			if err2 := json.Unmarshal([]byte(fixedResponse), &rawItems); err2 == nil {
+				slog.Debug("Fixed JSON response parsed successfully")
+			} else {
+				slog.Warn("Failed to parse fixed JSON", "error", err2)
+				return nil
+			}
+		} else {
+			return nil
+		}
 	}
 
 	result := make([]*types.MemoryItem, 0, len(rawItems))
@@ -652,6 +694,55 @@ func parseChatBatchResponse(response string, userCtx types.UserIdentity) []*type
 	}
 
 	return result
+}
+
+// fixJSONResponse attempts to fix common JSON issues in LLM responses
+func fixJSONResponse(response string) string {
+	// Find the start of JSON array
+	startIdx := strings.Index(response, "[")
+	if startIdx == -1 {
+		return response
+	}
+
+	// Find the matching closing bracket
+	depth := 0
+	endIdx := -1
+	inString := false
+	escape := false
+
+	for i := startIdx; i < len(response); i++ {
+		c := response[i]
+
+		if escape {
+			escape = false
+			continue
+		}
+
+		switch c {
+		case '\\':
+			escape = true
+		case '"':
+			inString = !inString
+		case '[':
+			if !inString {
+				depth++
+			}
+		case ']':
+			if !inString {
+				depth--
+				if depth == 0 {
+					endIdx = i + 1
+					break
+				}
+			}
+		}
+	}
+
+	if endIdx > startIdx {
+		return response[startIdx:endIdx]
+	}
+
+	return response
 }
 
 func parseFileResponse(response string, userCtx types.UserIdentity) []*types.MemoryItem {

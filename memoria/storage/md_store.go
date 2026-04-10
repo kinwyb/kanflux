@@ -69,6 +69,7 @@ func (s *MDStore) ensureDirs() error {
 		s.baseDir + "/l2",
 		s.baseDir + "/l2/events",
 		s.baseDir + "/l2/discoveries",
+		s.baseDir + "/l3",
 		s.baseDir + "/files",
 		s.baseDir + "/files/facts",
 		s.baseDir + "/files/preferences",
@@ -262,6 +263,12 @@ func (s *MDStore) getFilePath(key itemKey) string {
 }
 
 func (s *MDStore) writeToFile(file string, items []*types.MemoryItem, layer types.Layer) error {
+	// Ensure directory exists before writing
+	dir := filepath.Dir(file)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("failed to create directory %s: %w", dir, err)
+	}
+
 	if s.config.EnableBackup && fileExists(file) {
 		if err := s.backupFile(file); err != nil {
 			slog.Warn("Failed to backup file", "file", file, "error", err)
@@ -300,7 +307,7 @@ func (s *MDStore) generateMarkdown(items []*types.MemoryItem, layer types.Layer)
 			sb.WriteString(item.Summary + "\n\n")
 		}
 
-		// L3 stores full content for semantic search, L1/L2 only need summary
+		// L3 stores full content for semantic search
 		if layer == types.LayerL3 && item.Content != "" {
 			sb.WriteString("### Content\n")
 			sb.WriteString(item.Content + "\n\n")

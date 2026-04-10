@@ -91,7 +91,7 @@ func GetHallPrompt(hallType string) string {
 
 // ChatSummarizePrompt generates a prompt for summarizing a single Q&A
 func ChatSummarizePrompt(question, answer string) string {
-	return fmt.Sprintf(`Analyze this Q&A interaction and extract useful memory.
+	return fmt.Sprintf(`Analyze this Q&A interaction and determine if it contains valuable information.
 
 Question:
 %s
@@ -99,24 +99,38 @@ Question:
 Answer:
 %s
 
-Extract:
-1. Any decisions or facts (hall_facts) → assign to L2
-2. Any preferences expressed (hall_preferences) → assign to L1
-3. Any notable events or activities (hall_events) → assign to L2
-4. Any insights or discoveries (hall_discoveries) → assign to L2
-5. Any advice or solutions (hall_advice) → assign to L2
+VALUABLE Q&A criteria (extract and store):
+- Contains decisions, choices, or important facts
+- Reveals user preferences or habits
+- Documents notable events, debugging sessions, or milestones
+- Provides useful insights, discoveries, or learning moments
+- Gives advice, solutions, or recommendations worth remembering
 
-Layer rules:
-- L1: ONLY for hall_preferences (user preferences, habits)
-- L2: For hall_facts, hall_events, hall_discoveries, hall_advice
-- L3: Raw content (not used for summaries)
+NOT valuable (return empty JSON - skip storage):
+- Simple greetings, confirmations, or acknowledgments
+- Trivial questions with obvious answers
+- Temporary debugging that resolved nothing
+- Off-topic conversations
+- Incomplete or unclear exchanges
 
-Return a JSON object with the extracted information in this format:
+If valuable, extract:
+- hall_type: hall_facts (decisions/facts), hall_preferences (L1 only), hall_events, hall_discoveries, hall_advice
+- layer: L1 (ONLY for preferences), L2 (for everything else)
+- summary: Concise summary of key information
+- keywords: Relevant search keywords
+
+Return a JSON object (if valuable):
 {
   "hall_type": "...",
   "layer": "L1/L2",
   "summary": "...",
   "keywords": ["..."]
+}
+
+If NOT valuable, return empty JSON:
+{
+  "summary": "",
+  "keywords": []
 }`, question, answer)
 }
 
@@ -128,33 +142,47 @@ func ChatBatchSummarizePrompt(qaPairs []QAPair) string {
 			i+1, qa.Question, qa.Answer))
 	}
 
-	return fmt.Sprintf(`Analyze these Q&A interactions and extract useful memories.
+	return fmt.Sprintf(`Analyze these Q&A interactions and extract ONLY the valuable ones.
 
 %s
-For each Q&A that contains useful information, extract:
-1. Any decisions or facts (hall_facts) → assign to L2
-2. Any preferences expressed (hall_preferences) → assign to L1
-3. Any notable events or activities (hall_events) → assign to L2
-4. Any insights or discoveries (hall_discoveries) → assign to L2
-5. Any advice or solutions (hall_advice) → assign to L2
+VALUABLE Q&A criteria (store these):
+- Contains decisions, choices, or important facts
+- Reveals user preferences or habits
+- Documents notable events, debugging sessions, or milestones
+- Provides useful insights, discoveries, or learning moments
+- Gives advice, solutions, or recommendations worth remembering
+
+NOT valuable (SKIP these):
+- Simple greetings, confirmations, or acknowledgments
+- Trivial questions with obvious answers
+- Temporary debugging that resolved nothing
+- Off-topic conversations
+- Incomplete or unclear exchanges
+
+For each VALUABLE Q&A, extract:
+- qa_index: MUST match the Q&A number (1, 2, 3...) - this is critical for tracking
+- hall_type: hall_facts (decisions/facts), hall_preferences (L1 only), hall_events, hall_discoveries, hall_advice
+- layer: L1 (ONLY for preferences), L2 (for everything else)
+- summary: Concise summary of key information
+- keywords: Relevant search keywords
 
 Layer rules:
 - L1: ONLY for hall_preferences (user preferences, habits)
 - L2: For hall_facts, hall_events, hall_discoveries, hall_advice
 
-Return a JSON array of extracted memories. Skip Q&A pairs that don't contain useful information.
+Return a JSON array. Skip Q&A pairs without valuable information.
 [
   {
-    "qa_index": 0,
-    "hall_type": "...",
-    "layer": "L1/L2",
+    "qa_index": 1,
+    "hall_type": "hall_facts",
+    "layer": "L2",
     "summary": "...",
     "keywords": ["..."]
   },
   ...
 ]
 
-If no useful information found, return empty array: []`, pairsBuilder.String())
+If no valuable information found, return: []`, pairsBuilder.String())
 }
 
 // QAPair represents a question-answer pair for batch processing
