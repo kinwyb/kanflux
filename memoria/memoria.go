@@ -24,9 +24,9 @@ type Memoria struct {
 	fileProcessor types.Processor
 	scheduler     *Scheduler
 
-	l1         *L1FactsLayer
-	l2         *L2EventsLayer
-	l3         *L3RawLayer
+	l1          *L1FactsLayer
+	l2          *L2EventsLayer
+	l3          *L3RawLayer
 	sqliteStore *storage.SQLiteStore // Shared SQLite store for L2 and L3
 
 	// L3 语义搜索

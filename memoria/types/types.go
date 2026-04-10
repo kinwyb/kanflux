@@ -63,7 +63,8 @@ type MemoryItem struct {
 	Content    string         `json:"content"`
 	Summary    string         `json:"summary"`
 	Source     string         `json:"source"`
-	UserID     string         `json:"user_id"`
+	UserID     string         `json:"user_id"`     // Full session key (channel:accountID:chatID)
+	AccountID  string         `json:"account_id"`  // The actual user identifier
 	Timestamp  time.Time      `json:"timestamp"`
 	Metadata   map[string]any `json:"metadata,omitempty"`
 	Tokens     int            `json:"tokens"`

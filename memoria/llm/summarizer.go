@@ -202,6 +202,7 @@ func (s *SummarizerImpl) ProcessChatContent(ctx context.Context, question, answe
 			Summary:    "", // L3 doesn't need summary
 			Source:     "chat",
 			UserID:     userCtx.GetUserID(),
+			AccountID:  userCtx.GetAccountID(),
 			Timestamp:  time.Now(),
 			Tokens:     estimateTokens(rawContent),
 		}
@@ -269,6 +270,7 @@ func (s *SummarizerImpl) ProcessChatBatchContent(ctx context.Context, qaPairs []
 			Summary:    "",
 			Source:     "chat",
 			UserID:     userCtx.GetUserID(),
+			AccountID:  userCtx.GetAccountID(),
 			Timestamp:  time.Now(),
 			Tokens:     estimateTokens(rawContent),
 		}
@@ -316,6 +318,7 @@ func (s *SummarizerImpl) ProcessFileContentRaw(ctx context.Context, content, fil
 		Summary:    "", // L3 doesn't need summary, content is the raw text
 		Source:     filePath,
 		UserID:     userCtx.GetUserID(),
+		AccountID:  userCtx.GetAccountID(),
 		Timestamp:  time.Now(),
 		Tokens:     estTokens,
 	}
@@ -354,6 +357,7 @@ func (s *SummarizerImpl) ProcessContent(ctx context.Context, content string, use
 		Summary:    summary,
 		Source:     "chat",
 		UserID:     userCtx.GetUserID(),
+		AccountID:  userCtx.GetAccountID(),
 		Timestamp:  time.Now(),
 		Tokens:     estimateTokens(summary),
 	}
@@ -462,6 +466,7 @@ func parseFactsResponse(response string, userCtx types.UserIdentity) []*types.Me
 			Summary:    fact.Content,
 			Source:     "extracted",
 			UserID:     userCtx.GetUserID(),
+			AccountID:  userCtx.GetAccountID(),
 			Timestamp:  time.Now(),
 			Tokens:     estimateTokens(fact.Content),
 		}
@@ -489,6 +494,7 @@ func parsePlainTextFacts(response string, userCtx types.UserIdentity) []*types.M
 			Summary:    line,
 			Source:     "extracted",
 			UserID:     userCtx.GetUserID(),
+			AccountID:  userCtx.GetAccountID(),
 			Timestamp:  time.Now(),
 			Tokens:     estimateTokens(line),
 		})
@@ -589,6 +595,7 @@ func parseChatResponse(response string, userCtx types.UserIdentity) []*types.Mem
 		Summary:    result.Summary,
 		Source:     "chat",
 		UserID:     userCtx.GetUserID(),
+		AccountID:  userCtx.GetAccountID(),
 		Timestamp:  time.Now(),
 		Tokens:     estimateTokens(result.Summary),
 		Metadata:   map[string]any{"keywords": result.Keywords},
@@ -687,6 +694,7 @@ func parseChatBatchResponse(response string, userCtx types.UserIdentity) []*type
 			Summary:    summary,
 			Source:     "chat",
 			UserID:     userCtx.GetUserID(),
+			AccountID:  userCtx.GetAccountID(),
 			Timestamp:  time.Now(),
 			Tokens:     estimateTokens(summary),
 			Metadata:   map[string]any{"keywords": keywords, "qa_index": qaIndex},
@@ -745,11 +753,6 @@ func fixJSONResponse(response string) string {
 	return response
 }
 
-func parseFileResponse(response string, userCtx types.UserIdentity) []*types.MemoryItem {
-	// Similar to parseChatResponse
-	return parseChatResponse(response, userCtx)
-}
-
 // parseSimpleFileResponse parses the simplified file response (no HallType)
 // Files are stored as hall_discoveries in L2 (knowledge discovered from files)
 func parseSimpleFileResponse(response string, userCtx types.UserIdentity) []*types.MemoryItem {
@@ -773,6 +776,7 @@ func parseSimpleFileResponse(response string, userCtx types.UserIdentity) []*typ
 			Summary:    response,
 			Source:     "file",
 			UserID:     userCtx.GetUserID(),
+			AccountID:  userCtx.GetAccountID(),
 			Timestamp:  time.Now(),
 			Tokens:     estimateTokens(response),
 		}}
@@ -799,6 +803,7 @@ func parseSimpleFileResponse(response string, userCtx types.UserIdentity) []*typ
 		Summary:    result.Summary,
 		Source:     "file",
 		UserID:     userCtx.GetUserID(),
+		AccountID:  userCtx.GetAccountID(),
 		Timestamp:  time.Now(),
 		Tokens:     estimateTokens(result.Summary),
 		Metadata:   metadata,

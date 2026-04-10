@@ -175,7 +175,10 @@ func (p *ChatProcessor) ScanSessions(ctx context.Context, since time.Time) ([]ty
 func parseSessionKey(sessionKey string) *types.DefaultUserIdentity {
 	parts := strings.Split(sessionKey, ":")
 	if len(parts) < 3 {
-		return &types.DefaultUserIdentity{UserID: sessionKey}
+		parts = strings.Split(sessionKey, "_")
+		if len(parts) < 3 {
+			return &types.DefaultUserIdentity{UserID: sessionKey}
+		}
 	}
 	return &types.DefaultUserIdentity{
 		UserID:    parts[0] + ":" + parts[1] + ":" + parts[2],
@@ -214,12 +217,12 @@ func (p *ChatProcessor) parseJSONL(content string) []ChatMessage {
 
 // ChatMessage represents a chat message from JSONL
 type ChatMessage struct {
-	Role         string         `json:"role"`
-	Content      string         `json:"content"`
-	MultiContent []ContentPart  `json:"multi_content,omitempty"`
-	ToolCalls    []ToolCall     `json:"tool_calls,omitempty"`
-	Name         string         `json:"name,omitempty"`
-	Timestamp    string         `json:"timestamp,omitempty"`
+	Role         string        `json:"role"`
+	Content      string        `json:"content"`
+	MultiContent []ContentPart `json:"multi_content,omitempty"`
+	ToolCalls    []ToolCall    `json:"tool_calls,omitempty"`
+	Name         string        `json:"name,omitempty"`
+	Timestamp    string        `json:"timestamp,omitempty"`
 }
 
 // ContentPart represents a part of multi-content message
@@ -230,8 +233,8 @@ type ContentPart struct {
 
 // ToolCall represents a tool call in a message
 type ToolCall struct {
-	ID   string `json:"id"`
-	Type string `json:"type"`
+	ID       string `json:"id"`
+	Type     string `json:"type"`
 	Function struct {
 		Name      string `json:"name"`
 		Arguments string `json:"arguments"`

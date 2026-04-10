@@ -176,6 +176,7 @@ type itemKey struct {
 	layer      types.Layer
 	hallType   types.HallType
 	userID     string
+	accountID  string // The actual user identifier for L1 storage
 	date       string
 	sourceType string // "chat" 或 "file"
 	sourcePath string // 文件来源时为文件路径
@@ -196,6 +197,7 @@ func (s *MDStore) groupItems(items []*types.MemoryItem) map[itemKey][]*types.Mem
 			layer:      item.Layer,
 			hallType:   item.HallType,
 			userID:     item.UserID,
+			accountID:  item.AccountID,
 			date:       item.Timestamp.Format(s.config.DateFormat),
 			sourceType: sourceType,
 			sourcePath: sourcePath,
@@ -207,6 +209,11 @@ func (s *MDStore) groupItems(items []*types.MemoryItem) map[itemKey][]*types.Mem
 
 func (s *MDStore) getFilePath(key itemKey) string {
 	userPart := sanitizeUserID(key.userID)
+	// L1 uses accountID (the actual user identifier) for file name
+	l1UserPart := sanitizeUserID(key.accountID)
+	if l1UserPart == "" {
+		l1UserPart = userPart // fallback to userID if accountID is empty
+	}
 
 	// 判断来源：聊天记录按时间，文件按源路径
 	if key.sourceType == "file" && key.sourcePath != "" {
@@ -239,13 +246,14 @@ func (s *MDStore) getFilePath(key itemKey) string {
 	// 聊天记录：按用户和时间存储
 	switch key.layer {
 	case types.LayerL1:
+		// L1 uses accountID for file name (same user's preferences in one file)
 		switch key.hallType {
 		case types.HallFacts:
-			return s.baseDir + "/l1/facts/" + userPart + ".md"
+			return s.baseDir + "/l1/facts/" + l1UserPart + ".md"
 		case types.HallPreferences:
-			return s.baseDir + "/l1/preferences/" + userPart + ".md"
+			return s.baseDir + "/l1/preferences/" + l1UserPart + ".md"
 		default:
-			return s.baseDir + "/l1/facts/" + userPart + ".md"
+			return s.baseDir + "/l1/facts/" + l1UserPart + ".md"
 		}
 	case types.LayerL2:
 		datePart := key.date
@@ -351,7 +359,7 @@ func (s *MDStore) parseMDFile(file string) ([]*types.MemoryItem, error) {
 
 	// L1 preferences: parse simple list format
 	if layer == types.LayerL1 {
-		return s.parseL1SimpleFormat(content), nil
+		return s.parseL1SimpleFormat(content, file), nil
 	}
 
 	// L2/L3: parse detailed format with "---" sections
@@ -378,8 +386,14 @@ func (s *MDStore) parseMDFile(file string) ([]*types.MemoryItem, error) {
 //
 // - preference 1
 // - preference 2
-func (s *MDStore) parseL1SimpleFormat(content string) []*types.MemoryItem {
+func (s *MDStore) parseL1SimpleFormat(content string, filePath string) []*types.MemoryItem {
 	items := make([]*types.MemoryItem, 0)
+
+	// Extract accountID from file path (filename without .md extension)
+	// For L1, filename is the accountID (user identifier)
+	filename := filepath.Base(filePath)
+	accountID := strings.TrimSuffix(filename, ".md")
+
 	lines := strings.Split(content, "\n")
 
 	for _, line := range lines {
@@ -401,6 +415,8 @@ func (s *MDStore) parseL1SimpleFormat(content string) []*types.MemoryItem {
 					Content:    summary,
 					SourceType: types.SourceTypeChat,
 					Source:     "preferences",
+					UserID:     accountID, // For L1, UserID = AccountID
+					AccountID:  accountID, // The actual user identifier
 					Timestamp:  time.Now(),
 					Tokens:     len(summary) / 4,
 				})

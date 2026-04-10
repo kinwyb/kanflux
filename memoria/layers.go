@@ -233,7 +233,7 @@ func (l *L1FactsLayer) Close() error {
 // Uses SQLite for storage with semantic search capability
 // Also outputs MD files for validation
 type L2EventsLayer struct {
-	mdStore   types.Storage   // MD file storage for validation
+	mdStore   types.Storage        // MD file storage for validation
 	sqlite    *storage.SQLiteStore // SQLite storage for semantic search
 	maxTokens int
 }
