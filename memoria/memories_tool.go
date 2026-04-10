@@ -12,9 +12,8 @@ import (
 	"github.com/kinwyb/kanflux/memoria/types"
 )
 
-// MemoriesTool provides unified memory search with intelligent mode selection.
-// It combines keyword search (history) and semantic search (RAG) into one tool,
-// reducing context usage while maintaining comprehensive search capabilities.
+// MemoriesTool provides unified memory search combining keyword and semantic matching.
+// It searches across all sources (chat + files) with automatic search strategy selection.
 type MemoriesTool struct {
 	searcher MemoriesSearcher
 }
@@ -45,33 +44,17 @@ func (t *MemoriesTool) Name() string {
 
 // Description returns the unified tool description
 func (t *MemoriesTool) Description() string {
-	return `Search memories with intelligent mode selection.
+	return `Search all memories (chat + files).
 
-**Search Modes**:
-- **keyword** (default): Fast keyword matching, chat-only, L1+L2+L3
-- **semantic**: Deep semantic search, chat+files, L2+L3
+Search combines keyword matching and semantic understanding automatically.
+Use natural language or keywords - both work well.
 
-**Layer Contents**:
-- **L1**: Critical decisions, user preferences (always loaded)
-- **L2**: Session events, milestones, file summaries
-- **L3**: Full chat history and file content (vector indexed)
-
-**Quick Guide**:
-| Need | Mode | Source | Example |
-|------|------|--------|---------|
-| Find decisions/preferences | keyword | chat | "database choice" |
-| Search chat history | keyword | chat | "we discussed auth" |
-| Search files/concepts | semantic | all | "performance patterns" |
-| Semantic/conceptual search | semantic | all | "optimization approaches" |
-
-**Parameters by Mode**:
-- keyword: Use hall_types, days_back for filtering
-- semantic: Use min_score for relevance threshold
-
-**Tips**:
-- Start with keyword for known terms
-- Use semantic when keywords don't match
-- Combine source_type filter ("chat"/"file") for targeted search`
+**Parameters**:
+- query: Search terms or natural language description
+- source_type: Filter by "chat" or "file" (optional)
+- limit: Max results (default: 10)
+- days_back: Limit time range in days (optional)
+- min_score: Minimum relevance threshold (optional)`
 }
 
 // Parameters returns the JSON Schema parameter definition
@@ -81,17 +64,11 @@ func (t *MemoriesTool) Parameters() map[string]interface{} {
 		"properties": map[string]interface{}{
 			"query": map[string]interface{}{
 				"type":        "string",
-				"description": "Search query. For keyword mode: use exact terms. For semantic: use natural language.",
-			},
-			"mode": map[string]interface{}{
-				"type":        "string",
-				"description": "Search mode: 'keyword' for fast exact matching (chat only), 'semantic' for deep concept search (chat+files). Default: keyword.",
-				"default":     "keyword",
-				"enum":        []string{"keyword", "semantic"},
+				"description": "Search query. Use keywords or natural language - both work.",
 			},
 			"source_type": map[string]interface{}{
 				"type":        "string",
-				"description": "Filter by source: 'chat' for conversations, 'file' for documents. Default: all sources (semantic mode), chat only (keyword mode).",
+				"description": "Filter by source: 'chat' for conversations, 'file' for documents. Default: all sources.",
 				"enum":        []string{"chat", "file"},
 			},
 			"limit": map[string]interface{}{
@@ -99,24 +76,14 @@ func (t *MemoriesTool) Parameters() map[string]interface{} {
 				"description": "Max results. Default: 10.",
 				"default":     10,
 			},
-			// Keyword mode specific
-			"hall_types": map[string]interface{}{
-				"type":        "array",
-				"description": "Keyword mode only. Filter by category: 'facts', 'events', 'discoveries', 'preferences', 'advice'.",
-				"items": map[string]interface{}{
-					"type": "string",
-					"enum": []string{"facts", "events", "discoveries", "preferences", "advice"},
-				},
-			},
 			"days_back": map[string]interface{}{
 				"type":        "integer",
-				"description": "Keyword mode only. Limit to recent days. Default: 30.",
+				"description": "Limit to recent days. Default: 30.",
 				"default":     30,
 			},
-			// Semantic mode specific
 			"min_score": map[string]interface{}{
 				"type":        "number",
-				"description": "Semantic mode only. Minimum similarity (0-1). Default: 0.5. Higher = more relevant.",
+				"description": "Minimum relevance threshold (0-1). Default: 0.5.",
 				"default":     0.5,
 			},
 			"user_id": map[string]interface{}{
@@ -128,26 +95,18 @@ func (t *MemoriesTool) Parameters() map[string]interface{} {
 	}
 }
 
-// Execute performs the unified memory search
+// Execute performs unified memory search
 func (t *MemoriesTool) Execute(ctx context.Context, params map[string]interface{}) (string, error) {
 	query, ok := params["query"].(string)
 	if !ok || query == "" {
 		return "", fmt.Errorf("query parameter is required")
 	}
 
-	// Determine search mode
-	mode := "keyword"
-	if m, ok := params["mode"].(string); ok && m == "semantic" {
-		mode = "semantic"
-	}
+	slog.Debug("MemoriesTool execute started", "query", query)
 
-	slog.Debug("MemoriesTool execute started",
-		"query", query,
-		"mode", mode)
-
-	// Build search options based on mode
 	opts := &types.RetrieveOptions{
 		Query: query,
+		Layers: []types.Layer{types.LayerL1, types.LayerL2, types.LayerL3},
 	}
 
 	// Parse common parameters
@@ -161,101 +120,34 @@ func (t *MemoriesTool) Execute(ctx context.Context, params map[string]interface{
 		opts.UserID = userID
 	}
 
+	// Parse source_type filter
+	if st, ok := params["source_type"].(string); ok && st != "" {
+		opts.SourceType = types.SourceType(st)
+	}
+
+	// Parse days_back for time range
+	daysBack := 30
+	if db, ok := params["days_back"].(int); ok && db > 0 {
+		daysBack = db
+	}
+	opts.TimeRange = &types.TimeRange{
+		Start: time.Now().AddDate(0, 0, -daysBack),
+		End:   time.Now(),
+	}
+
+	// Parse min_score threshold
+	minScore := 0.5
+	if ms, ok := params["min_score"].(float64); ok && ms > 0 {
+		minScore = ms
+	}
+
 	startTime := time.Now()
-	var result string
-	var err error
 
-	// Mode-specific configuration
-	if mode == "keyword" {
-		opts.SearchMode = types.SearchModeKeyword
-		opts.SourceType = types.SourceTypeChat // Keyword mode defaults to chat
-		opts.Layers = []types.Layer{types.LayerL1, types.LayerL2, types.LayerL3}
-
-		// Allow source_type override (but warn it's unusual for keyword)
-		if st, ok := params["source_type"].(string); ok && st == "file" {
-			opts.SourceType = types.SourceTypeFile
-		}
-
-		// Parse hall_types (convert short names to full names)
-		if hallTypesRaw, ok := params["hall_types"].([]interface{}); ok {
-			opts.HallTypes = make([]types.HallType, 0, len(hallTypesRaw))
-			for _, ht := range hallTypesRaw {
-				if htStr, ok := ht.(string); ok {
-					fullName := "hall_" + htStr
-					opts.HallTypes = append(opts.HallTypes, types.HallType(fullName))
-				}
-			}
-		}
-
-		// Parse days_back for time range
-		daysBack := 30
-		if db, ok := params["days_back"].(int); ok && db > 0 {
-			daysBack = db
-		}
-		opts.TimeRange = &types.TimeRange{
-			Start: time.Now().AddDate(0, 0, -daysBack),
-			End:   time.Now(),
-		}
-
-		result, err = t.executeKeywordSearch(ctx, query, opts, daysBack)
-	} else {
-		// Semantic mode
-		opts.SearchMode = types.SearchModeSemantic
-		opts.Layers = []types.Layer{types.LayerL2, types.LayerL3}
-
-		// Parse source_type filter
-		if st, ok := params["source_type"].(string); ok && st != "" {
-			opts.SourceType = types.SourceType(st)
-		}
-
-		minScore := 0.5
-		if ms, ok := params["min_score"].(float64); ok && ms > 0 {
-			minScore = ms
-		}
-
-		result, err = t.executeSemanticSearch(ctx, query, opts, minScore)
-	}
-
-	if err != nil {
-		slog.Error("MemoriesTool execute failed",
-			"query", query,
-			"mode", mode,
-			"error", err)
-		return "", err
-	}
-
-	slog.Info("MemoriesTool execute completed",
-		"query", query,
-		"mode", mode,
-		"duration", time.Since(startTime).Milliseconds())
-
-	return result, nil
-}
-
-// executeKeywordSearch performs keyword-based search (history_query style)
-func (t *MemoriesTool) executeKeywordSearch(ctx context.Context, query string, opts *types.RetrieveOptions, daysBack int) (string, error) {
+	// Perform unified search (combines keyword + semantic)
 	results, err := t.searcher.Search(ctx, query, opts)
 	if err != nil {
-		return "", fmt.Errorf("keyword search failed: %w", err)
-	}
-
-	slog.Debug("Keyword search completed",
-		"query", query,
-		"results", len(results),
-		"days_back", daysBack)
-
-	if len(results) == 0 {
-		return formatNoKeywordResults(query, daysBack), nil
-	}
-
-	return formatKeywordResults(results, query), nil
-}
-
-// executeSemanticSearch performs semantic search (rag_tool style)
-func (t *MemoriesTool) executeSemanticSearch(ctx context.Context, query string, opts *types.RetrieveOptions, minScore float64) (string, error) {
-	results, err := t.searcher.Search(ctx, query, opts)
-	if err != nil {
-		return "", fmt.Errorf("semantic search failed: %w", err)
+		slog.Error("MemoriesTool search failed", "query", query, "error", err)
+		return "", fmt.Errorf("search failed: %w", err)
 	}
 
 	// Filter by minimum score
@@ -266,78 +158,33 @@ func (t *MemoriesTool) executeSemanticSearch(ctx context.Context, query string, 
 		}
 	}
 
-	slog.Debug("Semantic search completed",
+	slog.Info("MemoriesTool search completed",
 		"query", query,
 		"total_results", len(results),
 		"filtered_results", len(filtered),
-		"min_score", minScore)
+		"duration", time.Since(startTime).Milliseconds())
 
 	if len(filtered) == 0 {
-		return formatNoSemanticResults(query, minScore), nil
+		return formatMemoriesNoResults(query, daysBack, minScore), nil
 	}
 
-	return formatSemanticResults(filtered, query), nil
+	return formatMemoriesResults(filtered, query), nil
 }
 
-// formatKeywordResults formats keyword search results (compact format)
-func formatKeywordResults(results []*types.SearchResult, query string) string {
+// formatMemoriesResults formats search results in compact format
+func formatMemoriesResults(results []*types.SearchResult, query string) string {
 	var builder strings.Builder
 
-	builder.WriteString(fmt.Sprintf("Found %d memories for '%s':\n", len(results), query))
+	builder.WriteString(fmt.Sprintf("Found %d for '%s':\n", len(results), query))
 
 	for _, r := range results {
-		layerName := "L1"
-		if r.Layer == types.LayerL2 {
-			layerName = "L2"
-		} else if r.Layer == types.LayerL3 {
-			layerName = "L3"
-		}
-
-		hallName := strings.Replace(string(r.Item.HallType), "hall_", "", 1)
-
-		builder.WriteString(fmt.Sprintf("[%s/%s] ", layerName, hallName))
-
-		// Show summary (compact)
-		if r.Item.Summary != "" {
-			content := r.Item.Summary
-			if len(content) > 100 {
-				content = content[:100] + "..."
-			}
-			builder.WriteString(content)
-		} else {
-			content := r.Item.Content
-			if len(content) > 80 {
-				content = content[:80] + "..."
-			}
-			builder.WriteString(content)
-		}
-
-		builder.WriteString(fmt.Sprintf(" (%s)\n", r.Item.Timestamp.Format("01-02")))
-	}
-
-	return builder.String()
-}
-
-// formatSemanticResults formats semantic search results (compact format)
-func formatSemanticResults(results []*types.SearchResult, query string) string {
-	var builder strings.Builder
-
-	builder.WriteString(fmt.Sprintf("Semantic search '%s': %d results\n", query, len(results)))
-
-	for _, r := range results {
-		layerName := "L2"
-		if r.Layer == types.LayerL3 {
-			layerName = "L3"
-		}
-
 		sourceType := "chat"
 		if r.Item.SourceType == types.SourceTypeFile {
 			sourceType = "file"
 		}
 
-		builder.WriteString(fmt.Sprintf("[%s/%s %.2f] ", layerName, sourceType, r.Score))
+		builder.WriteString(fmt.Sprintf("[%s %.2f] ", sourceType, r.Score))
 
-		// Show content (compact)
 		content := r.Item.Summary
 		if content == "" {
 			content = r.Item.Content
@@ -353,51 +200,25 @@ func formatSemanticResults(results []*types.SearchResult, query string) string {
 	return builder.String()
 }
 
-// formatNoKeywordResults formats no results for keyword mode
-func formatNoKeywordResults(query string, daysBack int) string {
-	return fmt.Sprintf("No memories for '%s' (last %d days).\n"+
-		"Try: different keywords, increase days_back, or use mode='semantic'",
-		query, daysBack)
-}
-
-// formatNoSemanticResults formats no results for semantic mode
-func formatNoSemanticResults(query string, minScore float64) string {
-	return fmt.Sprintf("No semantic matches for '%s' (min %.2f).\n"+
-		"Try: natural language query, lower min_score, or use mode='keyword'",
-		query, minScore)
+// formatMemoriesNoResults formats message when no matches found
+func formatMemoriesNoResults(query string, daysBack int, minScore float64) string {
+	return fmt.Sprintf("No matches for '%s' (days: %d, score: %.2f).\n"+
+		"Try: different keywords, broader time range, or lower min_score.",
+		query, daysBack, minScore)
 }
 
 // QuickSearch provides a simplified search interface for internal use
-// It automatically selects the best mode based on query characteristics
 func (t *MemoriesTool) QuickSearch(ctx context.Context, query string, limit int) ([]*types.SearchResult, error) {
 	slog.Debug("QuickSearch started", "query", query, "limit", limit)
 
-	// Simple heuristic: short queries with known terms use keyword
-	if len(strings.Fields(query)) <= 3 && !strings.ContainsAny(query, "?") {
-		opts := &types.RetrieveOptions{
-			Query:      query,
-			SearchMode: types.SearchModeKeyword,
-			Layers:     []types.Layer{types.LayerL1, types.LayerL2, types.LayerL3},
-			SourceType: types.SourceTypeChat,
-			Limit:      limit,
-		}
-		results, err := t.searcher.Search(ctx, query, opts)
-		if err == nil {
-			slog.Debug("QuickSearch completed (keyword mode)", "results", len(results))
-		}
-		return results, err
-	}
-
-	// Longer or question-like queries use semantic
 	opts := &types.RetrieveOptions{
-		Query:      query,
-		SearchMode: types.SearchModeSemantic,
-		Layers:     []types.Layer{types.LayerL2, types.LayerL3},
-		Limit:      limit,
+		Query:  query,
+		Layers: []types.Layer{types.LayerL1, types.LayerL2, types.LayerL3},
+		Limit:  limit,
 	}
 	results, err := t.searcher.Search(ctx, query, opts)
 	if err == nil {
-		slog.Debug("QuickSearch completed (semantic mode)", "results", len(results))
+		slog.Debug("QuickSearch completed", "results", len(results))
 	}
 	return results, err
 }

@@ -38,34 +38,16 @@ func (t *RAGTool) Name() string {
 
 // Description returns the tool description with optimized prompts
 func (t *RAGTool) Description() string {
-	return `Deep search across L2 + L3 knowledge (summaries + raw content).
+	return `Deep search across all knowledge (chat + files).
 
-**Search Strategy**:
-1. semantic search first (vector similarity, understands meaning)
-2. keyword search fallback (FTS5, exact matching)
-3. Layer order: L2 (summaries) → L3 (full content)
+Combines keyword and semantic matching automatically.
+Use for comprehensive search when you need broader context.
 
-**What it searches**:
-- **Layers**: L2 + L3 only (not L1)
-- **Sources**: Chat conversations + File content
-- **Types**: All hall types (facts, events, discoveries, etc.)
-
-**When to Use**:
-- Looking for conceptually related information
-- Keyword search didn't find what you need
-- Searching across both conversations and documents
-- Don't know exact keywords
-
-**Tips for Better Results**:
-- Use natural language queries
-- Describe what you're looking for conceptually
-- Example: "performance optimization" finds related discussions
-
-**Difference from history_query**:
-- history_query: Chat only, L2+L3, semantic+keyword
-- knowledge_search: Chat+files, L2+L3, semantic+keyword
-- Use history_query for chat-only quick search
-- Use knowledge_search for comprehensive search including files`
+**Parameters**:
+- query: Search terms or natural language description
+- limit: Max results (default: 10)
+- min_score: Minimum relevance threshold (default: 0.5)
+- source_type: Filter by "chat" or "file" (optional)`
 }
 
 // Parameters returns the JSON Schema parameter definition
@@ -75,21 +57,21 @@ func (t *RAGTool) Parameters() map[string]interface{} {
 		"properties": map[string]interface{}{
 			"query": map[string]interface{}{
 				"type":        "string",
-				"description": "Semantic search query. Use natural language for best results. The system understands meaning, not just keywords.",
+				"description": "Search query. Keywords or natural language both work well.",
 			},
 			"limit": map[string]interface{}{
 				"type":        "integer",
-				"description": "Maximum results to return. Default: 10.",
+				"description": "Max results. Default: 10.",
 				"default":     10,
 			},
 			"min_score": map[string]interface{}{
 				"type":        "number",
-				"description": "Minimum similarity score (0-1). Default: 0.5. Higher values return more relevant results.",
+				"description": "Minimum relevance threshold (0-1). Default: 0.5.",
 				"default":     0.5,
 			},
 			"source_type": map[string]interface{}{
 				"type":        "string",
-				"description": "Optional. Filter by source: 'chat' for conversations only, 'file' for documents only. Default: search all sources.",
+				"description": "Filter by source: 'chat' or 'file'. Default: all sources.",
 				"enum":        []string{"chat", "file"},
 			},
 		},
@@ -163,38 +145,27 @@ func (t *RAGTool) Execute(ctx context.Context, params map[string]interface{}) (s
 func formatRAGResults(results []*types.SearchResult, query string) string {
 	var builder strings.Builder
 
-	builder.WriteString(fmt.Sprintf("Search for '%s' found %d items:\n\n", query, len(results)))
+	builder.WriteString(fmt.Sprintf("Found %d for '%s':\n", len(results), query))
 
 	for i, r := range results {
-		layerName := "L2"
-		if r.Layer == types.LayerL3 {
-			layerName = "L3"
-		}
-
 		sourceType := "chat"
 		if r.Item.SourceType == types.SourceTypeFile {
 			sourceType = "file"
 		}
 
-		builder.WriteString(fmt.Sprintf("**[%s/%s] Score: %.2f (%s)**\n",
-			layerName, sourceType, r.Score, r.MatchType))
+		builder.WriteString(fmt.Sprintf("[%s %.2f] ", sourceType, r.Score))
 
-		// Show content based on layer
-		if r.Item.Summary != "" {
-			builder.WriteString(fmt.Sprintf("%s\n", r.Item.Summary))
-		} else {
-			content := r.Item.Content
-			if len(content) > 300 {
-				content = content[:300] + "..."
+		content := r.Item.Summary
+		if content == "" {
+			content = r.Item.Content
+			if len(content) > 100 {
+				content = content[:100] + "..."
 			}
-			builder.WriteString(fmt.Sprintf("%s\n", content))
 		}
+		builder.WriteString(fmt.Sprintf("%s (%s)\n", content, r.Item.Timestamp.Format("01-02")))
 
-		builder.WriteString(fmt.Sprintf("Source: %s | Time: %s\n",
-			r.Item.Source, r.Item.Timestamp.Format("2006-01-02 15:04")))
-
-		if i < len(results)-1 {
-			builder.WriteString("\n---\n")
+		if i < len(results)-1 && len(results) <= 10 {
+			builder.WriteString("")
 		}
 	}
 
@@ -203,13 +174,9 @@ func formatRAGResults(results []*types.SearchResult, query string) string {
 
 // formatNoRAGResults formats a message when no semantic matches found
 func formatNoRAGResults(query string, minScore float64) string {
-	return fmt.Sprintf("No matches found for '%s' (min score: %.2f).\n\n"+
-		"Suggestions:\n"+
-		"- Try a more descriptive query with context\n"+
-		"- Lower min_score threshold (current: %.2f)\n"+
-		"- Use different terminology or phrasing\n"+
-		"- Try history_query for chat-only search",
-		query, minScore, minScore)
+	return fmt.Sprintf("No matches for '%s' (min score: %.2f).\n"+
+		"Try: different keywords, lower min_score.",
+		query, minScore)
 }
 
 // QuickSearch performs a combined L1/L2/L3 search with automatic layer selection

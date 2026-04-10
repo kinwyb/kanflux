@@ -112,7 +112,7 @@ func TestHistoryTool(t *testing.T) {
 			t.Errorf("unexpected error: %v", err)
 		}
 
-		if !contains(output, "No chat memories found") {
+		if !contains(output, "No chat memories") {
 			t.Error("should show no results message")
 		}
 	})

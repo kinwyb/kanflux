@@ -39,16 +39,6 @@ func TestRAGTool(t *testing.T) {
 			t.Error("description should not be empty")
 		}
 
-		// Check that description mentions semantic search
-		desc := tool.Description()
-		if !contains(desc, "semantic") {
-			t.Error("description should mention semantic search")
-		}
-		// RAGTool searches L2 + L3, not L1
-		if !contains(desc, "L2") || !contains(desc, "L3") {
-			t.Error("description should mention L2 and L3 layers")
-		}
-
 		params := tool.Parameters()
 		if params == nil {
 			t.Error("parameters should not be nil")
@@ -104,13 +94,9 @@ func TestRAGTool(t *testing.T) {
 			t.Error("output should not be empty")
 		}
 
-		if !contains(output, "Search for") {
-			t.Error("output should indicate search")
-		}
-
-		// Should show both L2 and L3 results
-		if !contains(output, "L2") || !contains(output, "L3") {
-			t.Error("output should show results from L2 and L3 layers")
+		// Should show found results
+		if !contains(output, "Found") {
+			t.Error("output should indicate results found")
 		}
 	})
 
@@ -159,7 +145,8 @@ func TestRAGTool(t *testing.T) {
 			t.Errorf("unexpected error: %v", err)
 		}
 
-		if !contains(output, "Chat") {
+		// Should show chat source type
+		if !contains(output, "chat") {
 			t.Error("output should show chat source type")
 		}
 	})
@@ -194,7 +181,7 @@ func TestRAGTool(t *testing.T) {
 			t.Errorf("unexpected error: %v", err)
 		}
 
-		if !contains(output, "No matches found") {
+		if !contains(output, "No matches") {
 			t.Error("should show no results message for low scores")
 		}
 	})

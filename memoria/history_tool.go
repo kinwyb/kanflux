@@ -41,39 +41,15 @@ func (t *HistoryTool) Name() string {
 
 // Description returns the tool description with optimized prompts
 func (t *HistoryTool) Description() string {
-	return `Search for user memories (chat history only).
+	return `Search chat history only.
 
-**Search Strategy**:
-1. Semantic search first (vector similarity)
-2. Keyword search fallback (FTS5)
-3. Layer order: L2 (summaries) → L3 (full content)
+Combines keyword and semantic matching automatically.
+Use for finding past conversations and user memories.
 
-**What it searches**:
-- **Source**: Chat conversations only (no files)
-- **Layers**: L2 + L3 only (not L1)
-- **Types**: All hall types together (no filtering)
-
-**Layer Contents**:
-- **L2**: Summaries of session events, milestones, discoveries
-- **L3**: Full chat history for deep search
-
-**Use Cases**:
-- Find previous discussions: "database choice", "auth method"
-- Recall session events: "debug session", "deployment"
-- Search chat history: "we discussed", "you mentioned"
-
-**When to Use**:
-- Quick search for specific conversations
-- Looking for user-specific memories
-- You know keywords to search
-
-**Time Filtering**: Use "days_back" to limit search time range.
-
-**Difference from knowledge_search**:
-- history_query: Chat only, L2+L3, semantic+keyword
-- knowledge_search: Chat+files, L2+L3, semantic+keyword
-- Use history_query for chat-only quick search
-- Use knowledge_search for comprehensive search including files`
+**Parameters**:
+- query: Search terms or description
+- limit: Max results (default: 10)
+- days_back: Limit time range in days (default: 30)`
 }
 
 // Parameters returns the JSON Schema parameter definition
@@ -83,16 +59,16 @@ func (t *HistoryTool) Parameters() map[string]interface{} {
 		"properties": map[string]interface{}{
 			"query": map[string]interface{}{
 				"type":        "string",
-				"description": "Search query. Use keywords or natural language. Examples: 'database choice', 'auth preference', 'last session'",
+				"description": "Search query. Keywords or natural language both work.",
 			},
 			"days_back": map[string]interface{}{
 				"type":        "integer",
-				"description": "Optional. Limit search to recent days. Default: 30. Use 7 for very recent, 90 for broader search.",
+				"description": "Limit search to recent days. Default: 30.",
 				"default":     30,
 			},
 			"limit": map[string]interface{}{
 				"type":        "integer",
-				"description": "Maximum results to return. Default: 10.",
+				"description": "Max results. Default: 10.",
 				"default":     10,
 			},
 			"user_id": map[string]interface{}{
@@ -164,34 +140,19 @@ func (t *HistoryTool) Execute(ctx context.Context, params map[string]interface{}
 func formatHistoryResults(results []*types.SearchResult, query string) string {
 	var builder strings.Builder
 
-	builder.WriteString(fmt.Sprintf("Found %d chat memories matching '%s':\n\n", len(results), query))
+	builder.WriteString(fmt.Sprintf("Found %d chat memories for '%s':\n", len(results), query))
 
-	for i, r := range results {
-		layerName := "L2"
-		if r.Layer == types.LayerL3 {
-			layerName = "L3"
-		}
+	for _, r := range results {
+		builder.WriteString(fmt.Sprintf("[%.2f] ", r.Score))
 
-		builder.WriteString(fmt.Sprintf("**[%s/%s] Score: %.2f**\n",
-			layerName, r.MatchType, r.Score))
-
-		if r.Item.Summary != "" {
-			builder.WriteString(fmt.Sprintf("%s\n", r.Item.Summary))
-		} else {
-			// Truncate content if too long
-			content := r.Item.Content
-			if len(content) > 200 {
-				content = content[:200] + "..."
+		content := r.Item.Summary
+		if content == "" {
+			content = r.Item.Content
+			if len(content) > 100 {
+				content = content[:100] + "..."
 			}
-			builder.WriteString(fmt.Sprintf("%s\n", content))
 		}
-
-		builder.WriteString(fmt.Sprintf("Source: %s | Time: %s\n",
-			r.Item.Source, r.Item.Timestamp.Format("2006-01-02 15:04")))
-
-		if i < len(results)-1 {
-			builder.WriteString("\n---\n")
-		}
+		builder.WriteString(fmt.Sprintf("%s (%s)\n", content, r.Item.Timestamp.Format("01-02")))
 	}
 
 	return builder.String()
@@ -199,10 +160,7 @@ func formatHistoryResults(results []*types.SearchResult, query string) string {
 
 // formatNoResults formats a message when no results found
 func formatNoResults(query string, daysBack int) string {
-	return fmt.Sprintf("No chat memories found for '%s' in the last %d days.\n\n"+
-		"Suggestions:\n"+
-		"- Try different keywords or broader terms\n"+
-		"- Increase days_back for older memories (current: %d)\n"+
-		"- Try knowledge_search for file content",
-		query, daysBack, daysBack)
+	return fmt.Sprintf("No chat memories for '%s' (last %d days).\n"+
+		"Try: different keywords or increase days_back.",
+		query, daysBack)
 }

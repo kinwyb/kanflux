@@ -86,8 +86,9 @@ memoria/
 ├── memoria.go            # 主服务入口 (Memoria orchestrator)
 ├── scheduler.go          # 定时触发调度器
 ├── layers.go             # 三层实现 (L1, L2, L3)
-├── history_tool.go       # history_query 工具（聊天关键词搜索）
-├── rag_tool.go           # knowledge_search 工具（语义搜索）
+├── memories_tool.go      # memories 统一搜索工具
+├── history_tool.go       # history_query 工具（聊天搜索）
+├── rag_tool.go           # knowledge_search 工具（深度搜索）
 ├── memoria_test.go       # 测试文件
 ├── types/
 │   └── types.go          # 核心类型定义（含 SourceType, SearchMode）
@@ -164,15 +165,18 @@ const (
 )
 ```
 
-### SearchMode - 搜索模式
+### SearchMode - 搜索模式（内部使用）
 
 ```go
 type SearchMode string
 
 const (
-    SearchModeKeyword  SearchMode = "keyword"  // 关键词搜索
+    SearchModeKeyword  SearchMode = "keyword"  // 关键词搜索（FTS5）
     SearchModeSemantic SearchMode = "semantic" // 语义向量搜索
 )
+```
+
+**注意**：工具层自动合并两种模式，用户无需手动选择。
 ```
 
 ### UserIdentity - 用户身份接口
@@ -304,70 +308,76 @@ result, err := service.ProcessFile(ctx, filePath, content, userCtx)
 
 ### 层级搜索（核心功能）
 
-Memoria 提供两种搜索工具，适用于不同场景：
+Memoria 提供两个搜索工具，搜索时自动合并关键词匹配和语义向量搜索：
 
-#### history_query - 聊天记录关键词搜索
+#### history_query - 聊天记录搜索
 
 ```go
 // 搜索用户聊天记录（只查 Chat 来源）
 results, err := service.Search(ctx, "database decision", &types.RetrieveOptions{
     SourceType: types.SourceTypeChat,  // 只查聊天
-    SearchMode: types.SearchModeKeyword, // 关键词模式
-    UserID:     "user123",
+    DaysBack:   30,                     // 时间范围
     Limit:      10,
 })
 ```
 
 **特点**：
 - 只搜索 Chat 来源（不包含文件）
-- 搜索 L1 + L2 + L3
-- 关键词精确匹配（快速）
-- 适用于查找用户决策、偏好、事件
+- 自动合并关键词 + 语义匹配
+- 支持 `days_back` 时间范围过滤
 
-#### knowledge_search - 全局语义搜索
+#### knowledge_search - 全局深度搜索
 
 ```go
-// 语义搜索所有内容（Chat + File）
+// 搜索所有内容（Chat + File）
 results, err := service.Search(ctx, "性能优化方案", &types.RetrieveOptions{
-    SearchMode: types.SearchModeSemantic, // 语义模式
-    Layers:     []types.Layer{types.LayerL2, types.LayerL3},
+    MinScore:   0.5,   // 最低相关性阈值
     Limit:      10,
 })
 ```
 
 **特点**：
 - 搜索 Chat + File 所有来源
-- 搜索 L2 + L3（不含 L1）
-- 语义向量匹配（理解含义）
-- 适用于深度搜索、概念查询
+- 自动合并关键词 + 语义匹配
+- 支持 `min_score` 相关性过滤
+- 支持 `source_type` 过滤 ("chat" 或 "file")
+
+#### memories - 统一搜索工具
+
+```go
+// 统一搜索入口
+results, err := service.Search(ctx, "auth implementation", &types.RetrieveOptions{
+    SourceType: types.SourceTypeChat,  // 可选：按来源过滤
+    DaysBack:   30,                     // 可选：时间范围
+    MinScore:   0.5,                    // 可选：相关性阈值
+    Limit:      10,
+})
+```
+
+**特点**：
+- 搜索所有来源（Chat + File）
+- 自动合并关键词 + 语义匹配
+- 支持多种过滤参数
 
 #### 工具对比
 
-| 工具 | 来源范围 | 层级范围 | 搜索方式 | 适用场景 |
-|------|---------|---------|---------|---------|
-| **history_query** | Chat only | L1 + L2 + L3 | 关键词 | 查找用户决策、偏好、事件 |
-| **knowledge_search** | Chat + File | L2 + L3 | 语义向量 | 概念搜索、深度查询、文件内容 |
+| 工具 | 来源范围 | 搜索方式 | 特点 |
+|------|---------|---------|------|
+| **history_query** | Chat only | 关键词+语义 | 聊天历史，支持时间范围 |
+| **knowledge_search** | Chat + File | 关键词+语义 | 深度搜索，支持相关性过滤 |
+| **memories** | Chat + File | 关键词+语义 | 统一入口，支持全部过滤参数 |
 
-**搜索优先级：**
-
-| 层级 | 搜索方式 | 速度 | 说明 |
-|------|---------|------|------|
-| L1 | 精确/关键词 | 最快 | 始终加载在内存，优先返回 |
-| L2 | 向量语义搜索 + FTS5 | 中等 | 摘要精确，搜索优先级最高 |
-| L3 | 向量语义搜索 + FTS5 | 最慢 | 原始内容，可能有文档切割问题 |
-
-**语义搜索策略：**
-- 优先搜索 L2（摘要层，语义更精确）
-- L2 结果不足时补充 L3（原始内容层）
-- L3 可能有文档切割导致的上下文异常，故优先级较低
+**搜索策略：**
+- 自动合并关键词匹配（FTS5）和语义向量搜索
+- 根据查询内容自动选择最佳匹配方式
+- 支持自然语言和关键词两种查询风格
 
 **匹配类型：**
+- `keyword`: 关键词匹配（FTS5 全文搜索）
+- `semantic`: 语义向量匹配
+- 搜索结果自动合并两种匹配类型
 
-- `exact`: 完全匹配查询字符串
-- `keyword`: 关键词匹配
-- `semantic`: 语义向量匹配（需要配置 Embedder）
-
-### 启用 L2/L3 语义搜索
+### 启用语义搜索
 
 L2 和 L3 共用 SQLite + 向量存储，存储摘要和原始内容的 embedding：
 
@@ -391,10 +401,10 @@ config.Embedding = &types.EmbeddingConfig{
     Model:    "text-embedding-3-small",
 }
 
-// 3. 创建服务时自动初始化 L2/L3 语义搜索
+// 3. 创建服务时自动初始化语义搜索
 service := memoria.New(config)
 
-// 4. 搜索时自动使用 L2 优先、L3 补充的语义搜索
+// 4. 搜索时自动使用关键词+语义合并搜索
 results, err := service.Search(ctx, "那个数据库问题怎么解决的", &types.RetrieveOptions{
     UserID: "user123",
     Limit:  10,
@@ -665,10 +675,12 @@ go test -v -run TestMemoriaService ./memoria/
 
 ### 搜索策略
 
-| 搜索模式 | L1 | L2 | L3 | 说明 |
-|---------|----|----|----|----|
-| 关键词 | 内存匹配 | FTS5 | FTS5 | 快速精确匹配 |
-| 语义 | ❌ | 向量搜索 | 向量搜索 | L2 优先，L3 补充 |
+| 搜索类型 | 实现方式 | 说明 |
+|---------|---------|------|
+| 关键词搜索 | FTS5 全文索引 | 快速精确匹配 |
+| 语义搜索 | 向量相似度 | 理解含义，概念匹配 |
+
+搜索时自动合并两种方式，无需手动指定模式。
 
 ### 依赖说明
 

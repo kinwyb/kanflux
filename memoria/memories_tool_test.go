@@ -51,12 +51,9 @@ func TestMemoriesTool_Description(t *testing.T) {
 		t.Error("Description should not be empty")
 	}
 
-	// Check that description mentions both modes
-	if !strings.Contains(desc, "keyword") {
-		t.Error("Description should mention 'keyword' mode")
-	}
-	if !strings.Contains(desc, "semantic") {
-		t.Error("Description should mention 'semantic' mode")
+	// Check that description mentions key features
+	if !strings.Contains(desc, "memories") {
+		t.Error("Description should mention 'memories'")
 	}
 }
 
@@ -73,7 +70,7 @@ func TestMemoriesTool_Parameters(t *testing.T) {
 
 	// Check properties exist
 	props := params["properties"].(map[string]interface{})
-	expectedProps := []string{"query", "mode", "source_type", "limit", "hall_types", "days_back", "min_score"}
+	expectedProps := []string{"query", "source_type", "limit", "days_back", "min_score", "user_id"}
 	for _, prop := range expectedProps {
 		if props[prop] == nil {
 			t.Errorf("Parameters should have '%s' property", prop)
@@ -81,18 +78,18 @@ func TestMemoriesTool_Parameters(t *testing.T) {
 	}
 }
 
-func TestMemoriesTool_ExecuteKeywordMode(t *testing.T) {
+func TestMemoriesTool_ExecuteWithQuery(t *testing.T) {
 	searcher := &MockMemoriesSearcher{
 		results: []*types.SearchResult{
 			{
 				Item: &types.MemoryItem{
-					ID:        "1",
-					HallType:  types.HallFacts,
-					Layer:     types.LayerL1,
+					ID:         "1",
+					HallType:   types.HallFacts,
+					Layer:      types.LayerL1,
 					SourceType: types.SourceTypeChat,
-					Content:   "User prefers dark mode",
-					Summary:   "User prefers dark mode",
-					Timestamp: time.Now(),
+					Content:    "User prefers dark mode",
+					Summary:    "User prefers dark mode",
+					Timestamp:  time.Now(),
 				},
 				Score:     0.9,
 				Layer:     types.LayerL1,
@@ -103,9 +100,7 @@ func TestMemoriesTool_ExecuteKeywordMode(t *testing.T) {
 	tool := NewMemoriesTool(searcher)
 
 	params := map[string]interface{}{
-		"query":    "dark mode",
-		"mode":     "keyword",
-		"days_back": 30,
+		"query": "dark mode",
 	}
 
 	result, err := tool.Execute(context.Background(), params)
@@ -122,57 +117,14 @@ func TestMemoriesTool_ExecuteKeywordMode(t *testing.T) {
 	}
 }
 
-func TestMemoriesTool_ExecuteSemanticMode(t *testing.T) {
-	searcher := &MockMemoriesSearcher{
-		results: []*types.SearchResult{
-			{
-				Item: &types.MemoryItem{
-					ID:        "2",
-					HallType:  types.HallEvents,
-					Layer:     types.LayerL3,
-					SourceType: types.SourceTypeFile,
-					Content:   "Performance optimization guide discussing caching strategies",
-					Summary:   "Caching strategies for performance",
-					Timestamp: time.Now(),
-				},
-				Score:     0.75,
-				Layer:     types.LayerL3,
-				MatchType: "semantic",
-			},
-		},
-	}
-	tool := NewMemoriesTool(searcher)
-
-	params := map[string]interface{}{
-		"query":     "performance optimization approaches",
-		"mode":      "semantic",
-		"min_score": 0.5,
-	}
-
-	result, err := tool.Execute(context.Background(), params)
-	if err != nil {
-		t.Errorf("Execute failed: %v", err)
-	}
-
-	if result == "" {
-		t.Error("Result should not be empty")
-	}
-
-	// Check format includes semantic indicators
-	if !strings.Contains(result, "L3") {
-		t.Error("Result should show layer L3")
-	}
-}
-
-func TestMemoriesTool_ExecuteDefaultMode(t *testing.T) {
+func TestMemoriesTool_ExecuteWithNoResults(t *testing.T) {
 	searcher := &MockMemoriesSearcher{
 		results: []*types.SearchResult{},
 	}
 	tool := NewMemoriesTool(searcher)
 
-	// Without mode parameter, should default to keyword
 	params := map[string]interface{}{
-		"query": "test",
+		"query": "nonexistent",
 	}
 
 	result, err := tool.Execute(context.Background(), params)
@@ -180,9 +132,9 @@ func TestMemoriesTool_ExecuteDefaultMode(t *testing.T) {
 		t.Errorf("Execute failed: %v", err)
 	}
 
-	// Should return no results message for keyword mode
-	if !strings.Contains(result, "last 30 days") {
-		t.Error("Default mode should be keyword (shows days_back info)")
+	// Should return no results message
+	if !strings.Contains(result, "No matches") {
+		t.Error("Should return no matches message")
 	}
 }
 
@@ -190,9 +142,7 @@ func TestMemoriesTool_ExecuteMissingQuery(t *testing.T) {
 	searcher := &MockMemoriesSearcher{}
 	tool := NewMemoriesTool(searcher)
 
-	params := map[string]interface{}{
-		"mode": "keyword",
-	}
+	params := map[string]interface{}{}
 
 	_, err := tool.Execute(context.Background(), params)
 	if err == nil {
@@ -249,24 +199,6 @@ func TestMemoriesTool_GetL1FactsShortcut(t *testing.T) {
 	}
 }
 
-func TestMemoriesTool_HallTypesConversion(t *testing.T) {
-	// Test that short hall type names are converted correctly
-	searcher := &MockMemoriesSearcher{}
-	tool := NewMemoriesTool(searcher)
-
-	params := map[string]interface{}{
-		"query":     "test",
-		"mode":      "keyword",
-		"hall_types": []interface{}{"facts", "events"},
-	}
-
-	// Execute should handle hall_types conversion
-	_, err := tool.Execute(context.Background(), params)
-	if err != nil {
-		t.Errorf("Execute failed with hall_types: %v", err)
-	}
-}
-
 func TestMemoriesTool_ScoreFiltering(t *testing.T) {
 	searcher := &MockMemoriesSearcher{
 		results: []*types.SearchResult{
@@ -292,7 +224,6 @@ func TestMemoriesTool_ScoreFiltering(t *testing.T) {
 
 	params := map[string]interface{}{
 		"query":     "test",
-		"mode":      "semantic",
 		"min_score": 0.5,
 	}
 
@@ -301,10 +232,40 @@ func TestMemoriesTool_ScoreFiltering(t *testing.T) {
 		t.Errorf("Execute failed: %v", err)
 	}
 
-	// Should only include high score result
-	if strings.Contains(result, "1 results") {
-		// Correct - filtered to 1 result
-	} else if strings.Contains(result, "2 results") {
-		t.Error("Should filter out low score results")
+	// Should only include high score result (1 result)
+	if !strings.Contains(result, "Found 1") {
+		t.Error("Should filter out low score results, expected 'Found 1'")
+	}
+}
+
+func TestMemoriesTool_SourceTypeFilter(t *testing.T) {
+	searcher := &MockMemoriesSearcher{
+		results: []*types.SearchResult{
+			{
+				Item: &types.MemoryItem{
+					ID:         "file1",
+					SourceType: types.SourceTypeFile,
+					Content:    "file content",
+					Timestamp:  time.Now(),
+				},
+				Score: 0.8,
+			},
+		},
+	}
+	tool := NewMemoriesTool(searcher)
+
+	params := map[string]interface{}{
+		"query":       "test",
+		"source_type": "file",
+	}
+
+	result, err := tool.Execute(context.Background(), params)
+	if err != nil {
+		t.Errorf("Execute failed: %v", err)
+	}
+
+	// Should show file source
+	if !strings.Contains(result, "file") {
+		t.Error("Result should indicate file source type")
 	}
 }
