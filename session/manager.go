@@ -1,9 +1,7 @@
 package session
 
 import (
-	"context"
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,8 +9,6 @@ import (
 	"time"
 
 	"github.com/cloudwego/eino/adk"
-	"github.com/kinwyb/kanflux/memoria"
-	"github.com/kinwyb/kanflux/memoria/types"
 )
 
 // Manager 会话管理器
@@ -20,7 +16,7 @@ type Manager struct {
 	sessions  map[string]*Session
 	mu        sync.RWMutex
 	baseDir   string
-	memoria   *memoria.Memoria // 替代 ConversationHistory
+	dateIndex map[string]string // session key -> date folder (内存缓存)
 }
 
 // NewManager 创建会话管理器
@@ -31,19 +27,10 @@ func NewManager(baseDir string) (*Manager, error) {
 		return nil, err
 	}
 	return &Manager{
-		sessions: make(map[string]*Session),
-		baseDir:  baseDir,
+		sessions:  make(map[string]*Session),
+		baseDir:   baseDir,
+		dateIndex: make(map[string]string),
 	}, nil
-}
-
-// SetMemoria 设置 Memoria（替代 SetEmbedder）
-func (m *Manager) SetMemoria(mem *memoria.Memoria) {
-	m.memoria = mem
-}
-
-// GetMemoria 获取 Memoria 实例
-func (m *Manager) GetMemoria() *memoria.Memoria {
-	return m.memoria
 }
 
 // GetOrCreate 获取或创建会话
@@ -79,16 +66,23 @@ func (m *Manager) GetOrCreate(key string) (*Session, error) {
 
 // Save 保存会话
 func (m *Manager) Save(session *Session) error {
-	return m.SaveWithContext(context.Background(), session)
+	return m.save(session)
 }
 
-// SaveWithContext 保存会话（带上下文，用于长期记忆处理）
-func (m *Manager) SaveWithContext(ctx context.Context, session *Session) error {
+// save 保存会话到磁盘
+func (m *Manager) save(session *Session) error {
 	session.mu.RLock()
 	defer session.mu.RUnlock()
 
-	// 确定文件路径
-	filePath := m.sessionPath(session.Key)
+	// 确定文件路径（使用session的CreatedAt日期）
+	dateFolder := session.CreatedAt.Format("2006-01-02")
+	filePath := m.sessionPath(session.Key, dateFolder)
+
+	// 确保日期目录存在
+	dateDir := filepath.Dir(filePath)
+	if err := os.MkdirAll(dateDir, 0755); err != nil {
+		return err
+	}
 
 	// 创建临时文件
 	tmpPath := filePath + ".tmp"
@@ -122,19 +116,10 @@ func (m *Manager) SaveWithContext(ctx context.Context, session *Session) error {
 		return err
 	}
 
-	// 异步处理聊天历史到 Memoria（不阻塞保存）
-	if m.memoria != nil {
-		go func() {
-			// 格式化聊天内容
-			content := formatSessionContent(session)
-			userCtx := &types.DefaultUserIdentity{UserID: "default"}
-
-			// 调用 Memoria 处理聊天记录
-			if _, err := m.memoria.ProcessChat(ctx, session.Key, content, userCtx); err != nil {
-				// 静默失败，不影响主流程
-			}
-		}()
-	}
+	// 更新日期索引缓存
+	m.mu.Lock()
+	m.dateIndex[session.Key] = dateFolder
+	m.mu.Unlock()
 
 	return nil
 }
@@ -147,12 +132,49 @@ func (m *Manager) Delete(key string) error {
 	// 从缓存中删除
 	delete(m.sessions, key)
 
-	// 删除文件
-	filePath := m.sessionPath(key)
+	// 从日期索引中删除
+	dateFolder, hasIndex := m.dateIndex[key]
+	delete(m.dateIndex, key)
+
+	// 尝试删除文件（优先使用索引中的日期文件夹）
+	var lastErr error
+	if hasIndex && dateFolder != "" {
+		filePath := m.sessionPath(key, dateFolder)
+		if err := os.Remove(filePath); err != nil {
+			lastErr = err
+		} else {
+			return nil
+		}
+	}
+
+	// 如果索引中没有或删除失败，尝试在所有日期文件夹中查找
+	entries, err := os.ReadDir(m.baseDir)
+	if err != nil {
+		if lastErr != nil {
+			return lastErr
+		}
+		return err
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			// 尝试日期文件夹格式 (YYYY-MM-DD)
+			filePath := m.sessionPath(key, entry.Name())
+			if err := os.Remove(filePath); err == nil {
+				return nil
+			}
+		}
+	}
+
+	// 最后尝试旧格式（根目录下的文件）
+	filePath := m.sessionPath(key, "")
 	if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 
+	if lastErr != nil {
+		return lastErr
+	}
 	return nil
 }
 
@@ -170,7 +192,22 @@ func (m *Manager) List() ([]string, error) {
 	// 提取会话键
 	keys := make([]string, 0, len(entries))
 	for _, entry := range entries {
-		if !entry.IsDir() && filepath.Ext(entry.Name()) == ".jsonl" {
+		if entry.IsDir() {
+			// 日期文件夹，递归读取
+			subEntries, err := os.ReadDir(filepath.Join(m.baseDir, entry.Name()))
+			if err != nil {
+				continue
+			}
+			for _, subEntry := range subEntries {
+				if !subEntry.IsDir() && filepath.Ext(subEntry.Name()) == ".jsonl" {
+					key := strings.TrimSuffix(subEntry.Name(), ".jsonl")
+					keys = append(keys, key)
+					// 更新日期索引缓存
+					m.dateIndex[key] = entry.Name()
+				}
+			}
+		} else if filepath.Ext(entry.Name()) == ".jsonl" {
+			// 旧格式（根目录下的文件）
 			key := strings.TrimSuffix(entry.Name(), ".jsonl")
 			keys = append(keys, key)
 		}
@@ -181,7 +218,28 @@ func (m *Manager) List() ([]string, error) {
 
 // load 从磁盘加载会话
 func (m *Manager) load(key string) (*Session, error) {
-	filePath := m.sessionPath(key)
+	// 首先尝试从日期索引缓存中获取路径
+	m.mu.RLock()
+	dateFolder, hasIndex := m.dateIndex[key]
+	m.mu.RUnlock()
+
+	var filePath string
+	if hasIndex && dateFolder != "" {
+		filePath = m.sessionPath(key, dateFolder)
+	} else {
+		// 尝试查找文件（支持日期文件夹和旧格式）
+		var err error
+		filePath, dateFolder, err = m.findSessionFile(key)
+		if err != nil {
+			return nil, err
+		}
+		// 更新索引缓存
+		if dateFolder != "" {
+			m.mu.Lock()
+			m.dateIndex[key] = dateFolder
+			m.mu.Unlock()
+		}
+	}
 
 	// 打开文件
 	file, err := os.Open(filePath)
@@ -232,43 +290,56 @@ func (m *Manager) load(key string) (*Session, error) {
 	return session, nil
 }
 
-// sessionPath 获取会话文件路径
-func (m *Manager) sessionPath(key string) string {
-	// 将 key 中的特殊字符替换为下划线
-	safeKey := strings.Map(func(r rune) rune {
+// findSessionFile 查找会话文件，返回文件路径和日期文件夹名
+func (m *Manager) findSessionFile(key string) (filePath string, dateFolder string, err error) {
+	safeKey := m.sanitizeKey(key)
+
+	// 读取根目录
+	entries, err := os.ReadDir(m.baseDir)
+	if err != nil {
+		return "", "", err
+	}
+
+	// 遍历目录，优先查找日期文件夹
+	for _, entry := range entries {
+		if entry.IsDir() {
+			// 尝试日期文件夹格式 (YYYY-MM-DD)
+			candidatePath := filepath.Join(m.baseDir, entry.Name(), safeKey+".jsonl")
+			if _, err := os.Stat(candidatePath); err == nil {
+				return candidatePath, entry.Name(), nil
+			}
+		}
+	}
+
+	// 尝试旧格式（根目录下的文件）
+	oldPath := filepath.Join(m.baseDir, safeKey+".jsonl")
+	if _, err := os.Stat(oldPath); err == nil {
+		return oldPath, "", nil
+	}
+
+	return "", "", os.ErrNotExist
+}
+
+// sanitizeKey 清理key中的特殊字符
+func (m *Manager) sanitizeKey(key string) string {
+	return strings.Map(func(r rune) rune {
 		if r == '/' || r == '\\' || r == ':' || r == '*' || r == '?' || r == '"' || r == '<' || r == '>' || r == '|' {
 			return '_'
 		}
 		return r
 	}, key)
-
-	return filepath.Join(m.baseDir, safeKey+".jsonl")
 }
 
-// formatSessionContent 格式化会话内容为字符串
-func formatSessionContent(session *Session) string {
-	var content strings.Builder
-	for _, msg := range session.Messages {
-		switch msg.Role {
-		case "user":
-			content.WriteString(fmt.Sprintf("Q: %s\n\n", extractMessageText(msg)))
-		case "assistant":
-			content.WriteString(fmt.Sprintf("A: %s\n\n", extractMessageText(msg)))
-		}
-	}
-	return content.String()
-}
+// sessionPath 获取会话文件路径
+// dateFolder 为日期文件夹名（格式：YYYY-MM-DD），为空时使用根目录（兼容旧格式）
+func (m *Manager) sessionPath(key string, dateFolder string) string {
+	safeKey := m.sanitizeKey(key)
 
-// extractMessageText 从消息中提取文本内容
-func extractMessageText(msg adk.Message) string {
-	if msg.Content != "" {
-		return msg.Content
+	if dateFolder == "" {
+		// 旧格式：根目录下
+		return filepath.Join(m.baseDir, safeKey+".jsonl")
 	}
-	var texts []string
-	for _, part := range msg.MultiContent {
-		if part.Type == "text" && part.Text != "" {
-			texts = append(texts, part.Text)
-		}
-	}
-	return strings.Join(texts, "\n")
+
+	// 新格式：日期文件夹下
+	return filepath.Join(m.baseDir, dateFolder, safeKey+".jsonl")
 }

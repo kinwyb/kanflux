@@ -720,7 +720,7 @@ func (m *Manager) handleInboundMessage(ctx context.Context, msg *bus.InboundMess
 	}
 
 	// 保存 session
-	m.sessionMgr.SaveWithContext(ctx, sess)
+	m.sessionMgr.Save(sess)
 
 	response := responses[len(responses)-1]
 
