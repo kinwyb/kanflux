@@ -44,7 +44,7 @@ func (t *MemoriesTool) Name() string {
 
 // Description returns the unified tool description
 func (t *MemoriesTool) Description() string {
-	return `Search all memories (chat + files).
+	return `Search all chat history and knowledge (chat + files).
 
 Search combines keyword matching and semantic understanding automatically.
 Use natural language or keywords - both work well.
@@ -105,7 +105,7 @@ func (t *MemoriesTool) Execute(ctx context.Context, params map[string]interface{
 	slog.Debug("MemoriesTool execute started", "query", query)
 
 	opts := &types.RetrieveOptions{
-		Query: query,
+		Query:  query,
 		Layers: []types.Layer{types.LayerL1, types.LayerL2, types.LayerL3},
 	}
 

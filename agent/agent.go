@@ -116,21 +116,14 @@ func NewChatModelAgent(ctx context.Context, cfg *Config) (*Agent, error) {
 	if err != nil {
 		return nil, fmt.Errorf("上下文初始化失败: %w", err)
 	}
-	if cfg.Memoria != nil {
-		prompt.SetMemoria(cfg.Memoria)
-	}
+
 	if cfg.ToolRegister == nil {
 		cfg.ToolRegister = tools.NewRegistry()
 	}
 	cfg.ToolRegister.Register(tools.NewMemoryTool(prompt.memory))
 
 	// 注册 Memoria 工具（替代 RAG 和 History 工具）
-	if cfg.Memoria != nil {
-		cfg.ToolRegister.Register(memoria.NewMemoriesTool(cfg.Memoria))
-		cfg.ToolRegister.Register(memoria.NewHistoryTool(cfg.Memoria))
-		cfg.ToolRegister.Register(memoria.NewRAGTool(cfg.Memoria))
-		cfg.ToolRegister.Register(memoria.NewStatsTool(cfg.Memoria))
-	}
+	buildMemoriaTool(cfg.ToolRegister, cfg.Memoria)
 
 	// 应用工具配置
 	applyToolConfig(cfg)
@@ -193,21 +186,14 @@ func NewDeepAgent(ctx context.Context, cfg *Config) (*Agent, error) {
 	if err != nil {
 		return nil, fmt.Errorf("上下文初始化失败: %w", err)
 	}
-	if cfg.Memoria != nil {
-		prompt.SetMemoria(cfg.Memoria)
-	}
+
 	if cfg.ToolRegister == nil {
 		cfg.ToolRegister = tools.NewRegistry()
 	}
 	cfg.ToolRegister.Register(tools.NewMemoryTool(prompt.memory))
 
 	// 注册 Memoria 工具（替代 RAG 和 History 工具）
-	if cfg.Memoria != nil {
-		cfg.ToolRegister.Register(memoria.NewMemoriesTool(cfg.Memoria))
-		cfg.ToolRegister.Register(memoria.NewHistoryTool(cfg.Memoria))
-		cfg.ToolRegister.Register(memoria.NewRAGTool(cfg.Memoria))
-		cfg.ToolRegister.Register(memoria.NewStatsTool(cfg.Memoria))
-	}
+	buildMemoriaTool(cfg.ToolRegister, cfg.Memoria)
 
 	// 应用工具配置
 	applyToolConfig(cfg)
@@ -300,21 +286,14 @@ func NewPlanExecuteAgent(ctx context.Context, cfg *Config) (*Agent, error) {
 	if err != nil {
 		return nil, fmt.Errorf("上下文初始化失败: %w", err)
 	}
-	if cfg.Memoria != nil {
-		prompt.SetMemoria(cfg.Memoria)
-	}
+
 	if cfg.ToolRegister == nil {
 		cfg.ToolRegister = tools.NewRegistry()
 	}
 	cfg.ToolRegister.Register(tools.NewMemoryTool(prompt.memory))
 
 	// 注册 Memoria 工具（替代 RAG 和 History 工具）
-	if cfg.Memoria != nil {
-		cfg.ToolRegister.Register(memoria.NewMemoriesTool(cfg.Memoria))
-		cfg.ToolRegister.Register(memoria.NewHistoryTool(cfg.Memoria))
-		cfg.ToolRegister.Register(memoria.NewRAGTool(cfg.Memoria))
-		cfg.ToolRegister.Register(memoria.NewStatsTool(cfg.Memoria))
-	}
+	buildMemoriaTool(cfg.ToolRegister, cfg.Memoria)
 
 	// 应用工具配置
 	applyToolConfig(cfg)
@@ -394,21 +373,14 @@ func NewSupervisorAgent(ctx context.Context, cfg *Config) (*Agent, error) {
 	if err != nil {
 		return nil, fmt.Errorf("上下文初始化失败: %w", err)
 	}
-	if cfg.Memoria != nil {
-		prompt.SetMemoria(cfg.Memoria)
-	}
+
 	if cfg.ToolRegister == nil {
 		cfg.ToolRegister = tools.NewRegistry()
 	}
 	cfg.ToolRegister.Register(tools.NewMemoryTool(prompt.memory))
 
 	// 注册 Memoria 工具（替代 RAG 和 History 工具）
-	if cfg.Memoria != nil {
-		cfg.ToolRegister.Register(memoria.NewMemoriesTool(cfg.Memoria))
-		cfg.ToolRegister.Register(memoria.NewHistoryTool(cfg.Memoria))
-		cfg.ToolRegister.Register(memoria.NewRAGTool(cfg.Memoria))
-		cfg.ToolRegister.Register(memoria.NewStatsTool(cfg.Memoria))
-	}
+	buildMemoriaTool(cfg.ToolRegister, cfg.Memoria)
 
 	// 应用工具配置
 	applyToolConfig(cfg)
@@ -469,6 +441,15 @@ func NewSupervisorAgent(ctx context.Context, cfg *Config) (*Agent, error) {
 		cfg:    cfg,
 		cancel: cancel,
 	}, nil
+}
+
+// buildMemoriaTool 构建memoria工具
+func buildMemoriaTool(register *tools.Registry, memoriaObj *memoria.Memoria) {
+	if memoriaObj == nil || register == nil {
+		return
+	}
+	register.Register(memoria.NewHistoryTool(memoriaObj))
+	register.Register(memoria.NewRAGTool(memoriaObj))
 }
 
 // buildSubAgentPrompt 构建子 agent 描述提示词

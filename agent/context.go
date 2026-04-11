@@ -3,15 +3,12 @@ package agent
 import (
 	"fmt"
 	"time"
-
-	"github.com/kinwyb/kanflux/memoria"
 )
 
 // ContextBuilder 上下文构建器
 type ContextBuilder struct {
 	memory    *MemoryStore
 	workspace string
-	memoria   *memoria.Memoria
 }
 
 // NewContextBuilder 创建上下文构建器
@@ -28,11 +25,6 @@ func NewContextBuilder(workspace string) (*ContextBuilder, error) {
 	return ret, nil
 }
 
-// SetMemoria 设置 Memoria 记忆系统
-func (b *ContextBuilder) SetMemoria(mem *memoria.Memoria) {
-	b.memoria = mem
-}
-
 // BuildSystemPrompt 构建系统提示词
 func (b *ContextBuilder) BuildSystemPrompt() string {
 	var parts []string
@@ -43,15 +35,10 @@ func (b *ContextBuilder) BuildSystemPrompt() string {
 	// 2. Memory 上下文
 	parts = append(parts, b.buildMemory())
 
-	// 3. Memoria 记忆系统（替代 Knowledge + History）
-	if b.memoria != nil {
-		parts = append(parts, b.buildMemoria())
-	}
-
-	// 4. 安全提示
+	// 3. 安全提示
 	parts = append(parts, b.buildSafety())
 
-	// 5. 错误处理指导
+	// 4. 错误处理指导
 	parts = append(parts, b.buildErrorHandling())
 
 	return fmt.Sprintf("%s\n\n", joinNonEmpty(parts, "\n\n---\n\n"))
@@ -132,52 +119,6 @@ You have memory_tool to manage memory content.
 		memory = memory + "## Current Memory Content\n\n" + memoryContext
 	}
 	return memory
-}
-
-// buildMemoria 构建 Memoria 记忆系统上下文
-func (b *ContextBuilder) buildMemoria() string {
-	if b.memoria == nil {
-		return ""
-	}
-
-	stats := b.memoria.GetStats()
-	l1Items := 0
-	l2Items := 0
-	l3Items := 0
-	if v, ok := stats["l1_items"].(int); ok {
-		l1Items = v
-	}
-	if v, ok := stats["l2_items"].(int); ok {
-		l2Items = v
-	}
-	if v, ok := stats["l3_items"].(int); ok {
-		l3Items = v
-	}
-
-	return fmt.Sprintf(`## Memory System
-
-You have access to a unified memory system with three layers:
-- **L1** (~%d items): User preferences - always loaded, ~120 tokens total
-- **L2** (~%d items): Facts, events, discoveries - semantic + keyword search
-- **L3** (~%d items): Raw content - full semantic search for deep retrieval
-
-**Tools available**:
-- **memories**: Search all memory (chat history + knowledge files)
-- **history_query**: Search conversation history only
-- **knowledge_search**: Search knowledge documents only
-- **memory_stats**: Get memory system statistics
-
-**When to search**:
-- Before answering questions about project-specific topics → use **knowledge_search**
-- When recalling user preferences or past decisions → use **history_query** or **memories**
-- When looking for documentation, code patterns, or technical information → use **knowledge_search**
-- For general queries when source is uncertain → use **memories**
-
-**Search strategy**:
-- Start with memories for general queries
-- Use history_query for conversation-specific questions
-- Use knowledge_search for documentation/file content
-- Results include relevance scores (0-1) - higher is more relevant`, l1Items, l2Items, l3Items)
 }
 
 // buildSafety 构建安全提示
