@@ -35,15 +35,15 @@ func NewManager(baseDir string) (*Manager, error) {
 
 // GetOrCreate 获取或创建会话
 func (m *Manager) GetOrCreate(key string) (*Session, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	// 检查内存缓存
+	// 先检查内存缓存（用读锁）
+	m.mu.RLock()
 	if session, ok := m.sessions[key]; ok {
+		m.mu.RUnlock()
 		return session, nil
 	}
+	m.mu.RUnlock()
 
-	// 尝试从磁盘加载
+	// 尝试从磁盘加载（不持有锁）
 	session, err := m.load(key)
 	if err != nil {
 		if !os.IsNotExist(err) {
@@ -59,8 +59,16 @@ func (m *Manager) GetOrCreate(key string) (*Session, error) {
 		}
 	}
 
-	// 添加到缓存
+	// 添加到缓存（用写锁）
+	m.mu.Lock()
+	// 双重检查，防止并发时重复添加
+	if existing, ok := m.sessions[key]; ok {
+		m.mu.Unlock()
+		return existing, nil
+	}
 	m.sessions[key] = session
+	m.mu.Unlock()
+
 	return session, nil
 }
 
