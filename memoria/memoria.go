@@ -630,26 +630,26 @@ func (m *Memoria) Search(ctx context.Context, query string, opts *types.Retrieve
 	return results, nil
 }
 
-// keywordSearch performs keyword-based search across L2 and L3 (L2 first, then L3)
+// keywordSearch performs keyword-based search across L2 and L3 simultaneously
 // No L1 search. No HallType filtering.
 func (m *Memoria) keywordSearch(ctx context.Context, query string, opts *types.RetrieveOptions) ([]*types.SearchResult, error) {
 	results := make([]*types.SearchResult, 0)
 	seen := make(map[string]bool)
 
-	// 1. L2 keyword search first (summaries, faster)
+	// Search both L2 and L3 simultaneously using SQLite FTS5
 	if m.sqliteStore != nil {
-		l2Opts := &types.RetrieveOptions{
-			Layers:     []types.Layer{types.LayerL2},
+		searchOpts := &types.RetrieveOptions{
+			Layers:     []types.Layer{types.LayerL2, types.LayerL3},
 			UserID:     opts.UserID,
 			SourceType: opts.SourceType,
-			Limit:      opts.Limit * 2, // Get more for merging
+			Limit:      opts.Limit * 2, // Get more for better sorting
 		}
 
-		l2Results, err := m.sqliteStore.KeywordSearch(ctx, query, l2Opts)
+		searchResults, err := m.sqliteStore.KeywordSearch(ctx, query, searchOpts)
 		if err != nil {
-			slog.Warn("L2 keyword search failed", "error", err)
+			slog.Warn("Keyword search failed", "error", err)
 		} else {
-			for _, r := range l2Results {
+			for _, r := range searchResults {
 				r.MatchType = "keyword"
 				if !seen[r.Item.ID] {
 					seen[r.Item.ID] = true
@@ -659,45 +659,38 @@ func (m *Memoria) keywordSearch(ctx context.Context, query string, opts *types.R
 		}
 	}
 
-	// 2. L3 keyword search if L2 results not enough (raw content, deeper)
-	if len(results) < opts.Limit && m.l3 != nil {
-		l3Results, err := m.searchL3Keyword(ctx, query, opts)
-		if err != nil {
-			slog.Warn("L3 keyword search failed", "error", err)
-		} else {
-			for _, r := range l3Results {
-				if !seen[r.Item.ID] {
-					seen[r.Item.ID] = true
-					results = append(results, r)
-				}
-			}
-		}
+	// Sort by score
+	sortResultsByScore(results)
+
+	// Limit to requested number
+	if opts.Limit > 0 && len(results) > opts.Limit {
+		results = results[:opts.Limit]
 	}
 
 	return results, nil
 }
 
-// semanticSearch performs vector similarity search across L2/L3 (L2 first, then L3)
+// semanticSearch performs vector similarity search across L2/L3 simultaneously
 // No HallType filtering.
 func (m *Memoria) semanticSearch(ctx context.Context, query string, opts *types.RetrieveOptions) ([]*types.SearchResult, error) {
 	results := make([]*types.SearchResult, 0)
 	seen := make(map[string]bool)
 
-	// Use unified SQLite search for L2/L3 (prefer L2)
+	// Use unified SQLite search for L2 + L3 (search both simultaneously)
 	if m.sqliteStore != nil {
-		// Search L2 first (summaries, more precise)
-		l2Opts := &types.RetrieveOptions{
-			Layers:     []types.Layer{types.LayerL2},
+		// Search both L2 and L3 at once
+		searchOpts := &types.RetrieveOptions{
+			Layers:     []types.Layer{types.LayerL2, types.LayerL3},
 			UserID:     opts.UserID,
 			SourceType: opts.SourceType,
-			Limit:      opts.Limit,
+			Limit:      opts.Limit * 2, // get more for better sorting
 		}
 
-		l2Results, err := m.sqliteStore.Search(ctx, query, l2Opts)
+		searchResults, err := m.sqliteStore.Search(ctx, query, searchOpts)
 		if err != nil {
-			slog.Warn("L2 semantic search failed", "error", err)
+			slog.Warn("Semantic search failed", "error", err)
 		} else {
-			for _, r := range l2Results {
+			for _, r := range searchResults {
 				r.MatchType = "semantic"
 				if !seen[r.Item.ID] {
 					seen[r.Item.ID] = true
@@ -705,34 +698,16 @@ func (m *Memoria) semanticSearch(ctx context.Context, query string, opts *types.
 				}
 			}
 		}
-
-		// Search L3 if L2 results not enough (raw content, deeper)
-		if len(results) < opts.Limit {
-			remaining := opts.Limit - len(results)
-			l3Opts := &types.RetrieveOptions{
-				Layers:     []types.Layer{types.LayerL3},
-				UserID:     opts.UserID,
-				SourceType: opts.SourceType,
-				Limit:      remaining + 5, // Get extra for deduplication
-			}
-
-			l3Results, err := m.sqliteStore.Search(ctx, query, l3Opts)
-			if err != nil {
-				slog.Warn("L3 semantic search failed", "error", err)
-			} else {
-				for _, r := range l3Results {
-					r.MatchType = "semantic"
-					if !seen[r.Item.ID] {
-						seen[r.Item.ID] = true
-						results = append(results, r)
-					}
-				}
-			}
-		}
 	}
 
 	// Sort by score (semantic similarity)
 	sortResultsByScore(results)
+
+	// Limit to requested number
+	if opts.Limit > 0 && len(results) > opts.Limit {
+		results = results[:opts.Limit]
+	}
+
 	return results, nil
 }
 

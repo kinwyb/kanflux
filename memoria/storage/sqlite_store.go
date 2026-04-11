@@ -223,7 +223,7 @@ func (s *SQLiteVectorStore) KeywordSearch(ctx context.Context, query string, opt
 }
 
 // SearchByVector performs semantic search using embedding vector
-// Priority: L2 (precise summary) first, then L3 (full content) as supplement
+// Searches L2 and L3 simultaneously, then sorts by score and returns top N
 func (s *SQLiteVectorStore) SearchByVector(ctx context.Context, vector []float32, opts *SearchOptions) ([]SearchResult, error) {
 	if opts == nil {
 		opts = DefaultSearchOptions()
@@ -234,48 +234,26 @@ func (s *SQLiteVectorStore) SearchByVector(ctx context.Context, vector []float32
 
 	var results []SearchResult
 
-	// determine search order: prefer L2 first
+	// determine search layers: default to L2 + L3
 	searchLayers := opts.Layers
 	if len(searchLayers) == 0 {
 		searchLayers = []int{2, 3}
 	}
 
-	// search L2 first (precise)
-	l2Count := 0
+	// search all specified layers simultaneously
 	for _, layer := range searchLayers {
-		if layer != 2 {
-			continue
-		}
-		layerResults, err := s.searchByVectorInLayer(ctx, vector, layer, opts)
+		layerOpts := *opts
+		layerOpts.Limit = opts.Limit * 2 // get more from each layer for better merging
+		layerResults, err := s.searchByVectorInLayer(ctx, vector, layer, &layerOpts)
 		if err != nil {
 			slog.Warn("failed to search layer", "layer", layer, "error", err)
 			continue
 		}
 		results = append(results, layerResults...)
-		l2Count = len(layerResults)
 	}
 
-	// if L2 results not enough, supplement from L3
-	if l2Count < opts.Limit {
-		for _, layer := range searchLayers {
-			if layer != 3 {
-				continue
-			}
-			remaining := opts.Limit - len(results)
-			if remaining <= 0 {
-				break
-			}
-			// adjust limit for L3
-			l3Opts := *opts
-			l3Opts.Limit = remaining + l2Count // request more to merge and filter
-			layerResults, err := s.searchByVectorInLayer(ctx, vector, layer, &l3Opts)
-			if err != nil {
-				slog.Warn("failed to search L3", "error", err)
-				continue
-			}
-			results = s.mergeResults(results, layerResults)
-		}
-	}
+	// sort all results by score descending
+	sortByScore(results)
 
 	// filter by min score
 	if opts.MinScore > 0 {
