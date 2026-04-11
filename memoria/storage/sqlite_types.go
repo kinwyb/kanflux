@@ -55,11 +55,20 @@ type StoreStats struct {
 }
 
 // NewDocumentFromMemoryItem converts MemoryItem to Document
+// L2: use Summary as content (for embedding and search)
+// L3: use Content as content (original content for semantic search)
 func NewDocumentFromMemoryItem(item *types.MemoryItem) *Document {
+	// Determine content based on layer
+	content := item.Content
+	if item.Layer == types.LayerL2 && item.Content == "" && item.Summary != "" {
+		// L2 file source: use summary as content for embedding
+		content = item.Summary
+	}
+
 	return &Document{
 		ID:         item.ID,
 		Layer:      int(item.Layer),
-		Content:    item.Content,
+		Content:    content,
 		HallType:   string(item.HallType),
 		UserID:     item.UserID,
 		Source:     item.Source,

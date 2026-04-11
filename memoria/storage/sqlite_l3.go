@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 
 	"github.com/kinwyb/kanflux/memoria/types"
@@ -56,13 +57,35 @@ func (s *SQLiteStore) Store(ctx context.Context, item *types.MemoryItem) error {
 }
 
 // StoreBatch stores multiple items
+// Skips items with empty content (after L2 summary fallback)
 func (s *SQLiteStore) StoreBatch(ctx context.Context, items []*types.MemoryItem) error {
 	if s.store == nil {
 		return fmt.Errorf("store not initialized")
 	}
 
-	docs := make([]Document, len(items))
-	for i, item := range items {
+	// Filter items with empty content
+	validItems := make([]*types.MemoryItem, 0, len(items))
+	for _, item := range items {
+		// Determine content for this item
+		content := item.Content
+		if item.Layer == types.LayerL2 && item.Content == "" && item.Summary != "" {
+			content = item.Summary
+		}
+
+		// Skip if content is empty
+		if content == "" {
+			slog.Debug("Skipping item with empty content", "id", item.ID, "layer", item.Layer)
+			continue
+		}
+		validItems = append(validItems, item)
+	}
+
+	if len(validItems) == 0 {
+		return nil
+	}
+
+	docs := make([]Document, len(validItems))
+	for i, item := range validItems {
 		docs[i] = *NewDocumentFromMemoryItem(item)
 	}
 
