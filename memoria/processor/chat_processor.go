@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/kinwyb/kanflux/memoria/llm"
+	"github.com/kinwyb/kanflux/memoria/storage"
 	"github.com/kinwyb/kanflux/memoria/types"
 )
 
@@ -19,6 +20,7 @@ import (
 type ChatProcessor struct {
 	*BaseProcessor
 	sessionDir string
+	storage    types.Storage // 用于访问 session 累引
 }
 
 // NewChatProcessor creates a chat history processor
@@ -27,6 +29,11 @@ func NewChatProcessor(summarizer types.Summarizer, config *ProcessorConfig, sess
 		BaseProcessor: NewBaseProcessor(summarizer, config),
 		sessionDir:    sessionDir,
 	}
+}
+
+// SetStorage sets the storage for session index tracking
+func (p *ChatProcessor) SetStorage(s types.Storage) {
+	p.storage = s
 }
 
 // Name returns the processor name
@@ -78,7 +85,8 @@ func (p *ChatProcessor) Process(ctx context.Context, source string, content stri
 	return result, nil
 }
 
-// ProcessBatch processes multiple session files
+// ProcessBatch processes multiple session files with index checking
+// Each session is checked against the session index before processing to avoid duplicates
 func (p *ChatProcessor) ProcessBatch(ctx context.Context, items []types.ProcessItem) (*types.ProcessingResult, error) {
 	result := &types.ProcessingResult{
 		Items:       make([]*types.MemoryItem, 0),
@@ -91,12 +99,31 @@ func (p *ChatProcessor) ProcessBatch(ctx context.Context, items []types.ProcessI
 	}
 
 	for _, item := range items {
+		// Check session index before processing
+		if p.storage != nil {
+			if mdStore, ok := p.storage.(*storage.MDStore); ok {
+				contentBytes := []byte(item.Content)
+				// Skip if session unchanged
+				if !mdStore.ShouldProcessSession(item.Source, contentBytes) {
+					slog.Debug("Session unchanged, skipping", "session", item.Source)
+					continue
+				}
+			}
+		}
+
 		r, err := p.Process(ctx, item.Source, item.Content, item.UserCtx)
 		if err != nil {
 			result.Errors = append(result.Errors, err)
 			continue
 		}
 		p.mergeResults(result, r)
+
+		// Mark session as processed after successful processing
+		if p.storage != nil {
+			if mdStore, ok := p.storage.(*storage.MDStore); ok {
+				mdStore.MarkSessionProcessed(item.Source, []byte(item.Content), len(r.Items))
+			}
+		}
 	}
 
 	return result, nil
@@ -113,6 +140,18 @@ func (p *ChatProcessor) processBatchParallel(ctx context.Context, items []types.
 	var wg sync.WaitGroup
 
 	for _, item := range items {
+		// Check session index before processing (outside goroutine for thread safety)
+		if p.storage != nil {
+			if mdStore, ok := p.storage.(*storage.MDStore); ok {
+				contentBytes := []byte(item.Content)
+				// Skip if session unchanged
+				if !mdStore.ShouldProcessSession(item.Source, contentBytes) {
+					slog.Debug("Session unchanged, skipping", "session", item.Source)
+					continue
+				}
+			}
+		}
+
 		wg.Add(1)
 		go func(item types.ProcessItem) {
 			defer wg.Done()
@@ -125,6 +164,12 @@ func (p *ChatProcessor) processBatchParallel(ctx context.Context, items []types.
 			}
 			mu.Lock()
 			p.mergeResults(result, r)
+			// Mark session as processed after successful processing
+			if p.storage != nil {
+				if mdStore, ok := p.storage.(*storage.MDStore); ok {
+					mdStore.MarkSessionProcessed(item.Source, []byte(item.Content), len(r.Items))
+				}
+			}
 			mu.Unlock()
 		}(item)
 	}

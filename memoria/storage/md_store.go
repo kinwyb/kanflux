@@ -19,11 +19,12 @@ import (
 
 // MDStore implements Storage interface using markdown files
 type MDStore struct {
-	config    *types.StorageConfig
-	baseDir   string
-	mu        sync.RWMutex
-	fileCache map[string][]*types.MemoryItem
-	fileIndex *FileIndex // 文件处理状态索引
+	config       *types.StorageConfig
+	baseDir      string
+	mu           sync.RWMutex
+	fileCache    map[string][]*types.MemoryItem
+	fileIndex    *FileIndex    // 文件处理状态索引
+	sessionIndex *SessionIndex // session 处理状态索引
 }
 
 // StorageConfig alias for backward compatibility
@@ -56,6 +57,9 @@ func NewMDStore(baseDir string, config *StorageConfig) (*MDStore, error) {
 
 	// 加载文件索引
 	store.fileIndex = LoadFileIndex(baseDir + "/metadata/file_index.json")
+
+	// 加载 session 索引
+	store.sessionIndex = LoadSessionIndex(baseDir + "/metadata/session_index.json")
 
 	return store, nil
 }
@@ -685,6 +689,13 @@ func (s *MDStore) Close() error {
 		}
 	}
 
+	// 保存 session 索引
+	if s.sessionIndex != nil {
+		if err := s.sessionIndex.Save(); err != nil {
+			slog.Warn("Failed to save session index", "error", err)
+		}
+	}
+
 	s.fileCache = nil
 	return nil
 }
@@ -927,4 +938,118 @@ func HashContent(content []byte) string {
 	h := sha256.New()
 	h.Write(content)
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+// ============ Session 累引相关 ============
+
+// ShouldProcessSession 检查 session 是否需要处理（内容是否变化）
+func (s *MDStore) ShouldProcessSession(sessionPath string, content []byte) bool {
+	if s.sessionIndex == nil {
+		return true
+	}
+
+	contentHash := HashContent(content)
+	return s.sessionIndex.NeedsProcessing(sessionPath, contentHash)
+}
+
+// MarkSessionProcessed 标记 session 已处理
+func (s *MDStore) MarkSessionProcessed(sessionPath string, content []byte, itemCount int) {
+	if s.sessionIndex == nil {
+		return
+	}
+
+	contentHash := HashContent(content)
+	s.sessionIndex.MarkProcessed(sessionPath, contentHash, itemCount)
+}
+
+// GetSessionIndex 获取 session 索引
+func (s *MDStore) GetSessionIndex() *SessionIndex {
+	return s.sessionIndex
+}
+
+// SessionIndex 记录 session 处理状态
+type SessionIndex struct {
+	filePath string
+	mu       sync.RWMutex
+	Entries  map[string]*SessionEntry `json:"entries"` // session 路径 -> 处理记录
+}
+
+// SessionEntry session 处理记录
+type SessionEntry struct {
+	ContentHash string    `json:"content_hash"` // 内容 hash
+	ProcessedAt time.Time `json:"processed_at"` // 处理时间
+	ItemCount   int       `json:"item_count"`   // 提取的记忆数量
+}
+
+// LoadSessionIndex 加载 session 累引
+func LoadSessionIndex(path string) *SessionIndex {
+	idx := &SessionIndex{
+		filePath: path,
+		Entries:  make(map[string]*SessionEntry),
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return idx
+	}
+
+	if err := json.Unmarshal(data, idx); err != nil {
+		slog.Warn("Failed to parse session index", "error", err)
+	}
+
+	return idx
+}
+
+// Save 保存 session 累引
+func (idx *SessionIndex) Save() error {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+
+	data, err := json.MarshalIndent(idx, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(idx.filePath, data, 0644)
+}
+
+// NeedsProcessing 检查 session 是否需要处理
+func (idx *SessionIndex) NeedsProcessing(sessionPath, contentHash string) bool {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+
+	entry, exists := idx.Entries[sessionPath]
+	if !exists {
+		return true
+	}
+
+	return entry.ContentHash != contentHash
+}
+
+// MarkProcessed 标记 session 已处理
+func (idx *SessionIndex) MarkProcessed(sessionPath, contentHash string, itemCount int) {
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+
+	idx.Entries[sessionPath] = &SessionEntry{
+		ContentHash: contentHash,
+		ProcessedAt: time.Now(),
+		ItemCount:   itemCount,
+	}
+}
+
+// Remove 移除 session 记录
+func (idx *SessionIndex) Remove(sessionPath string) {
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+
+	delete(idx.Entries, sessionPath)
+}
+
+// GetEntry 获取 session 处理记录
+func (idx *SessionIndex) GetEntry(sessionPath string) *SessionEntry {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+
+	return idx.Entries[sessionPath]
 }

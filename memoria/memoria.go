@@ -123,6 +123,10 @@ func (m *Memoria) SetChatModel(model types.ChatModel) {
 		m.config.ProcessorConfig,
 		m.config.GetSessionDir(),
 	)
+	// Set storage for session index tracking
+	if cp, ok := m.chatProcessor.(*processor.ChatProcessor); ok {
+		cp.SetStorage(m.storage)
+	}
 
 	m.fileProcessor = processor.NewFileProcessor(
 		m.summarizer,
