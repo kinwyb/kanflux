@@ -164,13 +164,12 @@ func (m *Manager) RegisterAgentsFromConfig(ctx context.Context, cfg *config.Conf
 				m.log(ctx, bus.LogLevelWarn, "manager", fmt.Sprintf("Failed to create Memoria for agent '%s': %v", name, err))
 			} else {
 				memInstance = mem
-				// 异步初始化（扫描知识库和聊天记录）
+				// 异步启动（InitialScan=true 时会自动扫描知识库和聊天记录）
 				go func() {
 					initCtx := context.Background()
 					if err := memInstance.Start(initCtx); err != nil {
 						slog.Warn("Memoria start failed", "agent", name, "error", err)
 					}
-					memInstance.ScanAndProcess(initCtx)
 				}()
 			}
 		}
@@ -911,7 +910,7 @@ func (m *Manager) createMemoria(ctx context.Context, resolved *config.ResolvedAg
 	memConfig := memoria.DefaultConfig()
 	memConfig.Workspace = resolved.Workspace
 	memConfig.KnowledgePaths = resolved.KnowledgePaths
-	memConfig.InitialScan = true
+	memConfig.InitialScan = true // Start 时自动扫描知识库和聊天记录
 
 	// 设置 Embedding 配置（用于 L3 语义搜索）
 	if resolved.EmbeddingModel != "" {

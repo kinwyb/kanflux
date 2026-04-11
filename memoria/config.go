@@ -162,7 +162,7 @@ func GetDefaultWatchPaths(workspace string) []types.WatchPath {
 
 // GetMemoriaDir returns the memoria storage directory
 func (c *Config) GetMemoriaDir() string {
-	return c.Workspace + "/memoria"
+	return c.Workspace + "/.kanflux/memoria"
 }
 
 // GetL1Dir returns the L1 storage directory
