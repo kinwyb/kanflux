@@ -4,15 +4,14 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/kinwyb/kanflux/agent/rag"
+	"github.com/kinwyb/kanflux/memoria"
 )
 
 // ContextBuilder 上下文构建器
 type ContextBuilder struct {
-	memory     *MemoryStore
-	workspace  string
-	ragManager rag.RAGManagerInterface
-	hasHistory bool
+	memory    *MemoryStore
+	workspace string
+	memoria   *memoria.Memoria
 }
 
 // NewContextBuilder 创建上下文构建器
@@ -29,14 +28,9 @@ func NewContextBuilder(workspace string) (*ContextBuilder, error) {
 	return ret, nil
 }
 
-// SetRAGManager 设置 RAG 管理器
-func (b *ContextBuilder) SetRAGManager(mgr rag.RAGManagerInterface) {
-	b.ragManager = mgr
-}
-
-// SetHasHistory 设置是否有历史对话检索
-func (b *ContextBuilder) SetHasHistory(has bool) {
-	b.hasHistory = has
+// SetMemoria 设置 Memoria 记忆系统
+func (b *ContextBuilder) SetMemoria(mem *memoria.Memoria) {
+	b.memoria = mem
 }
 
 // BuildSystemPrompt 构建系统提示词
@@ -49,20 +43,15 @@ func (b *ContextBuilder) BuildSystemPrompt() string {
 	// 2. Memory 上下文
 	parts = append(parts, b.buildMemory())
 
-	// 3. 知识库上下文
-	if b.ragManager != nil {
-		parts = append(parts, b.buildKnowledge())
+	// 3. Memoria 记忆系统（替代 Knowledge + History）
+	if b.memoria != nil {
+		parts = append(parts, b.buildMemoria())
 	}
 
-	// 4. 历史对话上下文
-	if b.hasHistory {
-		parts = append(parts, b.buildHistory())
-	}
-
-	// 5. 安全提示
+	// 4. 安全提示
 	parts = append(parts, b.buildSafety())
 
-	// 6. 错误处理指导
+	// 5. 错误处理指导
 	parts = append(parts, b.buildErrorHandling())
 
 	return fmt.Sprintf("%s\n\n", joinNonEmpty(parts, "\n\n---\n\n"))
@@ -145,59 +134,50 @@ You have memory_tool to manage memory content.
 	return memory
 }
 
-// buildKnowledge 构建知识库上下文
-func (b *ContextBuilder) buildKnowledge() string {
-	if b.ragManager == nil {
+// buildMemoria 构建 Memoria 记忆系统上下文
+func (b *ContextBuilder) buildMemoria() string {
+	if b.memoria == nil {
 		return ""
 	}
 
-	stats := b.ragManager.GetStats()
-	if stats.TotalDocuments == 0 {
-		return ""
+	stats := b.memoria.GetStats()
+	l1Items := 0
+	l2Items := 0
+	l3Items := 0
+	if v, ok := stats["l1_items"].(int); ok {
+		l1Items = v
+	}
+	if v, ok := stats["l2_items"].(int); ok {
+		l2Items = v
+	}
+	if v, ok := stats["l3_items"].(int); ok {
+		l3Items = v
 	}
 
-	return fmt.Sprintf(`## Knowledge Base
+	return fmt.Sprintf(`## Memory System
 
-You have access to a knowledge base with %d documents and %d text chunks. Use the **knowledge_search** tool to find relevant information.
+You have access to a unified memory system with three layers:
+- **L1** (~%d items): User preferences - always loaded, ~120 tokens total
+- **L2** (~%d items): Facts, events, discoveries - semantic + keyword search
+- **L3** (~%d items): Raw content - full semantic search for deep retrieval
 
-**When to use knowledge_search**:
-- When answering questions about project-specific topics, APIs, or documentation
-- When looking for code examples, patterns, or best practices from indexed files
-- When you need context from documentation, README files, or technical specs
-- When the user asks about something that might be documented in the workspace
-- Before making assumptions about project-specific conventions or configurations
+**Tools available**:
+- **memories**: Search all memory (chat history + knowledge files)
+- **history_query**: Search conversation history only
+- **knowledge_search**: Search knowledge documents only
+- **memory_stats**: Get memory system statistics
 
-**How to use**:
-- Use natural language queries describing what you're looking for
-- Start with broader queries, then refine if needed
-- The tool returns the most relevant text chunks with source paths
+**When to search**:
+- Before answering questions about project-specific topics → use **knowledge_search**
+- When recalling user preferences or past decisions → use **history_query** or **memories**
+- When looking for documentation, code patterns, or technical information → use **knowledge_search**
+- For general queries when source is uncertain → use **memories**
 
-**Example queries**:
-- "How to configure the database connection"
-- "API authentication flow"
-- "Error handling patterns in this project"
-- "Configuration file format"
-
-**Important**: Always search the knowledge base first when the user asks questions that might be answered by project documentation or indexed files, rather than making assumptions or giving generic answers.`, stats.TotalDocuments, stats.TotalChunks)
-}
-
-// buildHistory 构建历史对话上下文
-func (b *ContextBuilder) buildHistory() string {
-	return `## Conversation History
-
-You have access to past conversations. Use the **history_search** tool to find relevant information.
-
-**When to use history_search**:
-- When the user asks about something discussed in previous sessions
-- To recall user preferences, decisions, or information shared before
-- To avoid asking the user to repeat information they've already provided
-- When you need context from past conversations
-
-**How to use**:
-- Use natural language queries describing what you're looking for
-- The tool searches through conversation history with semantic matching
-
-**Important**: Always search history first when the user refers to past discussions or preferences. For important information you want to remember permanently, use memory_tool.`
+**Search strategy**:
+- Start with memories for general queries
+- Use history_query for conversation-specific questions
+- Use knowledge_search for documentation/file content
+- Results include relevance scores (0-1) - higher is more relevant`, l1Items, l2Items, l3Items)
 }
 
 // buildSafety 构建安全提示

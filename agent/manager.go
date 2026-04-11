@@ -4,16 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
+	"log/slog"
 	"reflect"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/kinwyb/kanflux/agent/rag"
 	"github.com/kinwyb/kanflux/agent/tools"
 	"github.com/kinwyb/kanflux/bus"
 	"github.com/kinwyb/kanflux/config"
+	"github.com/kinwyb/kanflux/memoria"
 	"github.com/kinwyb/kanflux/providers"
 	"github.com/kinwyb/kanflux/session"
 
@@ -154,35 +154,24 @@ func (m *Manager) RegisterAgentsFromConfig(ctx context.Context, cfg *config.Conf
 		// 获取默认 skills 目录
 		skillDirs := config.GetDefaultSkillDirs(resolved.Workspace)
 
-		// 创建 RAG Manager（如果配置了知识库路径）- 异步初始化
-		var ragManager rag.RAGManagerInterface
-		if len(resolved.KnowledgePaths) > 0 {
-			m.log(ctx, bus.LogLevelInfo, "manager", fmt.Sprintf("Creating RAG manager for agent '%s'...", name))
+		// 创建 Memoria 统一记忆系统（替代 RAG Manager + History）
+		var memInstance *memoria.Memoria
+		if len(resolved.KnowledgePaths) > 0 || resolved.EmbeddingModel != "" {
+			m.log(ctx, bus.LogLevelInfo, "manager", fmt.Sprintf("Creating Memoria for agent '%s'...", name))
 
-			ragMgr, err := m.createRAGManager(ctx, resolved)
+			mem, err := m.createMemoria(ctx, resolved)
 			if err != nil {
-				m.log(ctx, bus.LogLevelWarn, "manager", fmt.Sprintf("Failed to create RAG manager for agent '%s': %v", name, err))
+				m.log(ctx, bus.LogLevelWarn, "manager", fmt.Sprintf("Failed to create Memoria for agent '%s': %v", name, err))
 			} else {
-				ragManager = ragMgr
-				// 使用 rag 包的异步初始化方法
-				ragMgr.InitializeAsync(func(level, source, message string) {
-					m.log(context.Background(), level, source, fmt.Sprintf("[%s] %s", name, message))
-				})
-			}
-		}
-
-		// 初始化长期记忆（需要 embedder）
-		if resolved.EmbeddingModel != "" {
-			embedder, err := rag.CreateEmbedder(ctx, &rag.EmbedderConfig{
-				Provider:   resolved.EmbeddingProvider,
-				Model:      resolved.EmbeddingModel,
-				APIKey:     resolved.EmbeddingAPIKey,
-				APIBaseURL: resolved.EmbeddingAPIBaseURL,
-			})
-			if err != nil {
-				m.log(ctx, bus.LogLevelWarn, "manager", fmt.Sprintf("Failed to create embedder for long-term memory: %v", err))
-			} else if err := m.sessionMgr.SetEmbedder(embedder); err != nil {
-				m.log(ctx, bus.LogLevelWarn, "manager", fmt.Sprintf("Failed to set embedder for session manager: %v", err))
+				memInstance = mem
+				// 异步初始化（扫描知识库和聊天记录）
+				go func() {
+					initCtx := context.Background()
+					if err := memInstance.Start(initCtx); err != nil {
+						slog.Warn("Memoria start failed", "agent", name, "error", err)
+					}
+					memInstance.ScanAndProcess(initCtx)
+				}()
 			}
 		}
 
@@ -201,7 +190,7 @@ func (m *Manager) RegisterAgentsFromConfig(ctx context.Context, cfg *config.Conf
 			Streaming:     true,
 			Tools:         resolved.Tools,
 			ToolsApproval: resolved.ToolsApproval,
-			RAGManager:    ragManager,
+			Memoria:       memInstance,
 			SessionManager: m.sessionMgr,
 		}
 
@@ -914,59 +903,43 @@ func (m *Manager) GetToolsInfo() (map[string]interface{}, error) {
 	return result, nil
 }
 
-// createRAGManager 创建 RAG Manager（不执行初始化，由调用方异步执行）
-func (m *Manager) createRAGManager(ctx context.Context, resolved *config.ResolvedAgentConfig) (*rag.RAGManager, error) {
-	m.log(ctx, bus.LogLevelInfo, "manager", "[RAG] Creating embedder...")
+// createMemoria 创建 Memoria 统一记忆系统
+func (m *Manager) createMemoria(ctx context.Context, resolved *config.ResolvedAgentConfig) (*memoria.Memoria, error) {
+	m.log(ctx, bus.LogLevelInfo, "manager", "[Memoria] Creating instance...")
 
-	// 创建 Embedder
-	embedder, err := rag.CreateEmbedder(ctx, &rag.EmbedderConfig{
-		Provider:   resolved.EmbeddingProvider,
-		Model:      resolved.EmbeddingModel,
-		APIKey:     resolved.EmbeddingAPIKey,
-		APIBaseURL: resolved.EmbeddingAPIBaseURL,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create embedder: %w", err)
-	}
-	m.log(ctx, bus.LogLevelInfo, "manager", "[RAG] Embedder created successfully")
+	// 创建 Memoria 配置
+	memConfig := memoria.DefaultConfig()
+	memConfig.Workspace = resolved.Workspace
+	memConfig.KnowledgePaths = resolved.KnowledgePaths
+	memConfig.InitialScan = true
 
-	// 转换知识库路径配置
-	var knowledgePaths []rag.KnowledgePath
-	for _, kp := range resolved.KnowledgePaths {
-		// 处理相对路径
-		path := kp.Path
-		if !filepath.IsAbs(path) {
-			path = filepath.Join(resolved.Workspace, path)
+	// 设置 Embedding 配置（用于 L3 语义搜索）
+	if resolved.EmbeddingModel != "" {
+		memConfig.Embedding = &memoria.EmbeddingConfig{
+			Provider:   resolved.EmbeddingProvider,
+			Model:      resolved.EmbeddingModel,
+			APIKey:     resolved.EmbeddingAPIKey,
+			APIBaseURL: resolved.EmbeddingAPIBaseURL,
 		}
-		knowledgePaths = append(knowledgePaths, rag.KnowledgePath{
-			Path:       path,
-			Extensions: kp.Extensions,
-			Recursive:  kp.Recursive,
-			Exclude:    kp.Exclude,
-		})
-	}
-	m.log(ctx, bus.LogLevelInfo, "manager", fmt.Sprintf("[RAG] %d knowledge paths configured", len(knowledgePaths)))
-
-	// 创建 RAG 配置
-	ragConfig := rag.DefaultConfig()
-	ragConfig.Workspace = resolved.Workspace
-	ragConfig.KnowledgePaths = knowledgePaths
-	ragConfig.Embedder = embedder
-
-	if resolved.RAGConfig != nil {
-		ragConfig.ChunkSize = resolved.RAGConfig.ChunkSize
-		ragConfig.ChunkOverlap = resolved.RAGConfig.ChunkOverlap
-		ragConfig.TopK = resolved.RAGConfig.TopK
-		ragConfig.ScoreThreshold = resolved.RAGConfig.ScoreThreshold
-		ragConfig.EnableWatcher = resolved.RAGConfig.EnableWatcher
 	}
 
-	// 创建 RAG Manager
-	ragMgr, err := rag.NewManager(ctx, ragConfig)
+	// 创建 Memoria 实例
+	mem, err := memoria.New(memConfig)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create RAG manager: %w", err)
+		return nil, fmt.Errorf("failed to create Memoria: %w", err)
 	}
 
-	m.log(ctx, bus.LogLevelInfo, "manager", "[RAG] Manager created, initialization will run async")
-	return ragMgr, nil
+	// 设置 ChatModel（用于处理聊天记录和文件内容）
+	if resolved.Model != "" {
+		llm, err := providers.NewOpenAI(ctx, resolved.APIBaseURL, resolved.Model, resolved.APIKey)
+		if err != nil {
+			m.log(ctx, bus.LogLevelWarn, "manager", fmt.Sprintf("[Memoria] Failed to create LLM: %v", err))
+		} else {
+			// 使用适配器将 Eino ChatModel 转换为 memoria ChatModel
+			mem.SetChatModel(memoria.NewEinoChatModelAdapter(llm))
+		}
+	}
+
+	m.log(ctx, bus.LogLevelInfo, "manager", "[Memoria] Instance created successfully")
+	return mem, nil
 }

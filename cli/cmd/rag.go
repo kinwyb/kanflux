@@ -4,12 +4,12 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/kinwyb/kanflux/agent/rag"
-
+	"github.com/kinwyb/kanflux/memoria"
+	"github.com/kinwyb/kanflux/memoria/types"
 	"github.com/spf13/cobra"
 )
 
-// NewRAGCmd 创建RAG检索命令
+// NewRAGCmd 创建知识库检索命令
 func NewRAGCmd() *cobra.Command {
 	var (
 		configPath string
@@ -20,7 +20,7 @@ func NewRAGCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "rag <query>",
 		Short: "检索知识库内容",
-		Long:  `使用向量检索在配置的知识库中搜索相关内容，用于验证RAG功能。`,
+		Long:  `使用向量检索在配置的知识库中搜索相关内容，用于验证知识库功能。`,
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := context.Background()
@@ -54,79 +54,65 @@ func NewRAGCmd() *cobra.Command {
 				return fmt.Errorf("Agent '%s' 未配置知识库路径 (knowledge_paths)", agentName)
 			}
 
-			// 创建 embedder
-			embedder, err := rag.CreateEmbedder(ctx, &rag.EmbedderConfig{
-				Provider:   resolved.EmbeddingProvider,
-				Model:      resolved.EmbeddingModel,
-				APIKey:     resolved.EmbeddingAPIKey,
-				APIBaseURL: resolved.EmbeddingAPIBaseURL,
-			})
+			// 创建 Memoria 配置
+			memConfig := memoria.DefaultConfig()
+			memConfig.Workspace = ws
+			memConfig.KnowledgePaths = resolved.KnowledgePaths
+			memConfig.InitialScan = true
+
+			// 设置 Embedding 配置
+			if resolved.EmbeddingModel != "" {
+				memConfig.Embedding = &memoria.EmbeddingConfig{
+					Provider:   resolved.EmbeddingProvider,
+					Model:      resolved.EmbeddingModel,
+					APIKey:     resolved.EmbeddingAPIKey,
+					APIBaseURL: resolved.EmbeddingAPIBaseURL,
+				}
+			}
+
+			// 创建 Memoria 实例
+			fmt.Println("正在初始化 Memoria...")
+			mem, err := memoria.New(memConfig)
 			if err != nil {
-				return fmt.Errorf("创建Embedder失败: %w", err)
+				return fmt.Errorf("创建 Memoria 失败: %w", err)
 			}
 
-			// 转换知识库路径配置
-			var knowledgePaths []rag.KnowledgePath
-			for _, kp := range resolved.KnowledgePaths {
-				knowledgePaths = append(knowledgePaths, rag.KnowledgePath{
-					Path:       kp.Path,
-					Extensions: kp.Extensions,
-					Recursive:  kp.Recursive,
-					Exclude:    kp.Exclude,
-				})
-			}
-
-			// 创建 RAG 配置
-			ragConfig := rag.DefaultConfig()
-			ragConfig.Workspace = ws
-			ragConfig.KnowledgePaths = knowledgePaths
-			ragConfig.Embedder = embedder
-
-			if resolved.RAGConfig != nil {
-				ragConfig.ChunkSize = resolved.RAGConfig.ChunkSize
-				ragConfig.ChunkOverlap = resolved.RAGConfig.ChunkOverlap
-				ragConfig.TopK = topK
-				ragConfig.ScoreThreshold = resolved.RAGConfig.ScoreThreshold
-			} else {
-				ragConfig.TopK = topK
-			}
-
-			// 创建 RAG Manager
-			ragMgr, err := rag.NewManager(ctx, ragConfig)
-			if err != nil {
-				return fmt.Errorf("创建RAG Manager失败: %w", err)
-			}
-
-			// 初始化（同步，以便立即使用）
-			fmt.Println("正在初始化知识库索引...")
-			if err := ragMgr.Initialize(ctx); err != nil {
-				return fmt.Errorf("初始化RAG失败: %w", err)
+			// 启动并扫描知识库
+			if err := mem.Start(ctx); err != nil {
+				return fmt.Errorf("启动 Memoria 失败: %w", err)
 			}
 
 			// 显示统计信息
-			stats := ragMgr.GetStats()
-			fmt.Printf("知识库: %d 文档, %d 文本块\n\n", stats.TotalDocuments, stats.TotalChunks)
+			stats := mem.GetStats()
+			fmt.Printf("知识库: L2=%v 条, L3=%v 条\n\n", stats["l2_items"], stats["l3_items"])
 
-			// 执行检索
+			// 执行检索（只搜索文件来源）
 			fmt.Printf("查询: %s\n\n", query)
-			results, err := ragMgr.Retrieve(ctx, query)
+			opts := &types.RetrieveOptions{
+				SourceType: types.SourceTypeFile,
+				Limit:      topK,
+			}
+			results, err := mem.Search(ctx, query, opts)
 			if err != nil {
 				return fmt.Errorf("检索失败: %w", err)
 			}
 
 			if len(results) == 0 {
 				fmt.Println("未找到相关内容")
-				return nil
+			} else {
+				// 输出结果
+				fmt.Printf("找到 %d 条相关记录:\n\n", len(results))
+				for i, r := range results {
+					fmt.Printf("--- [%d] Score: %.2f ---\n", i+1, r.Score)
+					fmt.Printf("来源: %s\n", r.Item.Source)
+					if r.Item.Summary != "" {
+						fmt.Printf("摘要: %s\n", r.Item.Summary)
+					}
+					fmt.Println()
+				}
 			}
 
-			// 输出结果
-			fmt.Printf("找到 %d 条相关记录:\n\n", len(results))
-			for i, r := range results {
-				fmt.Printf("--- [%d] Score: %.4f ---\n", i+1, r.Score)
-				fmt.Printf("来源: %s\n", r.SourcePath)
-				fmt.Printf("内容:\n%s\n\n", r.Content)
-			}
-
+			mem.Close()
 			return nil
 		},
 	}

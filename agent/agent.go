@@ -11,9 +11,9 @@ import (
 	"sync"
 
 	"github.com/cloudwego/eino/adk/middlewares/filesystem"
-	"github.com/kinwyb/kanflux/agent/rag"
 	"github.com/kinwyb/kanflux/agent/tools"
 	"github.com/kinwyb/kanflux/config"
+	"github.com/kinwyb/kanflux/memoria"
 	"github.com/kinwyb/kanflux/session"
 
 	localbk "github.com/cloudwego/eino-ext/adk/backend/local"
@@ -60,10 +60,10 @@ type Config struct {
 	Streaming     bool
 	Tools         []string // 允许使用的工具列表，空表示所有工具可用
 	ToolsApproval []string // 需要审批的工具列表
-	// RAG 配置
-	RAGManager rag.RAGManagerInterface // RAG 管理器接口
+	// Memoria 统一记忆系统（替代 RAGManager）
+	Memoria *memoria.Memoria // 统一记忆系统：L1/L2/L3 三层架构
 	// Session 配置
-	SessionManager *session.Manager // Session 管理器（用于长期记忆）
+	SessionManager *session.Manager // Session 管理器
 }
 
 // applyToolConfig 应用工具配置到 Registry
@@ -116,21 +116,20 @@ func NewChatModelAgent(ctx context.Context, cfg *Config) (*Agent, error) {
 	if err != nil {
 		return nil, fmt.Errorf("上下文初始化失败: %w", err)
 	}
-	if cfg.RAGManager != nil {
-		prompt.SetRAGManager(cfg.RAGManager)
-	}
-	// 设置长期记忆可用标志
-	if cfg.SessionManager != nil && cfg.SessionManager.GetHistory() != nil {
-		prompt.SetHasHistory(true)
+	if cfg.Memoria != nil {
+		prompt.SetMemoria(cfg.Memoria)
 	}
 	if cfg.ToolRegister == nil {
 		cfg.ToolRegister = tools.NewRegistry()
 	}
 	cfg.ToolRegister.Register(tools.NewMemoryTool(prompt.memory))
 
-	// 注册历史对话检索工具
-	if cfg.SessionManager != nil && cfg.SessionManager.GetHistory() != nil {
-		cfg.ToolRegister.Register(session.NewHistorySearchTool(cfg.SessionManager.GetHistory()))
+	// 注册 Memoria 工具（替代 RAG 和 History 工具）
+	if cfg.Memoria != nil {
+		cfg.ToolRegister.Register(memoria.NewMemoriesTool(cfg.Memoria))
+		cfg.ToolRegister.Register(memoria.NewHistoryTool(cfg.Memoria))
+		cfg.ToolRegister.Register(memoria.NewRAGTool(cfg.Memoria))
+		cfg.ToolRegister.Register(memoria.NewStatsTool(cfg.Memoria))
 	}
 
 	// 应用工具配置
@@ -194,28 +193,20 @@ func NewDeepAgent(ctx context.Context, cfg *Config) (*Agent, error) {
 	if err != nil {
 		return nil, fmt.Errorf("上下文初始化失败: %w", err)
 	}
-	if cfg.RAGManager != nil {
-		prompt.SetRAGManager(cfg.RAGManager)
-	}
-	// 设置长期记忆可用标志
-	if cfg.SessionManager != nil && cfg.SessionManager.GetHistory() != nil {
-		prompt.SetHasHistory(true)
+	if cfg.Memoria != nil {
+		prompt.SetMemoria(cfg.Memoria)
 	}
 	if cfg.ToolRegister == nil {
 		cfg.ToolRegister = tools.NewRegistry()
 	}
 	cfg.ToolRegister.Register(tools.NewMemoryTool(prompt.memory))
 
-	// 注册 RAG 知识检索工具
-	if cfg.RAGManager != nil {
-		if kt := cfg.RAGManager.GetKnowledgeTool(); kt != nil {
-			cfg.ToolRegister.Register(kt)
-		}
-	}
-
-	// 注册历史对话检索工具
-	if cfg.SessionManager != nil && cfg.SessionManager.GetHistory() != nil {
-		cfg.ToolRegister.Register(session.NewHistorySearchTool(cfg.SessionManager.GetHistory()))
+	// 注册 Memoria 工具（替代 RAG 和 History 工具）
+	if cfg.Memoria != nil {
+		cfg.ToolRegister.Register(memoria.NewMemoriesTool(cfg.Memoria))
+		cfg.ToolRegister.Register(memoria.NewHistoryTool(cfg.Memoria))
+		cfg.ToolRegister.Register(memoria.NewRAGTool(cfg.Memoria))
+		cfg.ToolRegister.Register(memoria.NewStatsTool(cfg.Memoria))
 	}
 
 	// 应用工具配置
@@ -309,21 +300,20 @@ func NewPlanExecuteAgent(ctx context.Context, cfg *Config) (*Agent, error) {
 	if err != nil {
 		return nil, fmt.Errorf("上下文初始化失败: %w", err)
 	}
-	if cfg.RAGManager != nil {
-		prompt.SetRAGManager(cfg.RAGManager)
-	}
-	// 设置长期记忆可用标志
-	if cfg.SessionManager != nil && cfg.SessionManager.GetHistory() != nil {
-		prompt.SetHasHistory(true)
+	if cfg.Memoria != nil {
+		prompt.SetMemoria(cfg.Memoria)
 	}
 	if cfg.ToolRegister == nil {
 		cfg.ToolRegister = tools.NewRegistry()
 	}
 	cfg.ToolRegister.Register(tools.NewMemoryTool(prompt.memory))
 
-	// 注册历史对话检索工具
-	if cfg.SessionManager != nil && cfg.SessionManager.GetHistory() != nil {
-		cfg.ToolRegister.Register(session.NewHistorySearchTool(cfg.SessionManager.GetHistory()))
+	// 注册 Memoria 工具（替代 RAG 和 History 工具）
+	if cfg.Memoria != nil {
+		cfg.ToolRegister.Register(memoria.NewMemoriesTool(cfg.Memoria))
+		cfg.ToolRegister.Register(memoria.NewHistoryTool(cfg.Memoria))
+		cfg.ToolRegister.Register(memoria.NewRAGTool(cfg.Memoria))
+		cfg.ToolRegister.Register(memoria.NewStatsTool(cfg.Memoria))
 	}
 
 	// 应用工具配置
@@ -404,21 +394,20 @@ func NewSupervisorAgent(ctx context.Context, cfg *Config) (*Agent, error) {
 	if err != nil {
 		return nil, fmt.Errorf("上下文初始化失败: %w", err)
 	}
-	if cfg.RAGManager != nil {
-		prompt.SetRAGManager(cfg.RAGManager)
-	}
-	// 设置长期记忆可用标志
-	if cfg.SessionManager != nil && cfg.SessionManager.GetHistory() != nil {
-		prompt.SetHasHistory(true)
+	if cfg.Memoria != nil {
+		prompt.SetMemoria(cfg.Memoria)
 	}
 	if cfg.ToolRegister == nil {
 		cfg.ToolRegister = tools.NewRegistry()
 	}
 	cfg.ToolRegister.Register(tools.NewMemoryTool(prompt.memory))
 
-	// 注册历史对话检索工具
-	if cfg.SessionManager != nil && cfg.SessionManager.GetHistory() != nil {
-		cfg.ToolRegister.Register(session.NewHistorySearchTool(cfg.SessionManager.GetHistory()))
+	// 注册 Memoria 工具（替代 RAG 和 History 工具）
+	if cfg.Memoria != nil {
+		cfg.ToolRegister.Register(memoria.NewMemoriesTool(cfg.Memoria))
+		cfg.ToolRegister.Register(memoria.NewHistoryTool(cfg.Memoria))
+		cfg.ToolRegister.Register(memoria.NewRAGTool(cfg.Memoria))
+		cfg.ToolRegister.Register(memoria.NewStatsTool(cfg.Memoria))
 	}
 
 	// 应用工具配置

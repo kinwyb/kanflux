@@ -4,9 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/kinwyb/kanflux/agent/rag"
-	"github.com/kinwyb/kanflux/session"
-
+	"github.com/kinwyb/kanflux/memoria"
+	"github.com/kinwyb/kanflux/memoria/types"
 	"github.com/spf13/cobra"
 )
 
@@ -50,54 +49,60 @@ func NewHistoryCmd() *cobra.Command {
 				ws = workspace
 			}
 
-			// 检查是否配置了 embedding
-			if resolved.EmbeddingModel == "" {
-				return fmt.Errorf("Agent '%s' 未配置 embedding_model", agentName)
+			// 创建 Memoria 配置
+			memConfig := memoria.DefaultConfig()
+			memConfig.Workspace = ws
+			memConfig.KnowledgePaths = resolved.KnowledgePaths
+
+			// 设置 Embedding 配置
+			if resolved.EmbeddingModel != "" {
+				memConfig.Embedding = &memoria.EmbeddingConfig{
+					Provider:   resolved.EmbeddingProvider,
+					Model:      resolved.EmbeddingModel,
+					APIKey:     resolved.EmbeddingAPIKey,
+					APIBaseURL: resolved.EmbeddingAPIBaseURL,
+				}
 			}
 
-			// 创建 embedder
-			embedder, err := rag.CreateEmbedder(ctx, &rag.EmbedderConfig{
-				Provider:   resolved.EmbeddingProvider,
-				Model:      resolved.EmbeddingModel,
-				APIKey:     resolved.EmbeddingAPIKey,
-				APIBaseURL: resolved.EmbeddingAPIBaseURL,
-			})
+			// 创建 Memoria 实例
+			fmt.Println("正在初始化 Memoria...")
+			mem, err := memoria.New(memConfig)
 			if err != nil {
-				return fmt.Errorf("创建Embedder失败: %w", err)
+				return fmt.Errorf("创建 Memoria 失败: %w", err)
 			}
 
-			// 创建 session manager
-			sessionMgr, err := session.NewManager(ws)
-			if err != nil {
-				return fmt.Errorf("创建Session Manager失败: %w", err)
-			}
-
-			// 设置 embedder 并同步初始化历史记录
-			fmt.Println("正在初始化历史记录索引...")
-			if err := sessionMgr.SetEmbedderSync(ctx, embedder); err != nil {
-				return fmt.Errorf("初始化历史记录失败: %w", err)
-			}
-
-			// 获取历史记录管理器
-			history := sessionMgr.GetHistory()
-			if history == nil {
-				return fmt.Errorf("历史记录管理器未初始化")
+			// 初始化并扫描
+			if err := mem.Start(ctx); err != nil {
+				return fmt.Errorf("启动 Memoria 失败: %w", err)
 			}
 
 			// 显示统计信息
-			stats := history.GetStats()
-			fmt.Printf("历史记录: %d 索引块, %d 天数据\n\n", stats["indexed_chunks"], stats["days_with_data"])
+			stats := mem.GetStats()
+			fmt.Printf("记忆系统: L1=%v, L2=%v, L3=%v\n\n", stats["l1_items"], stats["l2_items"], stats["l3_items"])
 
-			// 执行检索
+			// 执行检索（只搜索聊天历史）
 			fmt.Printf("查询: %s\n\n", query)
-			result, err := history.Search(ctx, query, topK)
+			opts := &types.RetrieveOptions{
+				SourceType: types.SourceTypeChat,
+				Limit:      topK,
+			}
+			results, err := mem.Search(ctx, query, opts)
 			if err != nil {
 				return fmt.Errorf("检索失败: %w", err)
 			}
 
 			// 输出结果
-			fmt.Println(result)
+			if len(results) == 0 {
+				fmt.Println("未找到相关历史记录")
+			} else {
+				fmt.Printf("找到 %d 条相关记录:\n\n", len(results))
+				for i, r := range results {
+					fmt.Printf("**[%d]** (Score: %.2f, Layer: L%d)\n", i+1, r.Score, r.Layer)
+					fmt.Printf("%s\n\n", r.Item.Summary)
+				}
+			}
 
+			mem.Close()
 			return nil
 		},
 	}

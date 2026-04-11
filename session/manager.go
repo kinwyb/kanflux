@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,7 +11,8 @@ import (
 	"time"
 
 	"github.com/cloudwego/eino/adk"
-	"github.com/cloudwego/eino/components/embedding"
+	"github.com/kinwyb/kanflux/memoria"
+	"github.com/kinwyb/kanflux/memoria/types"
 )
 
 // Manager 会话管理器
@@ -18,8 +20,7 @@ type Manager struct {
 	sessions  map[string]*Session
 	mu        sync.RWMutex
 	baseDir   string
-	history   *ConversationHistory
-	embedder  embedding.Embedder
+	memoria   *memoria.Memoria // 替代 ConversationHistory
 }
 
 // NewManager 创建会话管理器
@@ -35,36 +36,14 @@ func NewManager(baseDir string) (*Manager, error) {
 	}, nil
 }
 
-// SetEmbedder 设置 embedder，用于历史对话检索（异步初始化）
-func (m *Manager) SetEmbedder(embedder embedding.Embedder) error {
-	m.embedder = embedder
-	// 初始化历史对话管理器，使用 sessions 目录
-	history, err := NewConversationHistory(m.baseDir, embedder)
-	if err != nil {
-		return err
-	}
-	m.history = history
-	// 异步处理已有的 session 文件
-	history.InitializeAsync()
-	return nil
+// SetMemoria 设置 Memoria（替代 SetEmbedder）
+func (m *Manager) SetMemoria(mem *memoria.Memoria) {
+	m.memoria = mem
 }
 
-// SetEmbedderSync 设置 embedder 并同步初始化历史记录
-func (m *Manager) SetEmbedderSync(ctx context.Context, embedder embedding.Embedder) error {
-	m.embedder = embedder
-	// 初始化历史对话管理器，使用 sessions 目录
-	history, err := NewConversationHistory(m.baseDir, embedder)
-	if err != nil {
-		return err
-	}
-	m.history = history
-	// 同步处理已有的 session 文件
-	return history.Initialize(ctx)
-}
-
-// GetHistory 获取历史对话管理器
-func (m *Manager) GetHistory() *ConversationHistory {
-	return m.history
+// GetMemoria 获取 Memoria 实例
+func (m *Manager) GetMemoria() *memoria.Memoria {
+	return m.memoria
 }
 
 // GetOrCreate 获取或创建会话
@@ -143,19 +122,15 @@ func (m *Manager) SaveWithContext(ctx context.Context, session *Session) error {
 		return err
 	}
 
-	// 异步处理历史对话（不阻塞保存）
-	if m.history != nil {
+	// 异步处理聊天历史到 Memoria（不阻塞保存）
+	if m.memoria != nil {
 		go func() {
-			// 创建 session 副本用于处理
-			sessionCopy := &Session{
-				Key:       session.Key,
-				Messages:  make([]adk.Message, len(session.Messages)),
-				CreatedAt: session.CreatedAt,
-				UpdatedAt: session.UpdatedAt,
-			}
-			copy(sessionCopy.Messages, session.Messages)
+			// 格式化聊天内容
+			content := formatSessionContent(session)
+			userCtx := &types.DefaultUserIdentity{UserID: "default"}
 
-			if err := m.history.ProcessSession(ctx, sessionCopy); err != nil {
+			// 调用 Memoria 处理聊天记录
+			if _, err := m.memoria.ProcessChat(ctx, session.Key, content, userCtx); err != nil {
 				// 静默失败，不影响主流程
 			}
 		}()
@@ -268,4 +243,32 @@ func (m *Manager) sessionPath(key string) string {
 	}, key)
 
 	return filepath.Join(m.baseDir, safeKey+".jsonl")
+}
+
+// formatSessionContent 格式化会话内容为字符串
+func formatSessionContent(session *Session) string {
+	var content strings.Builder
+	for _, msg := range session.Messages {
+		switch msg.Role {
+		case "user":
+			content.WriteString(fmt.Sprintf("Q: %s\n\n", extractMessageText(msg)))
+		case "assistant":
+			content.WriteString(fmt.Sprintf("A: %s\n\n", extractMessageText(msg)))
+		}
+	}
+	return content.String()
+}
+
+// extractMessageText 从消息中提取文本内容
+func extractMessageText(msg adk.Message) string {
+	if msg.Content != "" {
+		return msg.Content
+	}
+	var texts []string
+	for _, part := range msg.MultiContent {
+		if part.Type == "text" && part.Text != "" {
+			texts = append(texts, part.Text)
+		}
+	}
+	return strings.Join(texts, "\n")
 }
