@@ -64,18 +64,26 @@ func (p *FileProcessor) Process(ctx context.Context, source string, content stri
 
 	summarizer := llm.NewSummarizer(p.Summarizer.(*llm.SummarizerImpl).Model, 500)
 
+	// L3: Store the COMPLETE original file content (not chunked)
+	// This is stored once per file, not per chunk
+	l3Item := summarizer.ProcessFileContentRaw(ctx, content, source, userCtx)
+	if l3Item != nil {
+		result.Items = append(result.Items, l3Item)
+		result.LayerCounts[types.LayerL3]++
+	}
+
+	// L2: Generate summaries for each chunk
 	for _, chunk := range chunks {
-		// 1. Generate L2 summary using simplified file prompt
+		// Generate L2 summary using simplified file prompt
 		items, err := summarizer.ProcessFileContent(ctx, chunk, source, userCtx)
 		if err != nil {
-			// Fallback: create simple L2 item (files use hall_discoveries for L2)
 			items = []*types.MemoryItem{{
 				ID:         fmt.Sprintf("mem_%d", time.Now().UnixNano()),
 				HallType:   types.HallDiscoveries, // Files use discoveries for L2
 				Layer:      types.LayerL2,
 				SourceType: types.SourceTypeFile,
-				Content:    chunk,
-				Summary:    chunk[:min(200, len(chunk))] + "...",
+				Content:    "", // L2 only needs summary, not raw content
+				Summary:    chunk,
 				Source:     source,
 				UserID:     userCtx.GetUserID(),
 				Timestamp:  time.Now(),
@@ -88,14 +96,6 @@ func (p *FileProcessor) Process(ctx context.Context, source string, content stri
 			result.Items = append(result.Items, item)
 			result.LayerCounts[item.Layer]++
 			result.HallCounts[item.HallType]++
-		}
-
-		// 2. Create L3 item for raw content (semantic search)
-		// Only if embedder is available (L3 requires vector storage)
-		l3Item := summarizer.ProcessFileContentRaw(ctx, chunk, source, userCtx)
-		if l3Item != nil {
-			result.Items = append(result.Items, l3Item)
-			result.LayerCounts[types.LayerL3]++
 		}
 	}
 

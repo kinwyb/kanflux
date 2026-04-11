@@ -71,10 +71,8 @@ func (s *MDStore) ensureDirs() error {
 		s.baseDir + "/l2/discoveries",
 		s.baseDir + "/l3",
 		s.baseDir + "/files",
-		s.baseDir + "/files/facts",
-		s.baseDir + "/files/preferences",
-		s.baseDir + "/files/events",
-		s.baseDir + "/files/discoveries",
+		s.baseDir + "/files/discoveries", // Files only use discoveries for L2
+		s.baseDir + "/files/l3",          // Files L3 raw content storage
 		s.baseDir + "/metadata",
 	}
 	for _, dir := range dirs {
@@ -120,6 +118,24 @@ func (s *MDStore) loadCache() error {
 			}
 			s.fileCache[file] = items
 			slog.Debug("Loaded L2 cache", "file", file, "items", len(items))
+		}
+	}
+
+	// Load file sources: files/discoveries (L2) and files/l3 (L3)
+	fileDirs := []string{s.baseDir + "/files/discoveries", s.baseDir + "/files/l3"}
+	for _, dir := range fileDirs {
+		files, err := filepath.Glob(dir + "/*.md")
+		if err != nil {
+			continue
+		}
+		for _, file := range files {
+			items, err := s.parseMDFile(file)
+			if err != nil {
+				slog.Warn("Failed to parse file", "file", file, "error", err)
+				continue
+			}
+			s.fileCache[file] = items
+			slog.Debug("Loaded files cache", "file", file, "items", len(items))
 		}
 	}
 
@@ -218,28 +234,22 @@ func (s *MDStore) getFilePath(key itemKey) string {
 	// 判断来源：聊天记录按时间，文件按源路径
 	if key.sourceType == "file" && key.sourcePath != "" {
 		// 文件来源：使用文件路径 hash 作为存储路径
+		// Files: L2 -> files/discoveries, L3 -> files/l3
+		// Files don't have L1 storage (no user preferences in files)
 		fileHash := HashFilePath(key.sourcePath)
 		switch key.layer {
 		case types.LayerL1:
-			switch key.hallType {
-			case types.HallFacts:
-				return s.baseDir + "/files/facts/" + fileHash + ".md"
-			case types.HallPreferences:
-				return s.baseDir + "/files/preferences/" + fileHash + ".md"
-			default:
-				return s.baseDir + "/files/facts/" + fileHash + ".md"
-			}
+			// Files should NOT have L1 storage - log warning and redirect to L2
+			slog.Warn("File source should not have L1 storage, redirecting to L2", "source", key.sourcePath)
+			return s.baseDir + "/files/discoveries/" + fileHash + ".md"
 		case types.LayerL2:
-			switch key.hallType {
-			case types.HallEvents:
-				return s.baseDir + "/files/events/" + fileHash + ".md"
-			case types.HallDiscoveries:
-				return s.baseDir + "/files/discoveries/" + fileHash + ".md"
-			default:
-				return s.baseDir + "/files/events/" + fileHash + ".md"
-			}
+			// Files L2 always uses discoveries (knowledge found in files)
+			return s.baseDir + "/files/discoveries/" + fileHash + ".md"
+		case types.LayerL3:
+			// Files L3 stores raw content for semantic search
+			return s.baseDir + "/files/l3/" + fileHash + ".md"
 		default:
-			return s.baseDir + "/files/" + fileHash + ".md"
+			return s.baseDir + "/files/discoveries/" + fileHash + ".md"
 		}
 	}
 
@@ -450,8 +460,13 @@ func (s *MDStore) detectLayerFromPath(filePath string) types.Layer {
 		return types.LayerL3
 	}
 	if strings.Contains(filePath, "/files/") || strings.Contains(filePath, "\\files\\") {
-		// Files directory, need to check sub-path
-		// Files are stored in L2 for summary, L3 for raw content
+		// Files directory structure:
+		// - files/discoveries -> L2 (summary)
+		// - files/l3 -> L3 (raw content)
+		if strings.Contains(filePath, "/files/l3/") || strings.Contains(filePath, "\\files\\l3\\") {
+			return types.LayerL3
+		}
+		// Default files storage is L2 (discoveries)
 		return types.LayerL2
 	}
 	return types.LayerL1
@@ -702,13 +717,20 @@ func (s *MDStore) DeleteFileMemories(filePath string) error {
 	fileHash := HashFilePath(filePath)
 
 	// 删除文件来源的记忆文件
+	// Files only have L2 (discoveries) and L3 (raw content)
 	patterns := []string{
+		s.baseDir + "/files/discoveries/" + fileHash + ".md",
+		s.baseDir + "/files/l3/" + fileHash + ".md",
+		s.baseDir + "/files/" + fileHash + ".md", // legacy path
+	}
+
+	// Also clean up old incorrect paths (migration support)
+	legacyPatterns := []string{
 		s.baseDir + "/files/facts/" + fileHash + ".md",
 		s.baseDir + "/files/preferences/" + fileHash + ".md",
 		s.baseDir + "/files/events/" + fileHash + ".md",
-		s.baseDir + "/files/discoveries/" + fileHash + ".md",
-		s.baseDir + "/files/" + fileHash + ".md",
 	}
+	patterns = append(patterns, legacyPatterns...)
 
 	for _, pattern := range patterns {
 		if fileExists(pattern) {
