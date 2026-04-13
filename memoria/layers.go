@@ -63,16 +63,7 @@ func (l *L1FactsLayer) Add(ctx context.Context, item *types.MemoryItem) error {
 		return fmt.Errorf("invalid hall type for L1: expected preferences, got %s (facts should go to L2)", item.HallType)
 	}
 
-	l.mu.RLock()
-	totalTokens := l.getTotalTokens()
-	l.mu.RUnlock()
-
-	if totalTokens+item.Tokens > l.maxTokens {
-		if err := l.Compact(ctx); err != nil {
-			return fmt.Errorf("failed to compact L1: %w", err)
-		}
-	}
-
+	// First, store and add the new item to cache
 	if err := l.storage.Store(ctx, item); err != nil {
 		return err
 	}
@@ -80,6 +71,23 @@ func (l *L1FactsLayer) Add(ctx context.Context, item *types.MemoryItem) error {
 	l.mu.Lock()
 	l.cache = append(l.cache, item)
 	l.mu.Unlock()
+
+	// Check if this user now has more than 1 L1 item, trigger compact to merge all
+	l.mu.RLock()
+	userItemCount := 0
+	for _, existing := range l.cache {
+		if existing.UserID == item.UserID {
+			userItemCount++
+		}
+	}
+	l.mu.RUnlock()
+
+	// If user has more than 1 L1 item, compact them all (including the new one)
+	if userItemCount > 1 {
+		if err := l.Compact(ctx, item.UserID); err != nil {
+			return fmt.Errorf("failed to compact L1 for user %s: %w", item.UserID, err)
+		}
+	}
 
 	return nil
 }
@@ -115,36 +123,36 @@ func (l *L1FactsLayer) GetForUser(userID string) []*types.MemoryItem {
 	return result
 }
 
-// Compact consolidates memories when approaching token limit
+// Compact consolidates memories for a specific user
 // Uses CompactPrompt if summarizer is available, otherwise removes oldest items
-func (l *L1FactsLayer) Compact(ctx context.Context) error {
+func (l *L1FactsLayer) Compact(ctx context.Context, userID string) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	if len(l.cache) <= 2 {
-		return nil
-	}
-
-	// If summarizer is available, use LLM-based compaction
 	if l.summarizer != nil {
-		return l.compactWithLLM(ctx)
+		return l.compactWithLLM(ctx, userID)
 	}
 
-	// Fallback: simple removal of oldest items
-	return l.compactSimple(ctx)
+	return l.compactSimple(ctx, userID)
 }
 
-// compactWithLLM uses CompactPrompt for intelligent compaction
-func (l *L1FactsLayer) compactWithLLM(ctx context.Context) error {
-	// Collect items to compact (the oldest half)
-	itemsToCompact := l.cache[:len(l.cache)/2]
-	if len(itemsToCompact) == 0 {
-		return nil
+// compactWithLLM uses CompactPrompt to merge all user's L1 items into one summary
+func (l *L1FactsLayer) compactWithLLM(ctx context.Context, userID string) error {
+	// Collect all items for this user
+	userItems := make([]*types.MemoryItem, 0)
+	for _, item := range l.cache {
+		if item.UserID == userID {
+			userItems = append(userItems, item)
+		}
 	}
 
-	// Extract summaries
-	summaries := make([]string, len(itemsToCompact))
-	for i, item := range itemsToCompact {
+	if len(userItems) <= 1 {
+		return nil // Already just one item, no need to compact
+	}
+
+	// Extract all summaries for this user
+	summaries := make([]string, len(userItems))
+	for i, item := range userItems {
 		if item.Summary != "" {
 			summaries[i] = item.Summary
 		} else {
@@ -152,64 +160,90 @@ func (l *L1FactsLayer) compactWithLLM(ctx context.Context) error {
 		}
 	}
 
-	// Use CompactPrompt via summarizer
+	// Use CompactPrompt via summarizer to merge into one summary
 	if impl, ok := l.summarizer.(*llm.SummarizerImpl); ok {
-		compacted, err := impl.CompactMemories(ctx, summaries, l.maxTokens/2)
+		compacted, err := impl.CompactMemories(ctx, summaries, l.maxTokens)
 		if err != nil {
 			slog.Warn("LLM compaction failed, falling back to simple", "error", err)
-			return l.compactSimple(ctx)
+			return l.compactSimple(ctx, userID)
 		}
 
-		// Remove old items
-		for _, item := range itemsToCompact {
+		// Only take the first (merged) summary
+		mergedSummary := compacted[0]
+
+		// Remove all old items for this user
+		for _, item := range userItems {
 			l.storage.Delete(ctx, item.ID)
 		}
 
-		// Create new compacted items
-		for _, summary := range compacted {
-			newItem := &types.MemoryItem{
-				ID:        generateID(),
-				HallType:  types.HallFacts,
-				Layer:     types.LayerL1,
-				Content:   summary,
-				Summary:   summary,
-				Source:    "compacted",
-				Timestamp: time.Now(),
-				Tokens:    len(summary) / 4,
-			}
-			l.storage.Store(ctx, newItem)
-			l.cache = append(l.cache, newItem)
+		// Create one new merged item
+		newItem := &types.MemoryItem{
+			ID:        generateID(),
+			HallType:  types.HallPreferences,
+			Layer:     types.LayerL1,
+			Content:   mergedSummary,
+			Summary:   mergedSummary,
+			Source:    "compacted",
+			UserID:    userID,
+			Timestamp: time.Now(),
+			Tokens:    len(mergedSummary) / 4,
 		}
+		l.storage.Store(ctx, newItem)
 
-		// Remove compacted items from cache
-		l.cache = l.cache[len(itemsToCompact):]
+		// Update cache: remove old user items, add new merged one
+		newCache := make([]*types.MemoryItem, 0)
+		for _, item := range l.cache {
+			if item.UserID != userID {
+				newCache = append(newCache, item)
+			}
+		}
+		l.cache = append(newCache, newItem)
 
-		slog.Info("L1 compaction complete",
-			"removed", len(itemsToCompact),
-			"added", len(compacted))
+		slog.Info("L1 compaction complete for user",
+			"user_id", userID,
+			"removed", len(userItems),
+			"merged_into", 1)
 	}
 
 	return nil
 }
 
-// compactSimple removes oldest items to stay under limit
-func (l *L1FactsLayer) compactSimple(ctx context.Context) error {
-	targetTokens := l.maxTokens - 20
-	currentTokens := l.getTotalTokens()
-
-	itemsToRemove := make([]*types.MemoryItem, 0)
-	for i := 0; i < len(l.cache) && currentTokens > targetTokens; i++ {
-		itemsToRemove = append(itemsToRemove, l.cache[i])
-		currentTokens -= l.cache[i].Tokens
+// compactSimple removes oldest items for a user to stay under limit
+func (l *L1FactsLayer) compactSimple(ctx context.Context, userID string) error {
+	// Collect all items for this user
+	userItems := make([]*types.MemoryItem, 0)
+	for _, item := range l.cache {
+		if item.UserID == userID {
+			userItems = append(userItems, item)
+		}
 	}
 
-	for _, item := range itemsToRemove {
-		l.storage.Delete(ctx, item.ID)
+	if len(userItems) <= 1 {
+		return nil // Already just one item
 	}
 
-	if len(itemsToRemove) > 0 {
-		l.cache = l.cache[len(itemsToRemove):]
+	// Remove oldest items, keep only the most recent one
+	for i := 0; i < len(userItems)-1; i++ {
+		l.storage.Delete(ctx, userItems[i].ID)
 	}
+
+	// Update cache: keep only the last (most recent) item for this user
+	newCache := make([]*types.MemoryItem, 0)
+	for _, item := range l.cache {
+		if item.UserID != userID {
+			newCache = append(newCache, item)
+		}
+	}
+	// Add the last (most recent) user item
+	if len(userItems) > 0 {
+		newCache = append(newCache, userItems[len(userItems)-1])
+	}
+	l.cache = newCache
+
+	slog.Info("L1 simple compaction complete for user",
+		"user_id", userID,
+		"removed", len(userItems)-1,
+		"kept", 1)
 
 	return nil
 }

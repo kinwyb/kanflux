@@ -532,6 +532,17 @@ func (m *Memoria) GetL1Facts(userID string) []*types.MemoryItem {
 	return m.l1.GetForUser(userID)
 }
 
+// GetL1Summary returns the merged L1 summary for a user as a single string
+// After compact, each user should have only one L1 item
+func (m *Memoria) GetL1Summary(userID string) string {
+	items := m.l1.GetForUser(userID)
+	if len(items) == 0 {
+		return ""
+	}
+	// Return the summary (compact guarantees only one item per user)
+	return items[0].Summary
+}
+
 // GetL1All returns all L1 memories
 func (m *Memoria) GetL1All() []*types.MemoryItem {
 	return m.l1.GetAll()
