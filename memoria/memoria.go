@@ -532,14 +532,19 @@ func (m *Memoria) GetL1Facts(userID string) []*types.MemoryItem {
 	return m.l1.GetForUser(userID)
 }
 
-// GetL1Summary returns the merged L1 summary for a user as a single string
-// After compact, each user should have only one L1 item
+// GetL1Summary returns the raw L1 preferences file content for a user
+// Returns the complete file including "# User Preferences" header
 func (m *Memoria) GetL1Summary(userID string) string {
+	// Try to get raw file content from MDStore
+	if mdStore, ok := m.storage.(*storage.MDStore); ok {
+		return mdStore.GetL1FileContent(userID)
+	}
+
+	// Fallback: return summary from items if not MDStore
 	items := m.l1.GetForUser(userID)
 	if len(items) == 0 {
 		return ""
 	}
-	// Return the summary (compact guarantees only one item per user)
 	return items[0].Summary
 }
 

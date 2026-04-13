@@ -41,9 +41,6 @@ func (b *ContextBuilder) BuildSystemPrompt() string {
 	// 4. 错误处理指导
 	parts = append(parts, b.buildErrorHandling())
 
-	// 5. 用户习惯
-	parts = append(parts, "{user_preferences}")
-
 	return fmt.Sprintf("%s\n\n", joinNonEmpty(parts, "\n\n---\n\n"))
 }
 
@@ -64,6 +61,8 @@ func (b *ContextBuilder) buildIdentity() string {
 **Workspace**: %s
 
 IMPORTANT: When using filesystem tools (ls, read_file, glob, grep, etc.), you MUST use absolute paths.
+
+{user_preferences}
 
 %s
 `, identity,

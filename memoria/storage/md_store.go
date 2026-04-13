@@ -700,6 +700,24 @@ func (s *MDStore) Close() error {
 	return nil
 }
 
+// GetL1FileContent returns the raw L1 preferences file content for a user
+// Returns the complete file including "# User Preferences" header
+func (s *MDStore) GetL1FileContent(accountID string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	// L1 preferences file path
+	l1UserPart := sanitizeUserID(accountID)
+	filePath := s.baseDir + "/l1/preferences/" + l1UserPart + ".md"
+
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return "" // File not found or error
+	}
+
+	return string(data)
+}
+
 // ShouldProcessFile 检查文件是否需要处理（内容是否变化）
 func (s *MDStore) ShouldProcessFile(filePath string, content []byte) bool {
 	if s.fileIndex == nil {
