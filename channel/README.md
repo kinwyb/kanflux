@@ -223,6 +223,7 @@ const (
     ChannelCLI      = "cli"
     ChannelDiscord  = "discord"
     ChannelSlack    = "slack"
+    ChannelWxCom    = "wxCom"
 )
 ```
 
@@ -236,6 +237,61 @@ channel/
   tui.go            # TUIChannel 实现
   channel_test.go   # 单元测试
   README.md         # 本文档
+  wxcom/            # 企业微信智能机器人 Channel
+    wxcom.go        # WxComChannel 主实现
+    ws.go           # WebSocket 管理器
+    types.go        # 类型定义
+    handler.go      # 消息处理器
+    wxcom_test.go   # 测试文件
+```
+
+## 企业微信 Channel (wxCom)
+
+企业微信智能机器人 Channel 基于 WebSocket 长连接实现，支持：
+
+- WebSocket 长连接通信 (`wss://openws.work.weixin.qq.com`)
+- 消息类型: text, image, mixed, voice, file
+- 流式回复 (stream)
+- 模板卡片 (template_card)
+- 事件回调: enter_chat, template_card_event, feedback_event
+
+### 配置
+
+```go
+cfg := &wxcom.WxComConfig{
+    Enabled: true,
+    BotID:   "your-bot-id",     // 企业微信后台获取
+    Secret:  "your-bot-secret",  // 企业微信后台获取
+    // 可选配置
+    WSURL:             "",      // 自定义 WebSocket 地址
+    HeartbeatInterval: 30000,   // 心跳间隔(ms)
+    ReconnectInterval: 1000,    // 重连基础延迟(ms)
+    MaxReconnect:      10,      // 最大重连次数
+    RequestTimeout:    10000,   // 请求超时(ms)
+}
+
+channel, err := wxcom.NewWxComChannel(bus, cfg)
+```
+
+### 使用示例
+
+```go
+// 创建并注册 channel
+wxcomChannel, err := wxcom.NewWxComChannel(msgBus, cfg)
+if err != nil {
+    log.Fatal(err)
+}
+
+manager.Register(wxcomChannel)
+
+// 启动
+manager.StartAll(ctx)
+
+// 发送欢迎语 (需在 enter_chat 事件 5 秒内调用)
+wxcomChannel.ReplyWelcome(ctx, reqID, "您好！我是智能助手。")
+
+// 主动发送消息
+wxcomChannel.SendMessage(ctx, chatID, "这是一条主动推送的消息")
 ```
 
 ## 测试

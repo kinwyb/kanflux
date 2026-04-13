@@ -14,6 +14,7 @@ const (
 	ChannelCLI      = "cli"
 	ChannelDiscord  = "discord"
 	ChannelSlack    = "slack"
+	ChannelWxCom    = "wxCom"
 )
 
 // InboundMessage 入站消息
