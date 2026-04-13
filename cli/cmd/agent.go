@@ -158,7 +158,7 @@ func NewAgentCmd() *cobra.Command {
 			}
 
 			// 发送消息给Agent
-			resp, err := ag.Prompt(ctx, allMessages, sessionKey)
+			resp, err := ag.Prompt(ctx, allMessages, sessionKey, "")
 			if err != nil {
 				return fmt.Errorf("Agent处理失败: %w", err)
 			}

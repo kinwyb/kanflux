@@ -650,12 +650,18 @@ func (m *Manager) handleInboundMessage(ctx context.Context, msg *bus.InboundMess
 	} else {
 		// 正常处理新消息
 
+		// 用户习惯
+		userPreferences := ""
+		if agent.cfg != nil && agent.cfg.Memoria != nil {
+			userPreferences = agent.cfg.Memoria.GetL1Summary(msg.AccountID)
+		}
+
 		// 将用户消息添加到 session（支持媒体内容）
 		userMsg := buildUserMessage(msg.Content, msg.Media)
 		newMessages := append(history, userMsg)
 
 		// 使用 Agent 处理消息
-		responses, err = agent.Prompt(ctx, newMessages, sessionKey)
+		responses, err = agent.Prompt(ctx, newMessages, sessionKey, userPreferences)
 
 	}
 
@@ -844,7 +850,7 @@ func (m *Manager) HandleCommand(ctx context.Context, content string) (string, er
 		if agent == nil {
 			return "", fmt.Errorf("no agent available")
 		}
-		resp, err := agent.Prompt(ctx, []adk.Message{schema.UserMessage(content)}, "")
+		resp, err := agent.Prompt(ctx, []adk.Message{schema.UserMessage(content)}, "", "")
 		if err != nil {
 			return "", err
 		}

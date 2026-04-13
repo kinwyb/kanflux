@@ -500,12 +500,12 @@ func buildBuiltinAgentMiddlewares(ctx context.Context) ([]adk.ChatModelAgentMidd
 }
 
 // Prompt sends a user message to the agent
-func (a *Agent) Prompt(ctx context.Context, messages []adk.Message, checkPointID string) ([]adk.Message, error) {
+func (a *Agent) Prompt(ctx context.Context, messages []adk.Message, checkPointID string, userPreferences string) ([]adk.Message, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
 	// Run orchestrator
-	msg, err := a.loop.Run(ctx, messages, checkPointID)
+	msg, err := a.loop.Run(ctx, messages, checkPointID, userPreferences)
 	if err != nil {
 		slog.Error("Agent execution failed", "error", err)
 		return nil, err

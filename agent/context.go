@@ -41,6 +41,9 @@ func (b *ContextBuilder) BuildSystemPrompt() string {
 	// 4. 错误处理指导
 	parts = append(parts, b.buildErrorHandling())
 
+	// 5. 用户习惯
+	parts = append(parts, "{user_preferences}")
+
 	return fmt.Sprintf("%s\n\n", joinNonEmpty(parts, "\n\n---\n\n"))
 }
 

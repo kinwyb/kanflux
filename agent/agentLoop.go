@@ -112,14 +112,14 @@ func (o *looper) Stop() {
 }
 
 // Run starts the agent loop with initial prompts
-func (o *looper) Run(ctx context.Context, prompts []adk.Message, checkPointID string) ([]adk.Message, error) {
+func (o *looper) Run(ctx context.Context, prompts []adk.Message, checkPointID string, userPreferences string) ([]adk.Message, error) {
 	slog.Debug("=== Looper Run Start ===")
 
 	ctx, cancel := context.WithCancel(ctx)
 	o.cancelFunc = cancel
 
 	// Main loop
-	msg, err := o.runLoop(ctx, prompts, checkPointID)
+	msg, err := o.runLoop(ctx, prompts, checkPointID, userPreferences)
 
 	if err == nil && len(msg) < 1 {
 		return nil, fmt.Errorf("agent loop failed: result msg empty")
@@ -148,7 +148,7 @@ func (o *looper) Run(ctx context.Context, prompts []adk.Message, checkPointID st
 	return msg, nil
 }
 
-func (o *looper) runLoop(ctx context.Context, messages []adk.Message, checkPointID string) ([]adk.Message, error) {
+func (o *looper) runLoop(ctx context.Context, messages []adk.Message, checkPointID string, userPreferences string) ([]adk.Message, error) {
 	o.mu.Lock()
 	if checkPointID != "" {
 		// 清理该session之前的检查点（如果有）
@@ -160,6 +160,10 @@ func (o *looper) runLoop(ctx context.Context, messages []adk.Message, checkPoint
 	if checkPointID != "" {
 		opts = append(opts, adk.WithCheckPointID(checkPointID))
 	}
+
+	opts = append(opts, adk.WithSessionValues(map[string]any{
+		"user_preferences": userPreferences,
+	}))
 
 	events := o.runner.Run(ctx, messages, opts...)
 	return o.processEvents(ctx, messages, events, checkPointID)
