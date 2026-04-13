@@ -178,40 +178,53 @@ func (p *ChatProcessor) processBatchParallel(ctx context.Context, items []types.
 	return result, nil
 }
 
-// ScanSessions scans the session directory for new/modified files
+// ScanSessions scans the session directory for new/modified files (including subdirectories)
 func (p *ChatProcessor) ScanSessions(ctx context.Context, since time.Time) ([]types.ProcessItem, error) {
-	files, err := filepath.Glob(p.sessionDir + "/*.jsonl")
-	if err != nil {
-		return nil, fmt.Errorf("failed to scan session directory: %w", err)
-	}
-
 	items := make([]types.ProcessItem, 0)
-	for _, file := range files {
-		info, err := os.Stat(file)
+
+	err := filepath.Walk(p.sessionDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			continue
+			return err
 		}
 
+		// Skip directories
+		if info.IsDir() {
+			return nil
+		}
+
+		// Only process .jsonl files
+		if !strings.HasSuffix(path, ".jsonl") {
+			return nil
+		}
+
+		// Skip files modified before the given time
 		if info.ModTime().Before(since) {
-			continue
+			return nil
 		}
 
-		content, err := os.ReadFile(file)
+		content, err := os.ReadFile(path)
 		if err != nil {
-			slog.Warn("Failed to read session file", "file", file, "error", err)
-			continue
+			slog.Warn("Failed to read session file", "file", path, "error", err)
+			return nil
 		}
 
-		sessionKey := filepath.Base(file)
+		// Extract session key from filename (not including directory path)
+		sessionKey := filepath.Base(path)
 		sessionKey = strings.TrimSuffix(sessionKey, ".jsonl")
 		userCtx := parseSessionKey(sessionKey)
 
 		items = append(items, types.ProcessItem{
-			Source:    file,
+			Source:    path,
 			Content:   string(content),
 			UserCtx:   userCtx,
 			Timestamp: info.ModTime(),
 		})
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to scan session directory: %w", err)
 	}
 
 	return items, nil
