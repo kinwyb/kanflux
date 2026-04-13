@@ -6,8 +6,14 @@ import (
 
 // Channel 常量定义
 const (
-	ChannelTUI    = "tui"
-	ChannelSystem = "system"
+	ChannelTUI      = "tui"
+	ChannelSystem   = "system"
+	ChannelTelegram = "telegram"
+	ChannelWhatsApp = "whatsapp"
+	ChannelFeishu   = "feishu"
+	ChannelCLI      = "cli"
+	ChannelDiscord  = "discord"
+	ChannelSlack    = "slack"
 )
 
 // InboundMessage 入站消息

@@ -16,6 +16,8 @@ type Config struct {
 	Tools           *ToolsConfig               `json:"tools"` // 工具配置
 	// 公共知识库配置
 	KnowledgeBases map[string]*KnowledgeBaseConfig `json:"knowledge_bases"` // 公共知识库，多个 agent 可共用
+	// Channel 配置
+	Channels *ChannelsConfig `json:"channels"` // 通道配置
 }
 
 // KnowledgeBaseConfig 公共知识库配置
@@ -498,4 +500,109 @@ func resolveRAGConfig(cfg *RAGConfigOptions) *RAGConfigOptions {
 	}
 
 	return cfg
+}
+
+// ChannelsConfig 通道配置
+type ChannelsConfig struct {
+	Telegram *TelegramChannelConfig `json:"telegram"`
+	WhatsApp *WhatsAppChannelConfig `json:"whatsapp"`
+	Feishu   *FeishuChannelConfig   `json:"feishu"`
+	CLI      *CLIChannelConfig      `json:"cli"`
+	// ThreadBinding 会话绑定配置
+	ThreadBindings []ThreadBindingConfig `json:"thread_bindings"`
+}
+
+// BaseChannelConfig 通道基础配置
+type BaseChannelConfig struct {
+	Enabled    bool     `json:"enabled"`
+	AccountID  string   `json:"account_id"` // 账号ID
+	Name       string   `json:"name"`       // 账号显示名称
+	AllowedIDs []string `json:"allowed_ids"`
+}
+
+// ChannelAccountConfig 通道账号配置（支持多账号）
+type ChannelAccountConfig struct {
+	Enabled    bool     `json:"enabled"`
+	Name       string   `json:"name"`       // 账号显示名称
+	AllowedIDs []string `json:"allowed_ids"`
+	// Telegram 专用
+	Token string `json:"token"`
+	// WhatsApp 专用
+	BridgeURL string `json:"bridge_url"`
+	// Feishu 专用
+	AppID             string `json:"app_id"`
+	AppSecret         string `json:"app_secret"`
+	EncryptKey        string `json:"encrypt_key"`
+	VerificationToken string `json:"verification_token"`
+	WebhookPort       int    `json:"webhook_port"`
+}
+
+// TelegramChannelConfig Telegram 通道配置
+type TelegramChannelConfig struct {
+	Enabled    bool                          `json:"enabled"`
+	Token      string                        `json:"token"`
+	AllowedIDs []string                      `json:"allowed_ids"`
+	Accounts   map[string]ChannelAccountConfig `json:"accounts"` // 多账号配置
+}
+
+// WhatsAppChannelConfig WhatsApp 通道配置
+type WhatsAppChannelConfig struct {
+	Enabled    bool                          `json:"enabled"`
+	BridgeURL  string                        `json:"bridge_url"`
+	AllowedIDs []string                      `json:"allowed_ids"`
+	Accounts   map[string]ChannelAccountConfig `json:"accounts"` // 多账号配置
+}
+
+// FeishuChannelConfig 飞书通道配置
+type FeishuChannelConfig struct {
+	Enabled           bool                          `json:"enabled"`
+	AppID             string                        `json:"app_id"`
+	AppSecret         string                        `json:"app_secret"`
+	EncryptKey        string                        `json:"encrypt_key"`
+	VerificationToken string                        `json:"verification_token"`
+	WebhookPort       int                           `json:"webhook_port"`
+	AllowedIDs        []string                      `json:"allowed_ids"`
+	Accounts          map[string]ChannelAccountConfig `json:"accounts"` // 多账号配置
+}
+
+// CLIChannelConfig CLI 通道配置
+type CLIChannelConfig struct {
+	Enabled    bool     `json:"enabled"`
+	AllowedIDs []string `json:"allowed_ids"` // CLI 通常不需要限制
+}
+
+// ThreadBindingConfig 会话绑定配置
+type ThreadBindingConfig struct {
+	SessionKey   string `json:"session_key"`   // Channel:ChatID (如 "tui:chat123")
+	TargetChannel string `json:"target_channel"` // 目标通道名称 (如 "telegram")
+	TargetAgent   string `json:"target_agent"`   // 可选：指定 agent
+	Priority      int    `json:"priority"`       // 优先级
+}
+
+// GetChannelConfig 获取通道配置
+func (c *Config) GetChannelConfig(channelType string) interface{} {
+	if c.Channels == nil {
+		return nil
+	}
+
+	switch channelType {
+	case "telegram":
+		return c.Channels.Telegram
+	case "whatsapp":
+		return c.Channels.WhatsApp
+	case "feishu":
+		return c.Channels.Feishu
+	case "cli":
+		return c.Channels.CLI
+	default:
+		return nil
+	}
+}
+
+// GetThreadBindings 获取会话绑定配置
+func (c *Config) GetThreadBindings() []ThreadBindingConfig {
+	if c.Channels == nil {
+		return nil
+	}
+	return c.Channels.ThreadBindings
 }

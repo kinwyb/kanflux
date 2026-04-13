@@ -11,6 +11,7 @@ import (
 	"github.com/kinwyb/kanflux/agent"
 	"github.com/kinwyb/kanflux/agent/tools"
 	"github.com/kinwyb/kanflux/bus"
+	"github.com/kinwyb/kanflux/channel"
 	"github.com/kinwyb/kanflux/config"
 	"github.com/kinwyb/kanflux/providers"
 	"github.com/kinwyb/kanflux/session"
@@ -74,6 +75,14 @@ type Model struct {
 	sessionMgr *session.Manager
 	chatID     string
 
+	// Channel manager
+	channelMgr *channel.Manager
+
+	// 接收事件的 channel（由 TUIChannel 写入）
+	outboundRecv chan *bus.OutboundMessage
+	eventRecv    chan *bus.ChatEvent
+	logRecv      chan *bus.LogEvent
+
 	// UI组件
 	input        textinput.Model
 	chatViewport viewport.Model // 左侧主区域：对话内容
@@ -82,8 +91,6 @@ type Model struct {
 	messageMu    sync.Mutex
 	logs         []string // 日志信息
 	logMu        sync.Mutex
-	logSub       *bus.LogEventSubscription
-	chatSub      *bus.ChatEventSubscription
 
 	// 状态
 	state  SessionState
@@ -119,12 +126,12 @@ type Message struct {
 }
 
 // NewModel 创建新模型
-func NewModel(ctx context.Context, cfg *Config) (*Model, error) {
+func NewModel(ctx context.Context, cfg *Config, channelMgr *channel.Manager) (*Model, error) {
 	var manager *agent.Manager
 	var workspace string
 
-	// 创建消息总线
-	msgBus := bus.NewMessageBus(10)
+	// 从 channel manager 获取 bus
+	msgBus := channelMgr.GetBus()
 
 	// 设置 slog 默认 logger 使用 bus handler
 	bus.SetupDefaultLogger(msgBus, slog.LevelDebug, bus.ChannelTUI)
@@ -222,20 +229,28 @@ func NewModel(ctx context.Context, cfg *Config) (*Model, error) {
 	logVP.SetContent(" [系统日志]")
 	logVP.Style = styles.LogViewport
 	chatID := strings.ToUpper(uuid.NewString())
+
+	// 创建接收 channel
+	outboundRecv := make(chan *bus.OutboundMessage, 100)
+	eventRecv := make(chan *bus.ChatEvent, 100)
+	logRecv := make(chan *bus.LogEvent, 100)
+
 	return &Model{
 		ctx:             ctx,
 		cfg:             cfg,
 		manager:         manager,
 		bus:             msgBus,
 		sessionMgr:      manager.GetSessionManager(),
+		channelMgr:      channelMgr,
 		chatID:          chatID,
+		outboundRecv:    outboundRecv,
+		eventRecv:       eventRecv,
+		logRecv:         logRecv,
 		input:           ti,
 		chatViewport:    chatVP,
 		logViewport:     logVP,
 		messages:        make([]Message, 0),
 		logs:            make([]string, 0),
-		logSub:          msgBus.SubscribeLogEvent(),
-		chatSub:         msgBus.SubscribeChatEventFiltered([]string{bus.ChannelTUI}),
 		state:           StateIdle,
 		status:          "就绪",
 		styles:          styles,
@@ -251,6 +266,7 @@ func (m *Model) Init() tea.Cmd {
 		m.waitForResponse(),
 		m.listenLogs(),
 		m.listenChatEvents(),
+		m.listenOutbound(),
 	)
 }
 
@@ -261,7 +277,7 @@ func (m *Model) listenLogs() tea.Cmd {
 			select {
 			case <-m.ctx.Done():
 				return nil
-			case event, ok := <-m.logSub.Channel:
+			case event, ok := <-m.logRecv:
 				if !ok {
 					return nil
 				}
@@ -282,7 +298,7 @@ func (m *Model) listenChatEvents() tea.Cmd {
 			select {
 			case <-m.ctx.Done():
 				return nil
-			case event, ok := <-m.chatSub.Channel:
+			case event, ok := <-m.eventRecv:
 				if !ok {
 					return nil
 				}
@@ -302,6 +318,31 @@ func (m *Model) listenChatEvents() tea.Cmd {
 					State:     event.State,
 					Content:   event.Content,
 					Metadata:  metadata,
+				}
+			}
+		}
+	}
+}
+
+// listenOutbound 监听出站消息
+func (m *Model) listenOutbound() tea.Cmd {
+	return func() tea.Msg {
+		for {
+			select {
+			case <-m.ctx.Done():
+				return nil
+			case msg, ok := <-m.outboundRecv:
+				if !ok {
+					return nil
+				}
+				// 只处理当前 chatID 的消息
+				if msg.ChatID != m.chatID {
+					continue
+				}
+				return AgentResponseMsg{
+					Content:          msg.Content,
+					ReasoningContent: msg.ReasoningContent,
+					Metadata:         msg.Metadata,
 				}
 			}
 		}
@@ -587,12 +628,12 @@ func (m *Model) sendMessage() tea.Cmd {
 	m.addLog("info", "发送: "+content)
 	m.updateViewports()
 
-	// 发送到Agent
+	// 发送到Agent（响应会通过 channel manager 分发回来）
 	return func() tea.Msg {
 		inMsg := bus.InboundMessage{
 			ID:        fmt.Sprintf("%d", time.Now().UnixNano()),
 			Channel:   bus.ChannelTUI,
-			AccountID: bus.ChannelTUI,
+			AccountID: "tui",
 			SenderID:  "",
 			ChatID:    m.chatID,
 			Content:   content,
@@ -606,12 +647,8 @@ func (m *Model) sendMessage() tea.Cmd {
 			return AgentResponseMsg{Error: err}
 		}
 
-		resp, err := m.bus.ConsumeOutboundFiltered(m.ctx, []string{bus.ChannelTUI})
-		if err != nil {
-			return AgentResponseMsg{Error: err}
-		}
-
-		return AgentResponseMsg{Content: resp.Content, ReasoningContent: resp.ReasoningContent, Metadata: resp.Metadata}
+		// 响应会通过 listenOutbound 接收，不需要在这里等待
+		return nil
 	}
 }
 
@@ -632,12 +669,12 @@ func (m *Model) sendApproval(approved bool) tea.Cmd {
 	m.addLog("info", fmt.Sprintf("审批响应: %s", content))
 	m.updateViewports()
 
-	// 发送到Agent
+	// 发送到Agent（响应会通过 channel manager 分发回来）
 	return func() tea.Msg {
 		inMsg := bus.InboundMessage{
 			ID:        fmt.Sprintf("%d", time.Now().UnixNano()),
 			Channel:   bus.ChannelTUI,
-			AccountID: bus.ChannelTUI,
+			AccountID: "tui",
 			SenderID:  "",
 			ChatID:    m.chatID,
 			Content:   content,
@@ -651,12 +688,8 @@ func (m *Model) sendApproval(approved bool) tea.Cmd {
 			return AgentResponseMsg{Error: err}
 		}
 
-		resp, err := m.bus.ConsumeOutboundFiltered(m.ctx, []string{bus.ChannelTUI})
-		if err != nil {
-			return AgentResponseMsg{Error: err}
-		}
-
-		return AgentResponseMsg{Content: resp.Content, ReasoningContent: resp.ReasoningContent, Metadata: resp.Metadata}
+		// 响应会通过 listenOutbound 接收，不需要在这里等待
+		return nil
 	}
 }
 
@@ -767,4 +800,46 @@ func (m *Model) updateViewports() {
 
 	m.logViewport.SetContent(logContent.String())
 	m.logViewport.GotoBottom()
+}
+
+// ReceiveOutbound 接收出站消息（TUIModelInterface 实现）
+func (m *Model) ReceiveOutbound(msg *bus.OutboundMessage) {
+	select {
+	case m.outboundRecv <- msg:
+	default:
+		// channel 满，丢弃消息
+	}
+}
+
+// ReceiveChatEvent 接收聊天事件（TUIModelInterface 实现）
+func (m *Model) ReceiveChatEvent(event *bus.ChatEvent) {
+	select {
+	case m.eventRecv <- event:
+	default:
+		// channel 满，丢弃事件
+	}
+}
+
+// ReceiveLogEvent 接收日志事件
+func (m *Model) ReceiveLogEvent(event *bus.LogEvent) {
+	select {
+	case m.logRecv <- event:
+	default:
+		// channel 满，丢弃事件
+	}
+}
+
+// GetChatID 获取当前 chatID（TUIModelInterface 实现）
+func (m *Model) GetChatID() string {
+	return m.chatID
+}
+
+// SetChatID 设置 chatID（TUIModelInterface 实现）
+func (m *Model) SetChatID(chatID string) {
+	m.chatID = chatID
+}
+
+// GetChannelMgr 获取 channel manager
+func (m *Model) GetChannelMgr() *channel.Manager {
+	return m.channelMgr
 }
