@@ -30,6 +30,8 @@ Kanflux 不是传统的个人助手，而是面向所有用户的智能平台。
 
 ### 📦 三层记忆模型
 
+基于 [MemPalace](https://github.com/MemPalace/mempalace) 的分层记忆设计：
+
 | 层级 | Token 限制 | 存储内容 | 访问方式 |
 |------|-----------|---------|---------|
 | **L1 偏好层** | ~120 | 用户习惯、偏好、决策风格 | 始终加载，直接注入 prompt |
@@ -80,6 +82,8 @@ workspace/
 ```
 
 ## 记忆系统工作原理
+
+Memoria 记忆系统参考 [MemPalace](https://github.com/MemPalace/mempalace) 的分层记忆架构设计。
 
 ### 用户偏好自动提取
 
