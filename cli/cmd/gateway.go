@@ -11,7 +11,9 @@ import (
 	"github.com/kinwyb/kanflux/agent"
 	"github.com/kinwyb/kanflux/bus"
 	"github.com/kinwyb/kanflux/channel"
+	"github.com/kinwyb/kanflux/config"
 	"github.com/kinwyb/kanflux/session"
+	"github.com/kinwyb/kanflux/ws"
 
 	// 导入 channel 类型以触发 init() 注册
 	_ "github.com/kinwyb/kanflux/channel/wxcom"
@@ -116,14 +118,38 @@ func NewGatewayCmd() *cobra.Command {
 			}
 			slog.Info("ChannelManager 启动完成")
 
-			// 11. 设置信号处理
+			// 11. 创建 WebSocket 服务器
+			cfgWsConfig := cfg.WebSocket
+			if cfgWsConfig == nil || !cfgWsConfig.Enabled {
+				// 默认启用 WebSocket
+				cfgWsConfig = &config.WebSocketConfig{Enabled: true}
+			}
+			// 转换为 ws.ServerConfig
+			wsConfig := &ws.ServerConfig{
+				Enabled:      cfgWsConfig.Enabled,
+				Port:         cfgWsConfig.Port,
+				Host:         cfgWsConfig.Host,
+				Path:         cfgWsConfig.Path,
+				AuthToken:    cfgWsConfig.AuthToken,
+				ReadTimeout:  cfgWsConfig.ReadTimeout,
+				WriteTimeout: cfgWsConfig.WriteTimeout,
+			}
+			wsServer := ws.NewServer(msgBus, wsConfig)
+			if err := wsServer.Start(ctx); err != nil {
+				slog.Warn("启动 WebSocket 服务器失败", "error", err)
+				// WebSocket 启动失败不影响主服务
+			} else {
+				slog.Info("WebSocket 服务器启动完成", "url", wsConfig.URL())
+			}
+
+			// 12. 设置信号处理
 			sigChan := make(chan os.Signal, 1)
 			signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
 			slog.Info("Gateway 服务启动完成，等待退出信号...")
 			fmt.Println("Gateway 服务已启动，按 Ctrl+C 退出")
 
-			// 12. 等待退出信号
+			// 13. 等待退出信号
 			select {
 			case <-ctx.Done():
 				// 上下文被外部取消
@@ -132,8 +158,8 @@ func NewGatewayCmd() *cobra.Command {
 				fmt.Printf("\n收到信号 %v，正在关闭...\n", sig)
 			}
 
-			// 13. 优雅关闭
-			return gracefulShutdown(cancel, channelMgr, agentMgr, msgBus)
+			// 14. 优雅关闭
+			return gracefulShutdown(cancel, channelMgr, agentMgr, msgBus, wsServer)
 		},
 	}
 
@@ -167,25 +193,34 @@ func gracefulShutdown(
 	channelMgr *channel.Manager,
 	agentMgr *agent.Manager,
 	msgBus *bus.MessageBus,
+	wsServer *ws.Server,
 ) error {
 	slog.Info("开始优雅关闭...")
 
 	// 1. 取消上下文，停止处理循环
 	cancel()
 
-	// 2. 先停止 Channels（它们接收 outbound 消息）
+	// 2. 先停止 WebSocket Server（停止接收新连接）
+	if wsServer != nil {
+		if err := wsServer.Stop(); err != nil {
+			slog.Warn("停止 WebSocket Server 时出错", "error", err)
+		}
+		slog.Info("WebSocket Server 已停止")
+	}
+
+	// 3. 先停止 Channels（它们接收 outbound 消息）
 	if err := channelMgr.StopAll(); err != nil {
 		slog.Warn("停止 Channels 时出错", "error", err)
 	}
 	slog.Info("Channels 已停止")
 
-	// 3. 停止 Agents
+	// 4. 停止 Agents
 	if err := agentMgr.Stop(); err != nil {
 		slog.Warn("停止 Agents 时出错", "error", err)
 	}
 	slog.Info("Agents 已停止")
 
-	// 4. 关闭消息总线
+	// 5. 关闭消息总线
 	if err := msgBus.Close(); err != nil {
 		slog.Warn("关闭消息总线时出错", "error", err)
 	}

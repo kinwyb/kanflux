@@ -18,6 +18,8 @@ type Config struct {
 	KnowledgeBases map[string]*KnowledgeBaseConfig `json:"knowledge_bases"` // 公共知识库，多个 agent 可共用
 	// Channel 配置
 	Channels *ChannelsConfig `json:"channels"` // 通道配置
+	// WebSocket 配置
+	WebSocket *WebSocketConfig `json:"websocket"` // WebSocket 服务配置
 }
 
 // KnowledgeBaseConfig 公共知识库配置
@@ -596,6 +598,17 @@ type ThreadBindingConfig struct {
 	TargetChannel string `json:"target_channel"` // 目标通道名称 (如 "telegram")
 	TargetAgent   string `json:"target_agent"`   // 可选：指定 agent
 	Priority      int    `json:"priority"`       // 优先级
+}
+
+// WebSocketConfig WebSocket 服务配置
+type WebSocketConfig struct {
+	Enabled      bool   `json:"enabled"`        // 是否启用，默认 true
+	Port         int    `json:"port"`           // WebSocket 端口，默认 8765
+	Host         string `json:"host"`           // 主机地址，默认 localhost
+	Path         string `json:"path"`           // WebSocket 路径，默认 /ws
+	AuthToken    string `json:"auth_token"`     // 认证 token（可选）
+	ReadTimeout  int    `json:"read_timeout"`   // 读超时（秒），默认 60
+	WriteTimeout int    `json:"write_timeout"`  // 写超时（秒），默认 60
 }
 
 // GetChannelConfig 获取通道配置

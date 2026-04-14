@@ -7,6 +7,7 @@ import (
 
 	"github.com/kinwyb/kanflux/cli/tui"
 	"github.com/kinwyb/kanflux/config"
+	"github.com/kinwyb/kanflux/ws"
 
 	"github.com/spf13/cobra"
 )
@@ -21,6 +22,7 @@ func NewTUICmd() *cobra.Command {
 		maxIteration int
 		configPath   string
 		agentName    string
+		gatewayURL   string // WebSocket Gateway URL
 	)
 
 	cmd := &cobra.Command{
@@ -80,6 +82,12 @@ func NewTUICmd() *cobra.Command {
 				}
 			}
 
+			// 设置 WebSocket 配置
+			if gatewayURL != "" {
+				cfg.GatewayURL = gatewayURL
+			}
+			cfg.WSConfig = &ws.ServerConfig{Enabled: true}
+
 			// 启动TUI
 			app, err := tui.NewApp(ctx, cfg)
 			if err != nil {
@@ -98,6 +106,7 @@ func NewTUICmd() *cobra.Command {
 	cmd.Flags().IntVarP(&maxIteration, "max-iter", "i", 0, "最大迭代次数")
 	cmd.Flags().StringVarP(&configPath, "config", "c", "", "配置文件路径")
 	cmd.Flags().StringVarP(&agentName, "agent", "a", "", "Agent名称 (从配置文件中选择)")
+	cmd.Flags().StringVarP(&gatewayURL, "gateway", "g", "", "外部 Gateway WebSocket URL (不指定则自动检测/启动本地服务)")
 
 	return cmd
 }

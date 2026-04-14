@@ -15,6 +15,7 @@ import (
 	"github.com/kinwyb/kanflux/config"
 	"github.com/kinwyb/kanflux/providers"
 	"github.com/kinwyb/kanflux/session"
+	"github.com/kinwyb/kanflux/ws"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -75,10 +76,13 @@ type Model struct {
 	sessionMgr *session.Manager
 	chatID     string
 
-	// Channel manager
+	// WebSocket 客户端模式
+	wsClient   *ws.Client
+
+	// Channel manager (standalone 模式)
 	channelMgr *channel.Manager
 
-	// 接收事件的 channel（由 TUIChannel 写入）
+	// 接收事件的 channel（由 TUIChannel 写入或 WebSocket 回调）
 	outboundRecv chan *bus.OutboundMessage
 	eventRecv    chan *bus.ChatEvent
 	logRecv      chan *bus.LogEvent
@@ -242,6 +246,54 @@ func NewModel(ctx context.Context, cfg *Config, channelMgr *channel.Manager) (*M
 		bus:             msgBus,
 		sessionMgr:      manager.GetSessionManager(),
 		channelMgr:      channelMgr,
+		chatID:          chatID,
+		outboundRecv:    outboundRecv,
+		eventRecv:       eventRecv,
+		logRecv:         logRecv,
+		input:           ti,
+		chatViewport:    chatVP,
+		logViewport:     logVP,
+		messages:        make([]Message, 0),
+		logs:            make([]string, 0),
+		state:           StateIdle,
+		status:          "就绪",
+		styles:          styles,
+		currentThinking: "",
+		currentToolInfo: "",
+	}, nil
+}
+
+// NewModelWithWS 创建使用 WebSocket 的 Model
+func NewModelWithWS(ctx context.Context, cfg *Config, wsClient *ws.Client) (*Model, error) {
+	// 创建输入框
+	ti := textinput.New()
+	ti.Placeholder = "输入消息..."
+	ti.Focus()
+	ti.Width = 50
+
+	// 创建样式
+	styles := NewStyles()
+
+	// 创建左侧主viewport（对话内容）
+	chatVP := viewport.New(60, 20)
+	chatVP.SetContent("")
+	chatVP.Style = styles.ChatViewport
+
+	// 创建右侧小块viewport（系统日志）
+	logVP := viewport.New(20, 20)
+	logVP.SetContent(" [系统日志]")
+	logVP.Style = styles.LogViewport
+	chatID := strings.ToUpper(uuid.NewString())
+
+	// 创建接收 channel（用于 WebSocket 回调写入）
+	outboundRecv := make(chan *bus.OutboundMessage, 100)
+	eventRecv := make(chan *bus.ChatEvent, 100)
+	logRecv := make(chan *bus.LogEvent, 100)
+
+	return &Model{
+		ctx:             ctx,
+		cfg:             cfg,
+		wsClient:        wsClient,
 		chatID:          chatID,
 		outboundRecv:    outboundRecv,
 		eventRecv:       eventRecv,
@@ -628,23 +680,32 @@ func (m *Model) sendMessage() tea.Cmd {
 	m.addLog("info", "发送: "+content)
 	m.updateViewports()
 
-	// 发送到Agent（响应会通过 channel manager 分发回来）
+	// 发送消息
 	return func() tea.Msg {
-		inMsg := bus.InboundMessage{
-			ID:        fmt.Sprintf("%d", time.Now().UnixNano()),
-			Channel:   bus.ChannelTUI,
-			AccountID: "tui",
-			SenderID:  "",
-			ChatID:    m.chatID,
-			Content:   content,
-			Media:     nil,
-			Metadata:  nil,
-			Timestamp: time.Now(),
-		}
+		if m.wsClient != nil {
+			// WebSocket 模式：通过 WebSocket 发送
+			err := m.wsClient.SendInbound(m.ctx, bus.ChannelTUI, "", "", m.chatID, content, nil, nil)
+			if err != nil {
+				return AgentResponseMsg{Error: err}
+			}
+		} else if m.bus != nil {
+			// Standalone 模式：通过 bus 发送
+			inMsg := bus.InboundMessage{
+				ID:        fmt.Sprintf("%d", time.Now().UnixNano()),
+				Channel:   bus.ChannelTUI,
+				AccountID: "tui",
+				SenderID:  "",
+				ChatID:    m.chatID,
+				Content:   content,
+				Media:     nil,
+				Metadata:  nil,
+				Timestamp: time.Now(),
+			}
 
-		err := m.bus.PublishInbound(m.ctx, &inMsg)
-		if err != nil {
-			return AgentResponseMsg{Error: err}
+			err := m.bus.PublishInbound(m.ctx, &inMsg)
+			if err != nil {
+				return AgentResponseMsg{Error: err}
+			}
 		}
 
 		// 响应会通过 listenOutbound 接收，不需要在这里等待
@@ -832,6 +893,11 @@ func (m *Model) ReceiveLogEvent(event *bus.LogEvent) {
 // GetChatID 获取当前 chatID（TUIModelInterface 实现）
 func (m *Model) GetChatID() string {
 	return m.chatID
+}
+
+// IsReady 返回是否已初始化完成
+func (m *Model) IsReady() bool {
+	return m.ready
 }
 
 // SetChatID 设置 chatID（TUIModelInterface 实现）
