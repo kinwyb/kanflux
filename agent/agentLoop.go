@@ -163,6 +163,8 @@ func (o *looper) runLoop(ctx context.Context, messages []adk.Message, checkPoint
 
 	opts = append(opts, adk.WithSessionValues(map[string]any{
 		"user_preferences": userPreferences,
+		"session_id":       checkPointID, // session ID for instruction logging
+		"agent_name":       o.cfg.Name,   // agent name for instruction logging
 	}))
 
 	events := o.runner.Run(ctx, messages, opts...)
