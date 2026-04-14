@@ -308,3 +308,205 @@ func TestConstants(t *testing.T) {
 		t.Errorf("Expected DefaultWSURL 'wss://openws.work.weixin.qq.com', got '%s'", DefaultWSURL)
 	}
 }
+
+func TestCardTypeConstants(t *testing.T) {
+	if CardTypeTextNotice != "text_notice" {
+		t.Errorf("Expected CardTypeTextNotice 'text_notice', got '%s'", CardTypeTextNotice)
+	}
+
+	if CardTypeButtonInteraction != "button_interaction" {
+		t.Errorf("Expected CardTypeButtonInteraction 'button_interaction', got '%s'", CardTypeButtonInteraction)
+	}
+
+	if CardTypeVoteInteraction != "vote_interaction" {
+		t.Errorf("Expected CardTypeVoteInteraction 'vote_interaction', got '%s'", CardTypeVoteInteraction)
+	}
+
+	if CardTypeMultipleInteraction != "multiple_interaction" {
+		t.Errorf("Expected CardTypeMultipleInteraction 'multiple_interaction', got '%s'", CardTypeMultipleInteraction)
+	}
+}
+
+func TestNewTextNoticeCard(t *testing.T) {
+	card := NewTextNoticeCard("标题", "描述内容")
+
+	if card.CardType != CardTypeTextNotice {
+		t.Errorf("Expected card type %s, got %s", CardTypeTextNotice, card.CardType)
+	}
+
+	if card.MainTitle.Title != "标题" {
+		t.Errorf("Expected title '标题', got '%s'", card.MainTitle.Title)
+	}
+
+	if card.MainTitle.Desc != "描述内容" {
+		t.Errorf("Expected desc '描述内容', got '%s'", card.MainTitle.Desc)
+	}
+}
+
+func TestNewButtonInteractionCard(t *testing.T) {
+	buttons := []CardButtonOption{
+		{ID: "btn1", Text: "按钮1"},
+		{ID: "btn2", Text: "按钮2"},
+	}
+
+	card := NewButtonInteractionCard("选择操作", "请选择", buttons, "task_123")
+
+	if card.CardType != CardTypeButtonInteraction {
+		t.Errorf("Expected card type %s, got %s", CardTypeButtonInteraction, card.CardType)
+	}
+
+	if len(card.ButtonSelection.OptionList) != 2 {
+		t.Errorf("Expected 2 buttons, got %d", len(card.ButtonSelection.OptionList))
+	}
+
+	if card.TaskID != "task_123" {
+		t.Errorf("Expected task_id 'task_123', got '%s'", card.TaskID)
+	}
+}
+
+func TestNewVoteInteractionCard(t *testing.T) {
+	options := []CardSelectOption{
+		{ID: "opt1", Text: "选项1"},
+		{ID: "opt2", Text: "选项2"},
+	}
+
+	card := NewVoteInteractionCard("投票标题", options, "vote_123")
+
+	if card.CardType != CardTypeVoteInteraction {
+		t.Errorf("Expected card type %s, got %s", CardTypeVoteInteraction, card.CardType)
+	}
+
+	if len(card.SelectList) != 1 {
+		t.Errorf("Expected 1 select item, got %d", len(card.SelectList))
+	}
+
+	if card.TaskID != "vote_123" {
+		t.Errorf("Expected task_id 'vote_123', got '%s'", card.TaskID)
+	}
+}
+
+func TestMessageHandlerBuildTemplateCardReply(t *testing.T) {
+	handler := NewMessageHandler(nil)
+
+	card := NewTextNoticeCard("通知标题", "通知内容")
+	feedback := &CardFeedback{ButtonDesc: "点击反馈"}
+
+	body := handler.BuildTemplateCardReply(card, feedback)
+
+	if body["msgtype"] != MsgTypeTemplateCard {
+		t.Errorf("Expected msgtype %s, got %s", MsgTypeTemplateCard, body["msgtype"])
+	}
+
+	cardMap, ok := body["template_card"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Expected template_card map")
+	}
+
+	if cardMap["card_type"] != CardTypeTextNotice {
+		t.Errorf("Expected card_type %s, got %s", CardTypeTextNotice, cardMap["card_type"])
+	}
+
+	feedbackMap, ok := cardMap["feedback"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Expected feedback map")
+	}
+
+	if feedbackMap["button_desc"] != "点击反馈" {
+		t.Errorf("Expected button_desc '点击反馈', got '%s'", feedbackMap["button_desc"])
+	}
+}
+
+func TestMessageHandlerBuildStreamWithCardReply(t *testing.T) {
+	handler := NewMessageHandler(nil)
+
+	card := NewTextNoticeCard("卡片标题", "卡片内容")
+	cardFeedback := &CardFeedback{ButtonDesc: "卡片反馈"}
+
+	body := handler.BuildStreamWithCardReply("stream_123", "流式内容", false, nil, nil, card, cardFeedback)
+
+	if body["msgtype"] != "stream_with_template_card" {
+		t.Errorf("Expected msgtype 'stream_with_template_card', got '%s'", body["msgtype"])
+	}
+
+	streamMap, ok := body["stream"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Expected stream map")
+	}
+
+	if streamMap["id"] != "stream_123" {
+		t.Errorf("Expected stream id 'stream_123', got '%s'", streamMap["id"])
+	}
+
+	cardMap, ok := body["template_card"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Expected template_card map")
+	}
+
+	if cardMap["card_type"] != CardTypeTextNotice {
+		t.Errorf("Expected card_type %s, got %s", CardTypeTextNotice, cardMap["card_type"])
+	}
+}
+
+func TestMessageHandlerBuildUpdateTemplateCard(t *testing.T) {
+	handler := NewMessageHandler(nil)
+
+	card := NewTextNoticeCard("更新标题", "更新内容")
+	card.TaskID = "task_update"
+
+	body := handler.BuildUpdateTemplateCard(card, []string{"user1", "user2"})
+
+	if body["response_type"] != "update_template_card" {
+		t.Errorf("Expected response_type 'update_template_card', got '%s'", body["response_type"])
+	}
+
+	userIDs, ok := body["userids"].([]string)
+	if !ok {
+		t.Fatal("Expected userids slice")
+	}
+
+	if len(userIDs) != 2 {
+		t.Errorf("Expected 2 userids, got %d", len(userIDs))
+	}
+}
+
+func TestCardToMapWithAllFields(t *testing.T) {
+	handler := NewMessageHandler(nil)
+
+	card := &TemplateCard{
+		CardType: CardTypeMultipleInteraction,
+		Source:   &CardSource{IconURL: "https://icon.url", Desc: "来源描述"},
+		MainTitle: &CardMainTitle{Title: "主标题", Desc: "主标题描述"},
+		SubTitle:  &CardSubTitle{Title: "副标题", Desc: "副标题描述"},
+		TaskID:    "task_full",
+		SelectList: []CardSelectItem{
+			{
+				QuestionKey: "q1",
+				Title:       "问题1",
+				OptionList: []CardSelectOption{
+					{ID: "opt1", Text: "选项1"},
+					{ID: "opt2", Text: "选项2"},
+				},
+			},
+		},
+		SubmitButton: &CardSubmitButton{Text: "提交", Key: "submit_key"},
+	}
+
+	cardMap := handler.cardToMap(card)
+
+	if cardMap["card_type"] != CardTypeMultipleInteraction {
+		t.Errorf("Expected card_type %s, got %s", CardTypeMultipleInteraction, cardMap["card_type"])
+	}
+
+	if cardMap["task_id"] != "task_full" {
+		t.Errorf("Expected task_id 'task_full', got '%s'", cardMap["task_id"])
+	}
+
+	selectList, ok := cardMap["select_list"].([]map[string]interface{})
+	if !ok {
+		t.Fatal("Expected select_list")
+	}
+
+	if len(selectList) != 1 {
+		t.Errorf("Expected 1 select item, got %d", len(selectList))
+	}
+}

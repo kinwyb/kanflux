@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/kinwyb/kanflux/bus"
@@ -465,9 +466,80 @@ func (c *WxComChannel) SendMessage(ctx context.Context, chatID string, content s
 	return err
 }
 
-// DownloadFile 下载并解密文件 (可选功能)
-func (c *WxComChannel) DownloadFile(ctx context.Context, url, aesKey string) ([]byte, string, error) {
-	// TODO: 实现文件下载和AES解密
-	// 需要 crypto.go 支持
-	return nil, "", fmt.Errorf("file download not implemented")
+// DownloadFile 下载并解密文件
+// url: 文件下载地址
+// aesKey: Base64编码的AES密钥 (来自消息中的 aeskey)
+// 返回: 解密后的文件数据, 文件名, 错误
+func (c *WxComChannel) DownloadFile(ctx context.Context, fileURL, aesKey string) ([]byte, string, error) {
+	if !c.IsRunning() {
+		return nil, "", ErrNotConnected
+	}
+
+	timeout := time.Duration(c.config.RequestTimeout) * time.Millisecond
+	downloader := NewFileDownloader(timeout)
+
+	return downloader.DownloadFile(ctx, fileURL, aesKey)
+}
+
+// DownloadImage 下载并解密图片
+// 从 bus.Media 中获取 URL 和 aeskey
+func (c *WxComChannel) DownloadImage(ctx context.Context, media *bus.Media) ([]byte, string, error) {
+	if media == nil || media.URL == "" {
+		return nil, "", fmt.Errorf("media URL is empty")
+	}
+
+	aesKey := ""
+	if media.Metadata != nil {
+		if key, ok := media.Metadata["aeskey"].(string); ok {
+			aesKey = key
+		}
+	}
+
+	return c.DownloadFile(ctx, media.URL, aesKey)
+}
+
+// ReplyTemplateCard 回复模板卡片消息
+func (c *WxComChannel) ReplyTemplateCard(ctx context.Context, reqID string, card *TemplateCard, feedback *CardFeedback) error {
+	if !c.IsRunning() {
+		return ErrNotConnected
+	}
+
+	body := c.handler.BuildTemplateCardReply(card, feedback)
+	_, err := c.wsManager.SendReply(ctx, reqID, body, WsCmdResponse)
+	return err
+}
+
+// ReplyStreamWithCard 发送流式消息+模板卡片组合回复
+func (c *WxComChannel) ReplyStreamWithCard(ctx context.Context, reqID, streamID, content string, finish bool,
+	card *TemplateCard, cardFeedback *CardFeedback) error {
+	if !c.IsRunning() {
+		return ErrNotConnected
+	}
+
+	body := c.handler.BuildStreamWithCardReply(streamID, content, finish, nil, nil, card, cardFeedback)
+	_, err := c.wsManager.SendReply(ctx, reqID, body, WsCmdResponse)
+	return err
+}
+
+// UpdateTemplateCard 更新模板卡片 (需在收到template_card_event事件5秒内调用)
+func (c *WxComChannel) UpdateTemplateCard(ctx context.Context, reqID string, card *TemplateCard, userIDs []string) error {
+	if !c.IsRunning() {
+		return ErrNotConnected
+	}
+
+	body := c.handler.BuildUpdateTemplateCard(card, userIDs)
+	_, err := c.wsManager.SendReply(ctx, reqID, body, WsCmdResponseUpdate)
+	return err
+}
+
+// SendTemplateCard 主动发送模板卡片消息
+func (c *WxComChannel) SendTemplateCard(ctx context.Context, chatID string, card *TemplateCard) error {
+	if !c.IsRunning() {
+		return ErrNotConnected
+	}
+
+	reqID := generateReqID(WsCmdSendMsg)
+	body := c.handler.BuildSendMessage(chatID, c.handler.BuildTemplateCardReply(card, nil))
+	_, err := c.wsManager.SendReply(ctx, reqID, body, WsCmdSendMsg)
+	return err
 }

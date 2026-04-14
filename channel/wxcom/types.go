@@ -37,6 +37,15 @@ const (
 	EventTypeFeedbackEvent    = "feedback_event"    // 用户反馈事件
 )
 
+// 模板卡片类型常量
+const (
+	CardTypeTextNotice       = "text_notice"       // 文本通知模版卡片
+	CardTypeNewsNotice       = "news_notice"       // 图文展示模版卡片
+	CardTypeButtonInteraction = "button_interaction" // 按钮交互模版卡片
+	CardTypeVoteInteraction  = "vote_interaction"  // 投票选择模版卡片
+	CardTypeMultipleInteraction = "multiple_interaction" // 多项选择模版卡片
+)
+
 // 默认 WebSocket URL
 const DefaultWSURL = "wss://openws.work.weixin.qq.com"
 
@@ -160,12 +169,24 @@ type MarkdownMessage struct {
 
 // TemplateCard 模板卡片
 type TemplateCard struct {
-	CardType  string                 `json:"card_type"`
-	Source    *CardSource            `json:"source,omitempty"`
-	MainTitle *CardMainTitle         `json:"main_title,omitempty"`
-	TaskID    string                 `json:"task_id,omitempty"`
-	// 其他字段根据卡片类型不同而不同，使用map存储
-	Extra     map[string]interface{} `json:"-"`
+	CardType      string            `json:"card_type"`
+	Source        *CardSource       `json:"source,omitempty"`
+	MainTitle     *CardMainTitle    `json:"main_title,omitempty"`
+	SubTitle      *CardSubTitle     `json:"sub_title,omitempty"`
+	EmphasisTitle *CardEmphasisTitle `json:"emphasis_title,omitempty"`
+	TaskID        string            `json:"task_id,omitempty"`
+	CardAction    *CardAction       `json:"card_action,omitempty"`
+	// 按钮交互卡片
+	ButtonSelection *CardButtonSelection `json:"button_selection,omitempty"`
+	ButtonTextArea  *CardButtonTextArea  `json:"button_textarea,omitempty"`
+	// 投票/多项选择卡片
+	SelectList     []CardSelectItem  `json:"select_list,omitempty"`
+	SubmitButton   *CardSubmitButton `json:"submit_button,omitempty"`
+	// 图文展示卡片
+	ImageTextArea  *CardImageTextArea `json:"image_text_area,omitempty"`
+	VerticalContent []CardVerticalContent `json:"vertical_content,omitempty"`
+	// 反馈信息
+	Feedback       *CardFeedback     `json:"feedback,omitempty"`
 }
 
 // CardSource 卡片来源
@@ -178,6 +199,94 @@ type CardSource struct {
 type CardMainTitle struct {
 	Title string `json:"title,omitempty"`
 	Desc  string `json:"desc,omitempty"`
+}
+
+// CardSubTitle 卡片副标题
+type CardSubTitle struct {
+	Title string `json:"title,omitempty"`
+	Desc  string `json:"desc,omitempty"`
+}
+
+// CardEmphasisTitle 卡片关键内容
+type CardEmphasisTitle struct {
+	Title string `json:"title,omitempty"`
+	Desc  string `json:"desc,omitempty"`
+}
+
+// CardAction 卡片点击跳转
+type CardAction struct {
+	Type   int    `json:"type,omitempty"`   // 1:跳转url, 2:跳转小程序
+	URL    string `json:"url,omitempty"`    // 跳转链接
+	AppID  string `json:"appid,omitempty"`  // 小程序appid
+	PagePath string `json:"pagepath,omitempty"` // 小程序页面路径
+}
+
+// CardButtonSelection 按钮选择区
+type CardButtonSelection struct {
+	QuestionKey string          `json:"question_key,omitempty"`
+	Title       string          `json:"title,omitempty"`
+	Disable     bool            `json:"disable,omitempty"`
+	SelectedID  string          `json:"selected_id,omitempty"`
+	OptionList  []CardButtonOption `json:"option_list,omitempty"`
+}
+
+// CardButtonOption 按钮选项
+type CardButtonOption struct {
+	ID     string `json:"id,omitempty"`
+	Text   string `json:"text,omitempty"`
+	Disable bool  `json:"disable,omitempty"`
+}
+
+// CardButtonTextArea 按钮输入区
+type CardButtonTextArea struct {
+	QuestionKey string `json:"question_key,omitempty"`
+	Title       string `json:"title,omitempty"`
+	Disable     bool   `json:"disable,omitempty"`
+	Placeholder string `json:"placeholder,omitempty"`
+	Value       string `json:"value,omitempty"`
+}
+
+// CardSelectItem 选择器项
+type CardSelectItem struct {
+	QuestionKey string          `json:"question_key,omitempty"`
+	Title       string          `json:"title,omitempty"`
+	Disable     bool            `json:"disable,omitempty"`
+	SelectedID  string          `json:"selected_id,omitempty"`
+	OptionList  []CardSelectOption `json:"option_list,omitempty"`
+}
+
+// CardSelectOption 选择器选项
+type CardSelectOption struct {
+	ID     string `json:"id,omitempty"`
+	Text   string `json:"text,omitempty"`
+	Disable bool  `json:"disable,omitempty"`
+}
+
+// CardSubmitButton 提交按钮
+type CardSubmitButton struct {
+	Text string `json:"text,omitempty"`
+	Key  string `json:"key,omitempty"`
+	Disable bool `json:"disable,omitempty"`
+}
+
+// CardImageTextArea 图文区域
+type CardImageTextArea struct {
+	Type     int    `json:"type,omitempty"`  // 1:图片, 2:图文
+	URL      string `json:"url,omitempty"`   // 图片链接
+	Title    string `json:"title,omitempty"` // 标题
+	Desc     string `json:"desc,omitempty"`  // 描述
+	ImageURL string `json:"image_url,omitempty"` // 图片链接
+}
+
+// CardVerticalContent 纵向内容列表
+type CardVerticalContent struct {
+	Title string `json:"title,omitempty"`
+	Desc  string `json:"desc,omitempty"`
+}
+
+// CardFeedback 卡片反馈信息
+type CardFeedback struct {
+	ButtonDesc string `json:"button_desc,omitempty"` // 按钮描述
 }
 
 // MessageBody 消息体
