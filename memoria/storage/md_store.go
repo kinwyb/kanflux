@@ -728,7 +728,7 @@ func (s *MDStore) ShouldProcessFile(filePath string, content []byte) bool {
 	return s.fileIndex.NeedsProcessing(filePath, contentHash)
 }
 
-// MarkFileProcessed 标记文件已处理
+// MarkFileProcessed 标记文件已处理并立即保存索引
 func (s *MDStore) MarkFileProcessed(filePath string, content []byte, itemCount int) {
 	if s.fileIndex == nil {
 		return
@@ -736,6 +736,11 @@ func (s *MDStore) MarkFileProcessed(filePath string, content []byte, itemCount i
 
 	contentHash := HashContent(content)
 	s.fileIndex.MarkProcessed(filePath, contentHash, itemCount)
+
+	// 立即保存索引，确保下次启动时不会重复处理
+	if err := s.fileIndex.Save(); err != nil {
+		slog.Warn("Failed to save file index", "error", err)
+	}
 }
 
 // DeleteFileMemories 删除指定文件的记忆（文件更新或删除时调用）
@@ -970,7 +975,7 @@ func (s *MDStore) ShouldProcessSession(sessionPath string, content []byte) bool 
 	return s.sessionIndex.NeedsProcessing(sessionPath, contentHash)
 }
 
-// MarkSessionProcessed 标记 session 已处理
+// MarkSessionProcessed 标记 session 已处理并立即保存索引
 func (s *MDStore) MarkSessionProcessed(sessionPath string, content []byte, itemCount int) {
 	if s.sessionIndex == nil {
 		return
@@ -978,6 +983,11 @@ func (s *MDStore) MarkSessionProcessed(sessionPath string, content []byte, itemC
 
 	contentHash := HashContent(content)
 	s.sessionIndex.MarkProcessed(sessionPath, contentHash, itemCount)
+
+	// 立即保存索引，确保下次启动时不会重复处理
+	if err := s.sessionIndex.Save(); err != nil {
+		slog.Warn("Failed to save session index", "error", err)
+	}
 }
 
 // GetSessionIndex 获取 session 索引
