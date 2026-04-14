@@ -41,6 +41,12 @@ type WxComChannel struct {
 
 // NewWxComChannel 创建企业微信Channel
 func NewWxComChannel(msgBus *bus.MessageBus, cfg *WxComConfig) (*WxComChannel, error) {
+	return NewWxComChannelWithAccount(msgBus, cfg, "")
+}
+
+// NewWxComChannelWithAccount 创建企业微信Channel（带账号标识）
+// accountID 用于多账号场景，生成唯一 channel 名称：wxCom:accountID
+func NewWxComChannelWithAccount(msgBus *bus.MessageBus, cfg *WxComConfig, accountID string) (*WxComChannel, error) {
 	// 设置默认值
 	cfg.SetDefaults()
 
@@ -49,18 +55,24 @@ func NewWxComChannel(msgBus *bus.MessageBus, cfg *WxComConfig) (*WxComChannel, e
 		return nil, err
 	}
 
-	logger := slog.Default().With("channel", "wxCom", "bot_id", cfg.BotID)
+	// 生成唯一的 channel 名称
+	channelName := bus.ChannelWxCom
+	if accountID != "" {
+		channelName = bus.ChannelWxCom + ":" + accountID
+	}
+
+	logger := slog.Default().With("channel", channelName, "bot_id", cfg.BotID)
 
 	// 创建基础配置
 	baseConfig := channel.BaseChannelConfig{
 		Enabled:    cfg.Enabled,
 		AccountID:  cfg.BotID,
-		Name:       "wxCom",
+		Name:       channelName,
 		AllowedIDs: nil, // 企业微信通过后台配置权限
 	}
 
 	// 创建基础实现
-	base := channel.NewChannelBase(bus.ChannelWxCom, cfg.BotID, baseConfig, msgBus)
+	base := channel.NewChannelBase(channelName, cfg.BotID, baseConfig, msgBus)
 
 	// 创建WebSocket管理器
 	wsManager := NewWsManager(cfg, logger)

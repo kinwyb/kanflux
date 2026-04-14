@@ -45,8 +45,8 @@ func (f *WxComFactory) CreateFromConfig(ctx context.Context, cfg *config.Channel
 		// 转换配置
 		wxConfig := f.toWxComConfig(&accountCfg)
 
-		// 创建实例
-		ch, err := NewWxComChannel(common.Bus, wxConfig)
+		// 创建实例，传入账号标识用于生成唯一名称
+		ch, err := NewWxComChannelWithAccount(common.Bus, wxConfig, accountID)
 		if err != nil {
 			return nil, fmt.Errorf("account '%s': %w", accountID, err)
 		}
