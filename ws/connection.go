@@ -110,6 +110,8 @@ func (c *Connection) handleMessage(ctx context.Context, rawMsg []byte) {
 		c.handleSubscribe(wsMsg)
 	case MsgTypeHeartbeat:
 		c.handleHeartbeat(wsMsg)
+	case MsgTypeControl:
+		c.handleControl(wsMsg)
 	default:
 		c.sendError("Unknown message type: " + string(wsMsg.Type))
 	}
@@ -167,6 +169,73 @@ func (c *Connection) handleHeartbeat(wsMsg *WSMessage) {
 	}
 
 	ackMsg, err := NewWSMessage(MsgTypeHeartbeatAck, wsMsg.ID, ackPayload)
+	if err != nil {
+		return
+	}
+
+	msgBytes, err := ackMsg.Marshal()
+	if err != nil {
+		return
+	}
+
+	c.Send(msgBytes)
+}
+
+// handleControl 处理控制消息
+func (c *Connection) handleControl(wsMsg *WSMessage) {
+	var payload ControlPayload
+	if err := wsMsg.ParsePayload(&payload); err != nil {
+		c.logger.Error("Parse control payload error", "error", err)
+		c.sendControlAck(wsMsg.ID, payload.Action, false, "Invalid control payload")
+		return
+	}
+
+	switch payload.Action {
+	case ControlActionShutdown:
+		c.logger.Info("Received shutdown control message")
+		// 发送响应
+		c.sendControlAck(wsMsg.ID, ControlActionShutdown, true, "Gateway shutting down...")
+		// 触发服务关闭
+		c.server.TriggerShutdown()
+	case ControlActionStatus:
+		// 发送状态响应
+		status := c.server.GetStatus()
+		c.sendControlAckWithData(wsMsg.ID, ControlActionStatus, true, "Gateway is running", status)
+	default:
+		c.sendControlAck(wsMsg.ID, payload.Action, false, "Unknown control action: "+payload.Action)
+	}
+}
+
+// sendControlAck 发送控制消息响应
+func (c *Connection) sendControlAck(id, action string, success bool, message string) {
+	ackPayload := ControlAckPayload{
+		Action:  action,
+		Success: success,
+		Message: message,
+	}
+
+	ackMsg, err := NewWSMessage(MsgTypeControlAck, id, ackPayload)
+	if err != nil {
+		return
+	}
+
+	msgBytes, err := ackMsg.Marshal()
+	if err != nil {
+		return
+	}
+
+	c.Send(msgBytes)
+}
+
+// sendControlAckWithData 发送带数据的控制消息响应
+func (c *Connection) sendControlAckWithData(id, action string, success bool, message string, data map[string]interface{}) {
+	ackPayload := ControlAckPayload{
+		Action:  action,
+		Success: success,
+		Message: message,
+	}
+	// 使用 base payload 结构发送额外数据
+	ackMsg, err := NewWSMessage(MsgTypeControlAck, id, ackPayload)
 	if err != nil {
 		return
 	}

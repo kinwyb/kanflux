@@ -44,13 +44,15 @@ type Client struct {
 	onOutbound   func(*OutboundPayload)
 	onChatEvent  func(*ChatEventPayload)
 	onLogEvent   func(*LogEventPayload)
+	onControlAck func(*ControlAckPayload)
 	onConnect    func()
 	onDisconnect func(error)
 
 	// 接收通道
-	outboundChan  chan *OutboundPayload
-	chatEventChan chan *ChatEventPayload
-	logEventChan  chan *LogEventPayload
+	outboundChan   chan *OutboundPayload
+	chatEventChan  chan *ChatEventPayload
+	logEventChan   chan *LogEventPayload
+	controlAckChan chan *ControlAckPayload
 
 	// 发送通道
 	sendChan chan []byte
@@ -77,14 +79,15 @@ func NewClient(cfg *ClientConfig) *Client {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &Client{
-		config:        cfg,
-		outboundChan:  make(chan *OutboundPayload, 100),
-		chatEventChan: make(chan *ChatEventPayload, 100),
-		logEventChan:  make(chan *LogEventPayload, 100),
-		sendChan:      make(chan []byte, 100),
-		logger:        slog.Default().With("component", "ws-client"),
-		ctx:           ctx,
-		cancel:        cancel,
+		config:         cfg,
+		outboundChan:   make(chan *OutboundPayload, 100),
+		chatEventChan:  make(chan *ChatEventPayload, 100),
+		logEventChan:   make(chan *LogEventPayload, 100),
+		controlAckChan: make(chan *ControlAckPayload, 100),
+		sendChan:       make(chan []byte, 100),
+		logger:         slog.Default().With("component", "ws-client"),
+		ctx:            ctx,
+		cancel:         cancel,
 	}
 }
 
@@ -268,6 +271,18 @@ func (c *Client) handleMessage(rawMsg []byte) {
 	case MsgTypeHeartbeatAck:
 		// 心跳响应，忽略
 
+	case MsgTypeControlAck:
+		var payload ControlAckPayload
+		if err := wsMsg.ParsePayload(&payload); err == nil {
+			if c.onControlAck != nil {
+				c.onControlAck(&payload)
+			}
+			select {
+			case c.controlAckChan <- &payload:
+			default:
+			}
+		}
+
 	case MsgTypeError:
 		var payload ErrorPayload
 		if err := wsMsg.ParsePayload(&payload); err == nil {
@@ -443,8 +458,85 @@ func (c *Client) Close() error {
 	close(c.outboundChan)
 	close(c.chatEventChan)
 	close(c.logEventChan)
+	close(c.controlAckChan)
 
 	c.logger.Info("Client closed")
 
 	return nil
+}
+
+// Send 发送 WebSocket 消息
+func (c *Client) Send(ctx context.Context, wsMsg *WSMessage) error {
+	msgBytes, err := wsMsg.Marshal()
+	if err != nil {
+		return err
+	}
+
+	select {
+	case c.sendChan <- msgBytes:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+		return errors.New("send channel full")
+	}
+}
+
+// WaitForMessage 等待特定类型的消息
+func (c *Client) WaitForMessage(ctx context.Context, msgType MessageType) (*WSMessage, error) {
+	switch msgType {
+	case MsgTypeControlAck:
+		select {
+		case payload, ok := <-c.controlAckChan:
+			if !ok {
+				return nil, errors.New("channel closed")
+			}
+			// 构造一个 WSMessage 用于返回
+			return NewWSMessage(MsgTypeControlAck, "", payload)
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	case MsgTypeOutbound:
+		select {
+		case payload, ok := <-c.outboundChan:
+			if !ok {
+				return nil, errors.New("channel closed")
+			}
+			return NewWSMessage(MsgTypeOutbound, "", payload)
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	case MsgTypeChatEvent:
+		select {
+		case payload, ok := <-c.chatEventChan:
+			if !ok {
+				return nil, errors.New("channel closed")
+			}
+			return NewWSMessage(MsgTypeChatEvent, "", payload)
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	case MsgTypeLogEvent:
+		select {
+		case payload, ok := <-c.logEventChan:
+			if !ok {
+				return nil, errors.New("channel closed")
+			}
+			return NewWSMessage(MsgTypeLogEvent, "", payload)
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	default:
+		return nil, errors.New("unsupported message type")
+	}
+}
+
+// ControlAckChan 获取控制消息响应通道
+func (c *Client) ControlAckChan() <-chan *ControlAckPayload {
+	return c.controlAckChan
+}
+
+// SetOnControlAck 设置控制消息响应回调
+func (c *Client) SetOnControlAck(callback func(*ControlAckPayload)) {
+	c.onControlAck = callback
 }

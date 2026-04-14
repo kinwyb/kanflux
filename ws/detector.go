@@ -117,6 +117,29 @@ func (d *Detector) WaitForRunning(ctx context.Context, maxWait time.Duration) bo
 	}
 }
 
+// WaitForStopped 等待 WebSocket 服务停止
+// 返回是否成功停止
+func (d *Detector) WaitForStopped(ctx context.Context, maxWait time.Duration) bool {
+	timeout := time.NewTimer(maxWait)
+	defer timeout.Stop()
+
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-timeout.C:
+			return false
+		case <-ticker.C:
+			if !d.IsRunningWithContext(ctx) {
+				return true
+			}
+		}
+	}
+}
+
 // WaitForRunningWithConnect 等待服务启动并连接
 func (d *Detector) WaitForRunningWithConnect(ctx context.Context, maxWait time.Duration) (*Client, error) {
 	if !d.WaitForRunning(ctx, maxWait) {

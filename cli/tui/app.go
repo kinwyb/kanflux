@@ -148,6 +148,16 @@ func NewApp(ctx context.Context, cfg *Config) (*App, error) {
 		mu.Unlock()
 	})
 
+	// 设置日志事件回调
+	wsClient.SetOnLogEvent(func(payload *ws.LogEventPayload) {
+		event := convertPayloadToLogEvent(payload)
+		mu.Lock()
+		if model.IsReady() {
+			model.ReceiveLogEvent(event)
+		}
+		mu.Unlock()
+	})
+
 	// 4. 订阅当前 channel/chatID
 	wsClient.Subscribe([]string{bus.ChannelTUI}, []string{model.GetChatID()})
 
@@ -198,6 +208,10 @@ func StartService(ctx context.Context, cfg *Config) (*Service, error) {
 	// 创建 MessageBus
 	msgBus := bus.NewMessageBus(100)
 	slog.Debug("MessageBus 创建完成")
+
+	// 设置 slog 输出到 bus，以便日志能通过 WebSocket 广播
+	bus.SetupDefaultLogger(msgBus, slog.LevelDebug, "tui-service")
+	slog.Debug("slog 输出到 bus 设置完成")
 
 	// 创建 SessionManager
 	sessionMgr, err := session.NewManager(workspace)
@@ -382,6 +396,15 @@ func convertPayloadToChatEvent(p *ws.ChatEventPayload) *bus.ChatEvent {
 		Message:   p.Message,
 		Error:     p.Error,
 		Metadata:  p.Metadata,
+	}
+}
+
+func convertPayloadToLogEvent(p *ws.LogEventPayload) *bus.LogEvent {
+	return &bus.LogEvent{
+		ID:      p.ID,
+		Level:   p.Level,
+		Message: p.Message,
+		Source:  p.Source,
 	}
 }
 

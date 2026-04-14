@@ -71,6 +71,10 @@ type Server struct {
 
 	ctx         context.Context
 	cancel      context.CancelFunc
+
+	// shutdown callback
+	shutdownCallback func()
+	shutdownMu       sync.Mutex
 }
 
 // SubscriptionInfo 订阅信息
@@ -182,6 +186,36 @@ func (s *Server) IsRunning() bool {
 // GetConfig 获取配置
 func (s *Server) GetConfig() *ServerConfig {
 	return s.config
+}
+
+// SetShutdownCallback 设置关闭回调函数
+func (s *Server) SetShutdownCallback(callback func()) {
+	s.shutdownMu.Lock()
+	s.shutdownCallback = callback
+	s.shutdownMu.Unlock()
+}
+
+// TriggerShutdown 触发关闭
+func (s *Server) TriggerShutdown() {
+	s.shutdownMu.Lock()
+	callback := s.shutdownCallback
+	s.shutdownMu.Unlock()
+
+	if callback != nil {
+		go callback()
+	} else {
+		// 如果没有设置回调，直接取消 context
+		s.cancel()
+	}
+}
+
+// GetStatus 获取服务状态
+func (s *Server) GetStatus() map[string]interface{} {
+	return map[string]interface{}{
+		"running":         s.IsRunning(),
+		"connection_count": s.ConnectionCount(),
+		"url":              s.config.URL(),
+	}
 }
 
 // handleWebSocket 处理 WebSocket 连接请求

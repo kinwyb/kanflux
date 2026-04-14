@@ -15,12 +15,14 @@ const (
 	MsgTypeInbound   MessageType = "inbound"   // 入站消息
 	MsgTypeSubscribe MessageType = "subscribe" // 订阅请求
 	MsgTypeHeartbeat MessageType = "heartbeat" // 心跳
+	MsgTypeControl   MessageType = "control"   // 控制消息（如 shutdown）
 
 	// 服务端 -> 客户端
 	MsgTypeOutbound     MessageType = "outbound"     // 出站消息
 	MsgTypeChatEvent    MessageType = "chat_event"   // 聊天事件（流式）
 	MsgTypeLogEvent     MessageType = "log_event"    // 日志事件
 	MsgTypeHeartbeatAck MessageType = "heartbeat_ack" // 心跳响应
+	MsgTypeControlAck   MessageType = "control_ack"   // 控制消息响应
 	MsgTypeError        MessageType = "error"        // 错误消息
 )
 
@@ -108,6 +110,25 @@ type ErrorPayload struct {
 // HeartbeatPayload 心跳 payload
 type HeartbeatPayload struct {
 	Timestamp int64 `json:"timestamp"`
+}
+
+// ControlPayload 控制消息 payload
+type ControlPayload struct {
+	Action string                 `json:"action"` // shutdown, status, etc.
+	Data   map[string]interface{} `json:"data,omitempty"`
+}
+
+// 控制消息 Action 常量
+const (
+	ControlActionShutdown = "shutdown" // 关闭服务
+	ControlActionStatus   = "status"   // 获取状态
+)
+
+// ControlAckPayload 控制消息响应 payload
+type ControlAckPayload struct {
+	Action  string `json:"action"`
+	Success bool   `json:"success"`
+	Message string `json:"message,omitempty"`
 }
 
 // NewWSMessage 创建 WebSocket 消息

@@ -20,6 +20,18 @@ type Config struct {
 	Channels *ChannelsConfig `json:"channels"` // 通道配置
 	// WebSocket 配置
 	WebSocket *WebSocketConfig `json:"websocket"` // WebSocket 服务配置
+	// Log 配置
+	Log *LogConfig `json:"log"` // 日志配置
+}
+
+// LogConfig 日志配置
+type LogConfig struct {
+	Level    string `json:"level"`     // 日志级别: debug, info, warn, error
+	File     string `json:"file"`      // 日志文件路径（可选），为空则输出到 stdout
+	MaxSize  int    `json:"max_size"`  // 单个日志文件最大大小（MB），默认 100
+	MaxBackups int   `json:"max_backups"` // 保留的旧日志文件数量，默认 3
+	MaxAge   int    `json:"max_age"`   // 保留旧日志文件的最大天数，默认 7
+	Compress bool   `json:"compress"`  // 是否压缩旧日志文件，默认 false
 }
 
 // KnowledgeBaseConfig 公共知识库配置
