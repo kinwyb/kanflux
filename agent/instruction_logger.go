@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/cloudwego/eino/adk"
@@ -43,15 +44,27 @@ func (m *InstructionLoggerMiddleware) BeforeAgent(
 		}
 	}
 
+	// 手工替换 SessionValues 占位符
+	instruction := runCtx.Instruction
+	sessionValues := adk.GetSessionValues(ctx)
+	if sessionValues != nil {
+		for key, value := range sessionValues {
+			placeholder := "{" + key + "}"
+			if strings.Contains(instruction, placeholder) {
+				instruction = strings.ReplaceAll(instruction, placeholder, fmt.Sprintf("%v", value))
+			}
+		}
+	}
+
 	// 记录到 slog
 	slog.Debug("Agent Instruction",
 		"session_id", sessionID,
 		"agent_name", agentName,
-		"instruction_length", len(runCtx.Instruction))
+		"instruction_length", len(instruction))
 
 	// 保存到文件
-	if m.workspace != "" && runCtx.Instruction != "" && sessionID != "" {
-		m.saveInstructionToFile(sessionID, agentName, runCtx.Instruction)
+	if m.workspace != "" && instruction != "" && sessionID != "" {
+		m.saveInstructionToFile(sessionID, agentName, instruction)
 	}
 
 	return ctx, runCtx, nil

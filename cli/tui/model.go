@@ -77,7 +77,7 @@ type Model struct {
 	chatID     string
 
 	// WebSocket 客户端模式
-	wsClient   *ws.Client
+	wsClient *ws.Client
 
 	// Channel manager (standalone 模式)
 	channelMgr *channel.Manager
@@ -683,7 +683,7 @@ func (m *Model) sendMessage() tea.Cmd {
 	return func() tea.Msg {
 		if m.wsClient != nil {
 			// WebSocket 模式：通过 WebSocket 发送
-			err := m.wsClient.SendInbound(m.ctx, bus.ChannelTUI, "", "", m.chatID, content, nil, nil)
+			err := m.wsClient.SendInbound(m.ctx, bus.ChannelTUI, "tui", "", m.chatID, content, nil, nil)
 			if err != nil {
 				return AgentResponseMsg{Error: err}
 			}
