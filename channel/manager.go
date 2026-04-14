@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/kinwyb/kanflux/bus"
+	"github.com/kinwyb/kanflux/config"
 )
 
 // Manager 通道管理器
@@ -243,4 +244,46 @@ func (m *Manager) ChannelCount() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return len(m.channels)
+}
+
+// InitializeFromConfig 从配置自动初始化所有 Channel
+// 每个工厂从 ChannelsConfig 中提取自己需要的配置字段
+func (m *Manager) InitializeFromConfig(ctx context.Context, cfg *config.ChannelsConfig) error {
+	if cfg == nil {
+		return nil
+	}
+
+	common := &ChannelCommonParams{Bus: m.bus}
+
+	// 遍历所有已注册的工厂
+	for _, typeKey := range ListFactories() {
+		factory, ok := GetFactory(typeKey)
+		if !ok {
+			continue
+		}
+
+		// 工厂自行判断是否启用并提取配置
+		channels, err := factory.CreateFromConfig(ctx, cfg, common)
+		if err != nil {
+			return fmt.Errorf("failed to create channel '%s': %w", typeKey, err)
+		}
+
+		// 注册所有实例
+		for _, ch := range channels {
+			if err := m.Register(ch); err != nil {
+				return err
+			}
+		}
+	}
+
+	// 处理 ThreadBindings
+	for _, binding := range cfg.ThreadBindings {
+		if binding.TargetAgent != "" {
+			m.BindSession(binding.SessionKey, binding.TargetChannel, WithAgent(binding.TargetAgent), WithPriority(binding.Priority))
+		} else {
+			m.BindSession(binding.SessionKey, binding.TargetChannel, WithPriority(binding.Priority))
+		}
+	}
+
+	return nil
 }

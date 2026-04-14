@@ -504,12 +504,31 @@ func resolveRAGConfig(cfg *RAGConfigOptions) *RAGConfigOptions {
 
 // ChannelsConfig 通道配置
 type ChannelsConfig struct {
-	Telegram *TelegramChannelConfig `json:"telegram"`
-	WhatsApp *WhatsAppChannelConfig `json:"whatsapp"`
-	Feishu   *FeishuChannelConfig   `json:"feishu"`
-	CLI      *CLIChannelConfig      `json:"cli"`
-	// ThreadBinding 会话绑定配置
-	ThreadBindings []ThreadBindingConfig `json:"thread_bindings"`
+	Telegram       *TelegramChannelConfig         `json:"telegram"`
+	WhatsApp       *WhatsAppChannelConfig         `json:"whatsapp"`
+	Feishu         *FeishuChannelConfig           `json:"feishu"`
+	CLI            *CLIChannelConfig              `json:"cli"`
+	WxCom          *WxComChannelConfig            `json:"wxcom"`
+	ThreadBindings []ThreadBindingConfig          `json:"thread_bindings"`
+}
+
+// WxComChannelConfig 企业微信通道配置
+type WxComChannelConfig struct {
+	Enabled  bool                          `json:"enabled"`
+	Accounts map[string]WxComAccountConfig `json:"accounts"` // 所有账号从这里配置
+}
+
+// WxComAccountConfig 企业微信账号配置
+type WxComAccountConfig struct {
+	Enabled           bool     `json:"enabled"`
+	BotID             string   `json:"bot_id"`
+	Secret            string   `json:"secret"`
+	WSURL             string   `json:"ws_url,omitempty"`              // 可选，自定义 WebSocket 地址
+	HeartbeatInterval int      `json:"heartbeat_interval,omitempty"`  // 可选，心跳间隔(ms)
+	ReconnectInterval int      `json:"reconnect_interval,omitempty"`  // 可选，重连延迟(ms)
+	MaxReconnect      int      `json:"max_reconnect,omitempty"`       // 可选，最大重连次数
+	RequestTimeout    int      `json:"request_timeout,omitempty"`     // 可选，请求超时(ms)
+	AllowedIDs        []string `json:"allowed_ids"`
 }
 
 // BaseChannelConfig 通道基础配置
