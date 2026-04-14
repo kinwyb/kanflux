@@ -315,7 +315,6 @@ func NewModelWithWS(ctx context.Context, cfg *Config, wsClient *ws.Client) (*Mod
 func (m *Model) Init() tea.Cmd {
 	return tea.Batch(
 		textinput.Blink,
-		m.waitForResponse(),
 		m.listenLogs(),
 		m.listenChatEvents(),
 		m.listenOutbound(),
@@ -478,7 +477,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// 如果当前处于等待确认状态，不要重置状态
 		// 中断时 manager 会发送 OutboundMessage，但我们已经通过 ChatEventMsg 处理了
 		if m.state == StateWaitingApproval {
-			return m, m.waitForResponse()
+			return m, m.listenOutbound()
 		}
 		m.state = StateIdle
 		m.status = "就绪"
@@ -517,7 +516,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.updateViewports()
-		return m, m.waitForResponse()
+		return m, m.listenOutbound()
 
 	case StreamMsg:
 		if msg.IsThinking {
@@ -750,13 +749,6 @@ func (m *Model) sendApproval(approved bool) tea.Cmd {
 		}
 
 		// 响应会通过 listenOutbound 接收，不需要在这里等待
-		return nil
-	}
-}
-
-// waitForResponse 等待响应
-func (m *Model) waitForResponse() tea.Cmd {
-	return func() tea.Msg {
 		return nil
 	}
 }
