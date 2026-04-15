@@ -57,7 +57,13 @@ type OutboundPayload struct {
 	ReasoningContent string                 `json:"reasoning_content,omitempty"`
 	Media            []MediaPayload         `json:"media,omitempty"`
 	ReplyTo          string                 `json:"reply_to,omitempty"`
-	Metadata         map[string]interface{} `json:"metadata,omitempty"`
+	// 流式状态字段
+	IsStreaming bool `json:"is_streaming"` // 是否流式发送
+	IsThinking  bool `json:"is_thinking"`  // 是否为思考内容
+	IsFinal     bool `json:"is_final"`     // 是否最终消息
+	ChunkIndex  int  `json:"chunk_index"`  // chunk序号
+	Error       string                 `json:"error,omitempty"`
+	Metadata    map[string]interface{} `json:"metadata,omitempty"`
 }
 
 // ChatEventPayload 聊天事件 payload
@@ -197,6 +203,11 @@ func ConvertOutboundToPayload(msg *OutboundMessage) *OutboundPayload {
 		ReasoningContent: msg.ReasoningContent,
 		Media:            convertMediaToPayload(msg.Media),
 		ReplyTo:          msg.ReplyTo,
+		IsStreaming:      msg.IsStreaming,
+		IsThinking:       msg.IsThinking,
+		IsFinal:          msg.IsFinal,
+		ChunkIndex:       msg.ChunkIndex,
+		Error:            msg.Error,
 		Metadata:         msg.Metadata,
 	}
 }
@@ -273,6 +284,11 @@ func ConvertPayloadToOutbound(p *OutboundPayload) *OutboundMessage {
 		ReasoningContent: p.ReasoningContent,
 		Media:            convertPayloadToMedia(p.Media),
 		ReplyTo:          p.ReplyTo,
+		IsStreaming:      p.IsStreaming,
+		IsThinking:       p.IsThinking,
+		IsFinal:          p.IsFinal,
+		ChunkIndex:       p.ChunkIndex,
+		Error:            p.Error,
 		Metadata:         p.Metadata,
 		Timestamp:        time.Now(),
 	}
@@ -369,8 +385,14 @@ type OutboundMessage struct {
 	ReasoningContent string
 	Media            []Media
 	ReplyTo          string
-	Metadata         map[string]interface{}
-	Timestamp        time.Time
+	// 流式状态字段
+	IsStreaming bool // 是否流式发送
+	IsThinking  bool // 是否为思考内容
+	IsFinal     bool // 是否最终消息
+	ChunkIndex  int  // chunk序号
+	Error       string
+	Metadata    map[string]interface{}
+	Timestamp   time.Time
 }
 
 // ChatEvent 聊天事件（本地定义，避免导入 bus）

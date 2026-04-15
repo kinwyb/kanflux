@@ -139,17 +139,21 @@ func (t *TUIChannel) SendStream(ctx context.Context, chatID string, stream <-cha
 
 			// 转换为 OutboundMessage 发送给 model
 			outbound := &bus.OutboundMessage{
-				Channel:    bus.ChannelTUI,
-				ChatID:     chatID,
-				Content:    msg.Content, // delta 模式下是增量内容
-				IsStreaming: msg.IsFinal == false,
-				IsThinking: msg.IsThinking,
-				IsFinal:    msg.IsFinal,
-				ChunkIndex: msg.ChunkIndex,
-				Error:      msg.Error,
+				Channel:     bus.ChannelTUI,
+				ChatID:      chatID,
+				Content:     msg.Content, // delta 模式下是增量内容
+				IsStreaming: !msg.IsFinal,
+				IsThinking:  msg.IsThinking,
+				IsFinal:     msg.IsFinal,
+				ChunkIndex:  msg.ChunkIndex,
+				Error:       msg.Error,
 			}
 
-			return t.Send(ctx, outbound)
+			// 发送消息，不要返回，继续处理后续消息
+			if err := t.Send(ctx, outbound); err != nil {
+				return err
+			}
+
 		case <-ctx.Done():
 			return ctx.Err()
 		}

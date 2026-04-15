@@ -379,6 +379,11 @@ func convertPayloadToOutbound(p *ws.OutboundPayload) *bus.OutboundMessage {
 		ReasoningContent: p.ReasoningContent,
 		Media:            convertPayloadMediaToBus(p.Media),
 		ReplyTo:          p.ReplyTo,
+		IsStreaming:      p.IsStreaming,
+		IsThinking:       p.IsThinking,
+		IsFinal:          p.IsFinal,
+		ChunkIndex:       p.ChunkIndex,
+		Error:            p.Error,
 		Metadata:         p.Metadata,
 	}
 }

@@ -335,6 +335,11 @@ func (s *Server) broadcastOutbound(msg *bus.OutboundMessage) {
 		ReasoningContent: msg.ReasoningContent,
 		Media:            convertBusMediaToPayload(msg.Media),
 		ReplyTo:          msg.ReplyTo,
+		IsStreaming:      msg.IsStreaming,
+		IsThinking:       msg.IsThinking,
+		IsFinal:          msg.IsFinal,
+		ChunkIndex:       msg.ChunkIndex,
+		Error:            msg.Error,
 		Metadata:         msg.Metadata,
 	})
 

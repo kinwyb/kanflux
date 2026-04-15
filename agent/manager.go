@@ -811,8 +811,23 @@ func (m *Manager) handleAgentEvent(ctx context.Context, msg *bus.InboundMessage,
 		}
 
 	case EventInterrupt:
-		// 中断事件（状态通知）
-		m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateInterrupt, seq, nil, msg.Metadata)
+		// 合并入站消息 metadata 和事件 metadata（interrupt_type）
+		mergedMeta := make(map[string]interface{})
+		if msg.Metadata != nil {
+			for k, v := range msg.Metadata {
+				mergedMeta[k] = v
+			}
+		}
+		if event.Metadata != nil {
+			for k, v := range event.Metadata {
+				mergedMeta[k] = v
+			}
+		}
+		// 添加 interrupt 内容到 metadata（让 ChatEvent 携带提示内容）
+		if event.Message != nil && event.Message.Content != "" {
+			mergedMeta["interrupt_content"] = event.Message.Content
+		}
+		m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateInterrupt, seq, nil, mergedMeta)
 	}
 }
 

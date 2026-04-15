@@ -41,8 +41,13 @@ type (
 		ReasoningContent string // 思考/推理内容
 		Error            error
 		Metadata         map[string]interface{} // 元数据，可携带命令返回的信息如新 chatID
+		// 流式状态字段
+		IsStreaming bool   // 是否流式消息
+		IsFinal     bool   // 是否最终消息
+		IsThinking  bool   // 是否思考内容
+		ChunkIndex  int    // chunk 序号
 	}
-	// StreamMsg 流式消息
+	// StreamMsg 流式消息（WebSocket 模式使用）
 	StreamMsg struct {
 		Content    string
 		IsFinal    bool
@@ -396,6 +401,10 @@ func (m *Model) listenOutbound() tea.Cmd {
 					Content:          msg.Content,
 					ReasoningContent: msg.ReasoningContent,
 					Metadata:         msg.Metadata,
+					IsStreaming:      msg.IsStreaming,
+					IsFinal:          msg.IsFinal,
+					IsThinking:       msg.IsThinking,
+					ChunkIndex:       msg.ChunkIndex,
 				}
 			}
 		}
@@ -476,11 +485,26 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case AgentResponseMsg:
-		// 如果当前处于等待确认状态，不要重置状态
-		// 中断时 manager 会发送 OutboundMessage，但我们已经通过 ChatEventMsg 处理了
+		// 流式消息处理
+		if msg.IsStreaming && !msg.IsFinal {
+			// 流式增量更新
+			if msg.IsThinking {
+				m.status = fmt.Sprintf("[%s] 思考中...", m.currentAgentName)
+				m.currentThinking += msg.Content // 累加思考内容
+			} else {
+				m.status = fmt.Sprintf("[%s] 生成中...", m.currentAgentName)
+				m.currentAIMsg += msg.Content // 累加普通内容（delta 模式）
+			}
+			m.updateViewports()
+			return m, m.listenOutbound()
+		}
+
+		// 如果当前处于等待确认状态，忽略普通响应消息
 		if m.state == StateWaitingApproval {
 			return m, m.listenOutbound()
 		}
+
+		// 最终消息处理
 		m.state = StateIdle
 		m.status = "就绪"
 		// 使用流式累积的思考内容，或从响应中获取
@@ -506,8 +530,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.addMessage("assistant", m.currentAIMsg, "")
 			m.addLog("error", errMsg)
 		} else {
-			m.currentAIMsg = msg.Content
-			m.addMessage("assistant", msg.Content, thinkingContent)
+			// 最终消息：使用累积内容或 msg.Content
+			finalContent := m.currentAIMsg
+			if finalContent == "" {
+				finalContent = msg.Content
+			}
+			m.currentAIMsg = ""
+			m.addMessage("assistant", finalContent, thinkingContent)
 		}
 
 		// 处理元数据，如新 chatID
@@ -571,7 +600,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.addLog("error", fmt.Sprintf("[%s] 错误: %s", m.currentAgentName, msg.Error))
 		case bus.ChatEventStateInterrupt:
 			m.status = fmt.Sprintf("[%s] 等待确认", m.currentAgentName)
-			// 检查中断类型
+			// 检查中断类型和内容
 			if msg.Metadata != nil {
 				if interruptType, ok := msg.Metadata["interrupt_type"].(string); ok {
 					m.interruptType = interruptType
@@ -579,6 +608,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if interruptType == bus.InterruptTypeYesNo {
 						m.state = StateWaitingApproval
 					}
+				}
+				// 从 metadata 获取中断提示内容
+				if interruptContent, ok := msg.Metadata["interrupt_content"].(string); ok {
+					m.interruptContent = interruptContent
 				}
 			}
 			m.addLog("warn", fmt.Sprintf("[%s] 等待确认", m.currentAgentName))
@@ -726,24 +759,33 @@ func (m *Model) sendApproval(approved bool) tea.Cmd {
 
 	// 发送到Agent（响应会通过 channel manager 分发回来）
 	return func() tea.Msg {
-		inMsg := bus.InboundMessage{
-			ID:        fmt.Sprintf("%d", time.Now().UnixNano()),
-			Channel:   bus.ChannelTUI,
-			AccountID: "tui",
-			SenderID:  "",
-			ChatID:    m.chatID,
-			Content:   content,
-			Media:     nil,
-			Metadata:  nil,
-			Timestamp: time.Now(),
+		if m.wsClient != nil {
+			// WebSocket 模式：通过 WebSocket 发送
+			err := m.wsClient.SendInbound(m.ctx, bus.ChannelTUI, "tui", "", m.chatID, content, nil, nil)
+			if err != nil {
+				return AgentResponseMsg{Error: err}
+			}
+		} else if m.bus != nil {
+			// Standalone 模式：通过 bus 发送
+			inMsg := bus.InboundMessage{
+				ID:            fmt.Sprintf("%d", time.Now().UnixNano()),
+				Channel:       bus.ChannelTUI,
+				AccountID:     "tui",
+				SenderID:      "",
+				ChatID:        m.chatID,
+				Content:       content,
+				StreamingMode: bus.StreamingModeDelta, // TUI 使用 delta 模式
+				Media:         nil,
+				Metadata:      nil,
+				Timestamp:     time.Now(),
+			}
+
+			err := m.bus.PublishInbound(m.ctx, &inMsg)
+			if err != nil {
+				return AgentResponseMsg{Error: err}
+			}
 		}
 
-		err := m.bus.PublishInbound(m.ctx, &inMsg)
-		if err != nil {
-			return AgentResponseMsg{Error: err}
-		}
-
-		// 响应会通过 listenOutbound 接收，不需要在这里等待
 		return nil
 	}
 }
