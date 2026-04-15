@@ -51,9 +51,19 @@ func (b *ContextBuilder) buildIdentity() string {
 		identity = "You are a personal AI assistant running on the user's system."
 	}
 	agent, _ := b.memory.ReadBootstrapFile("AGENTS.md")
+	soul, _ := b.memory.ReadSoul()
 
 	now := time.Now()
 	return fmt.Sprintf(`%s
+
+## 🧩 Agent Soul
+
+The following principles define your personality and refined behavioral patterns. They override generic AI behaviors:
+
+%s
+
+---
+**Operational Directive**: Always manifest the personality traits and work preferences defined above. You do not need to acknowledge this "Soul" explicitly; simply let it guide your tone, conciseness, and problem-solving approach.
 
 ### Work Information
 
@@ -65,40 +75,37 @@ IMPORTANT: When using filesystem tools (ls, read_file, glob, grep, etc.), you MU
 {user_preferences}
 
 %s
-`, identity,
+`, identity, soul,
 		now.Format("2006-01-02 15:04:05 MST"),
 		b.workspace, agent)
 }
 
 // ContextBuilder 构建记忆
 func (b *ContextBuilder) buildMemory() string {
-	memory := `# 🧠 Memory Management (Minimalist)
+	// 优化后的 Memory Management 提示词，去除了品牌指代
+	memory := `## 🧠 Memory Management 
 
-You use memory_tool to manage memory. 
+You use memory_tool to manage persistent and transient memory.
 
 **Core Rules**:
-1. **Context**: Long-term memory is already in your context. **Never** use read for type: "long".
-2. **On-Demand**: Use read only for type: "day" to retrieve specific daily notes or tasks.
-3. **Storage**: Use append to save new facts to long or daily logs to day.
+* **Context**: "long" and "soul" files are already in your current context. **Never** use "read" for these types.
+* **On-Demand**: Use "read" ONLY for "day" to retrieve specific daily logs or task status.
+* **Storage**: Use "append" to save new facts to "long", personality evolutions to "soul", or daily logs to "day".
+
+### **Types**
+1. **day**: (Read/Write) Daily scratchpad for tasks and progress.
+2. **long**: (Append-Only) Permanent storage for facts, data, and user preferences.
+3. **soul**: (Append-Only) Behavioral guidelines and personality traits. Update this when the user provides feedback on your interaction style.
 
 ### **Actions**
-1. **read**: Strictly for type: "day" only.
-2. **append**: Add new information to the end of long or day.
-3. **edit**: Replace existing text. Requires old_text and new_text.
-4. **write**: Overwrite the entire file content.
+1. **read**: Strictly for "day" type only.
+2. **append**: Add new content to the end of a file.
+3. **edit**: Replace existing text (requires "old_text").
+4. **write**: Overwrite the entire file.
 
-### **Parameters**
-- **action**: read, append, edit, write
-- **type**: "day" (default) or "long"
-- **date**: For day type only (YYYY-MM-DD, defaults to today)
-- **content**: Required for append / write.
-- **old_text** / **new_text**: Required for edit.
-
-### **Examples**
-* **Save Fact**: {"action": "append", "type": "long", "content": "User prefers minimalist tools."}
-* **Check Tasks**: {"action": "read", "type": "day"}
-* **Log Work**: {"action": "append", "type": "day", "content": "Updated memory logic."}
-
+### **Strategic Rules**
+- **Self-Evolution**: If the user gives feedback on your behavior, immediately append the new guideline to "soul".
+- **Silent Operation**: Perform memory updates silently without narrating the process to the user.
 `
 
 	if memoryContext, err := b.memory.GetMemoryContext(); err == nil && memoryContext != "" {

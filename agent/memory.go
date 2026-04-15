@@ -153,6 +153,57 @@ func (m *MemoryStore) WriteDay(date, content string) error {
 	return os.WriteFile(path, []byte(content), 0644)
 }
 
+// soulFilePath 返回 SOUL.md 文件路径
+func (m *MemoryStore) soulFilePath() string {
+	return filepath.Join(m.baseDIR, "SOUL.md")
+}
+
+// ReadSoul 读取 soul 记忆
+func (m *MemoryStore) ReadSoul() (string, error) {
+	path := m.soulFilePath()
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+
+	return string(content), nil
+}
+
+// WriteSoul 写入 soul 记忆（覆盖整个文件）
+func (m *MemoryStore) WriteSoul(content string) error {
+	path := m.soulFilePath()
+	return os.WriteFile(path, []byte(content), 0644)
+}
+
+// AppendSoul 追加到 soul 记忆
+func (m *MemoryStore) AppendSoul(content string) error {
+	path := m.soulFilePath()
+
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	// 如果文件不为空，添加换行
+	if info, err := file.Stat(); err == nil && info.Size() > 0 {
+		if _, err := file.WriteString("\n\n"); err != nil {
+			return err
+		}
+	}
+
+	// 写入内容
+	if _, err := file.WriteString(content); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 // ReplaceLongTerm 替换长期记忆（WriteLongTerm 的别名）
 func (m *MemoryStore) ReplaceLongTerm(content string) error {
 	return m.WriteLongTerm(content)
