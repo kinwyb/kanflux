@@ -27,6 +27,12 @@ import (
 // 将入站消息转换成指定类型的恢复参数
 type ResumeParamConverter func(msg *bus.InboundMessage, interruptInfo *InterruptInfo) (any, error)
 
+// streamAccumulator 流式内容累积器（内部使用）
+type streamAccumulator struct {
+	content  string // 累积的普通内容
+	thinking string // 累积的思考内容
+}
+
 // Manager 管理多个 Agent 实例
 type Manager struct {
 	agents           map[string]*Agent // agentID -> Agent
@@ -38,6 +44,9 @@ type Manager struct {
 	converterMu      sync.RWMutex
 	commands         map[string]CommandHandler // 命令注册表
 	commandsMu       sync.RWMutex
+	// 流式内容累积器（按入站消息ID标识，避免同一chatID多条消息混淆）
+	accumulators   map[string]*streamAccumulator // inboundMsgID -> accumulator
+	accumulatorsMu sync.Mutex
 }
 
 // NewManager 创建 Agent 管理器
@@ -48,6 +57,7 @@ func NewManager(msgBus *bus.MessageBus, sessionMgr *session.Manager) *Manager {
 		sessionMgr:       sessionMgr,
 		resumeConverters: make(map[reflect.Type]ResumeParamConverter),
 		commands:         make(map[string]CommandHandler),
+		accumulators:     make(map[string]*streamAccumulator),
 	}
 
 	// 注册 ApprovalResult 类型的转换器
@@ -533,7 +543,7 @@ func (m *Manager) RouteInbound(ctx context.Context, msg *bus.InboundMessage) err
 
 			// 如果有错误，发布错误事件
 			if result.Error != nil {
-				m.publishChatEvent(ctx, msg.Channel, msg.ChatID, "command", bus.ChatEventStateError, result.Error.Error(), 0)
+				m.publishChatEvent(ctx, msg.Channel, msg.ChatID, "command", bus.ChatEventStateError, 0, nil, msg.Metadata)
 			}
 
 			// 如果需要回复，发布到 outbound
@@ -557,6 +567,7 @@ func (m *Manager) RouteInbound(ctx context.Context, msg *bus.InboundMessage) err
 					Content:   result.Content,
 					Media:     result.Media,
 					ReplyTo:   msg.ID,
+					IsFinal:   true, // 命令回复是完整消息
 					Timestamp: time.Now(),
 					Metadata:  outboundMeta,
 				}
@@ -673,6 +684,7 @@ func (m *Manager) handleInboundMessage(ctx context.Context, msg *bus.InboundMess
 				ChatID:    msg.ChatID,
 				Content:   info.(string),
 				ReplyTo:   msg.ID,
+				IsFinal:   true,
 				Timestamp: time.Now(),
 			}
 			if err = m.bus.PublishOutbound(ctx, outbound); err != nil {
@@ -681,14 +693,15 @@ func (m *Manager) handleInboundMessage(ctx context.Context, msg *bus.InboundMess
 			return nil
 		}
 
-		// 发布错误事件
-		m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateError, err.Error(), eventSeq)
+		// 发布错误事件（状态通知）
+		m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateError, eventSeq, nil, msg.Metadata)
 		// 同时发布 OutboundMessage，确保调用方能收到响应不会卡住
 		outbound := &bus.OutboundMessage{
 			Channel:   msg.Channel,
 			ChatID:    msg.ChatID,
 			Content:   "",
 			ReplyTo:   msg.ID,
+			IsFinal:   true,
 			Timestamp: time.Now(),
 			Metadata: map[string]interface{}{
 				"error": err.Error(),
@@ -707,6 +720,7 @@ func (m *Manager) handleInboundMessage(ctx context.Context, msg *bus.InboundMess
 			ChatID:    msg.ChatID,
 			Content:   "",
 			ReplyTo:   msg.ID,
+			IsFinal:   true,
 			Timestamp: time.Now(),
 			Metadata:  msg.Metadata,
 		}
@@ -730,26 +744,24 @@ func (m *Manager) handleInboundMessage(ctx context.Context, msg *bus.InboundMess
 
 	response := responses[len(responses)-1]
 
-	// 发布聊天事件结束
-	m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateFinal, response.Content, eventSeq)
-
-	// 提取响应中的媒体内容
-	responseMedia := extractMediaFromMessage(response)
-
-	// 发布到总线
-	outbound := &bus.OutboundMessage{
-		Channel:          msg.Channel,
-		ChatID:           msg.ChatID,
-		Content:          response.Content,
-		ReasoningContent: response.ReasoningContent, // 提取思考内容
-		Media:            responseMedia,
-		ReplyTo:          msg.ID,
-		Timestamp:        time.Now(),
-		Metadata:         msg.Metadata,
-	}
-
-	if err = m.bus.PublishOutbound(ctx, outbound); err != nil {
-		return err
+	// 非流式模式：发送完整 OutboundMessage
+	// 流式模式：内容由 handleAgentEvent 通过 OutboundMessage 发送，这里不做处理
+	if !agent.cfg.Streaming {
+		responseMedia := extractMediaFromMessage(response)
+		outbound := &bus.OutboundMessage{
+			Channel:          msg.Channel,
+			ChatID:           msg.ChatID,
+			Content:          response.Content,
+			ReasoningContent: response.ReasoningContent,
+			Media:            responseMedia,
+			ReplyTo:          msg.ID,
+			IsFinal:          true,
+			Timestamp:        time.Now(),
+			Metadata:         msg.Metadata,
+		}
+		if err = m.bus.PublishOutbound(ctx, outbound); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -757,75 +769,55 @@ func (m *Manager) handleInboundMessage(ctx context.Context, msg *bus.InboundMess
 
 // handleAgentEvent 处理 Agent 事件，转发到消息总线
 func (m *Manager) handleAgentEvent(ctx context.Context, msg *bus.InboundMessage, agentName string, event *Event, seq int) {
-	// 构建基础 metadata，包含入站消息的 req_id 用于回复透传
-	baseMetadata := make(map[string]interface{})
-	if msg.Metadata != nil {
-		// 复制入站消息的 metadata，特别是 req_id 用于 wxcom channel 回复
-		for k, v := range msg.Metadata {
-			baseMetadata[k] = v
-		}
-	}
-
 	switch event.Type {
 	case EventMessageStart:
-		//m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateDelta, "", seq, baseMetadata)
+		// 发布 start 事件（状态通知）
+		m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateStart, seq, nil, msg.Metadata)
+
 	case EventMessageUpdate:
 		if event.Message != nil {
-			if event.Message.ReasoningContent != "" {
-				m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateThinking, event.Message.ReasoningContent, seq, baseMetadata)
-			} else {
-				m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateDelta, event.Message.Content, seq, baseMetadata)
-			}
+			// 流式内容通过 OutboundMessage 发送（根据 StreamingMode 决定增量或累积）
+			m.publishStreamOutbound(ctx, msg, agentName, event, seq)
 		}
+
 	case EventMessageEnd:
 		if event.Message != nil {
-			m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateFinal, event.Message.Content, seq, baseMetadata)
+			// 流结束，发送最终 OutboundMessage
+			m.publishFinalOutbound(ctx, msg, agentName, event, seq)
 		}
+		// 发布 complete 事件（状态通知）
+		m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateComplete, seq, nil, msg.Metadata)
+
 	case EventToolStart:
 		if event.Message != nil && len(event.Message.ToolCalls) > 0 {
-			toolInfo := map[string]interface{}{
-				"tool_name": event.Message.ToolCalls[0].Function.Name,
-				"tool_id":   event.Message.ToolCalls[0].ID,
-				"args":      event.Message.ToolCalls[0].Function.Arguments,
+			// 工具调用开始通知（纯状态事件）
+			toolInfo := &bus.ToolEventInfo{
+				Name:      event.Message.ToolCalls[0].Function.Name,
+				ID:        event.Message.ToolCalls[0].ID,
+				Arguments: event.Message.ToolCalls[0].Function.Arguments,
+				IsStart:   true,
 			}
-			// 合并 baseMetadata 和 toolInfo
-			mergedMeta := make(map[string]interface{})
-			for k, v := range baseMetadata {
-				mergedMeta[k] = v
-			}
-			mergedMeta["tool_info"] = toolInfo
-			m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateTool, fmt.Sprintf("%v", toolInfo), seq, mergedMeta)
+			m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateTool, seq, toolInfo, msg.Metadata)
 		}
+
 	case EventToolEnd:
 		if event.Message != nil {
-			toolInfo := map[string]interface{}{
-				"tool_result": event.Message.Content,
+			// 工具调用结束通知（纯状态事件）
+			toolInfo := &bus.ToolEventInfo{
+				Result:  event.Message.Content,
+				IsStart: false,
 			}
-			// 合并 baseMetadata 和 toolInfo
-			mergedMeta := make(map[string]interface{})
-			for k, v := range baseMetadata {
-				mergedMeta[k] = v
-			}
-			mergedMeta["tool_info"] = toolInfo
-			m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateTool, fmt.Sprintf("%v", toolInfo), seq, mergedMeta)
+			m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateTool, seq, toolInfo, msg.Metadata)
 		}
+
 	case EventInterrupt:
-		// 合并 baseMetadata 和 event.Metadata
-		mergedMeta := make(map[string]interface{})
-		for k, v := range baseMetadata {
-			mergedMeta[k] = v
-		}
-		if event.Metadata != nil {
-			for k, v := range event.Metadata {
-				mergedMeta[k] = v
-			}
-		}
-		m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateInterrupt, event.Message.Content, seq, mergedMeta)
+		// 中断事件（状态通知）
+		m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateInterrupt, seq, nil, msg.Metadata)
 	}
 }
 
 // publishChatEvent 发布聊天事件到总线
-func (m *Manager) publishChatEvent(ctx context.Context, channel, chatID, agentName, state string, content string, seq int, metadata ...interface{}) {
+func (m *Manager) publishChatEvent(ctx context.Context, channel, chatID, agentName, state string, seq int, toolInfo *bus.ToolEventInfo, metadata ...interface{}) {
 	var meta interface{}
 	if len(metadata) > 0 {
 		meta = metadata[0]
@@ -835,13 +827,119 @@ func (m *Manager) publishChatEvent(ctx context.Context, channel, chatID, agentNa
 		ChatID:    chatID,
 		AgentName: agentName,
 		State:     state,
-		Content:   content,
 		Seq:       seq,
+		ToolInfo:  toolInfo,
 		Timestamp: time.Now(),
 		Metadata:  meta,
 	}
 
 	_ = m.bus.PublishChatEvent(ctx, event)
+}
+
+// getOrCreateAccumulator 获取或创建指定 chatID 的累积器
+// getOrCreateAccumulator 获取或创建指定消息ID的累积器
+func (m *Manager) getOrCreateAccumulator(msgID string) *streamAccumulator {
+	m.accumulatorsMu.Lock()
+	defer m.accumulatorsMu.Unlock()
+
+	if acc, ok := m.accumulators[msgID]; ok {
+		return acc
+	}
+
+	acc := &streamAccumulator{}
+	m.accumulators[msgID] = acc
+	return acc
+}
+
+// removeAccumulator 移除指定消息ID的累积器
+func (m *Manager) removeAccumulator(msgID string) {
+	m.accumulatorsMu.Lock()
+	defer m.accumulatorsMu.Unlock()
+	delete(m.accumulators, msgID)
+}
+
+// publishStreamOutbound 发布流式 OutboundMessage
+// 根据 StreamingMode 决定发送增量或累积内容
+func (m *Manager) publishStreamOutbound(ctx context.Context, msg *bus.InboundMessage, agentName string, event *Event, seq int) {
+	// 获取累积模式配置
+	accumulateMode := msg.StreamingMode == bus.StreamingModeAccumulate
+
+	// 累积内容（使用入站消息ID作为标识，避免同chatID多条消息混淆）
+	acc := m.getOrCreateAccumulator(msg.ID)
+
+	var content, reasoning string
+	if event.Message.ReasoningContent != "" {
+		acc.thinking += event.Message.ReasoningContent
+		if accumulateMode {
+			reasoning = acc.thinking
+			content = acc.content
+		} else {
+			reasoning = event.Message.ReasoningContent
+			content = ""
+		}
+	} else {
+		acc.content += event.Message.Content
+		if accumulateMode {
+			content = acc.content
+			reasoning = acc.thinking
+		} else {
+			content = event.Message.Content
+			reasoning = ""
+		}
+	}
+
+	// 复制入站消息 metadata
+	outboundMeta := make(map[string]interface{})
+	if msg.Metadata != nil {
+		for k, v := range msg.Metadata {
+			outboundMeta[k] = v
+		}
+	}
+
+	outbound := &bus.OutboundMessage{
+		Channel:          msg.Channel,
+		ChatID:           msg.ChatID,
+		Content:          content,
+		ReasoningContent: reasoning,
+		IsStreaming:      true,
+		IsThinking:       event.Message.ReasoningContent != "",
+		IsFinal:          false,
+		ChunkIndex:       seq,
+		ReplyTo:          msg.ID,
+		Timestamp:        time.Now(),
+		Metadata:         outboundMeta,
+	}
+	_ = m.bus.PublishOutbound(ctx, outbound)
+}
+
+// publishFinalOutbound 发布最终流式 OutboundMessage
+func (m *Manager) publishFinalOutbound(ctx context.Context, msg *bus.InboundMessage, agentName string, event *Event, seq int) {
+	// 清理累积器（使用入站消息ID）
+	m.removeAccumulator(msg.ID)
+
+	// 复制入站消息 metadata
+	outboundMeta := make(map[string]interface{})
+	if msg.Metadata != nil {
+		for k, v := range msg.Metadata {
+			outboundMeta[k] = v
+		}
+	}
+
+	// 最终消息直接使用完整内容
+	outbound := &bus.OutboundMessage{
+		Channel:          msg.Channel,
+		ChatID:           msg.ChatID,
+		Content:          event.Message.Content,
+		ReasoningContent: event.Message.ReasoningContent,
+		IsStreaming:      true,
+		IsFinal:          true,
+		IsThinking:       event.Message.ReasoningContent != "",
+		ChunkIndex:       seq,
+		ReplyTo:          msg.ID,
+		Timestamp:        time.Now(),
+		Metadata:         outboundMeta,
+	}
+	_ = m.bus.PublishOutbound(ctx, outbound)
 }
 
 // generateID 生成唯一ID

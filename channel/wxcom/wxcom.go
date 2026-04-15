@@ -31,9 +31,6 @@ type WxComChannel struct {
 	streamIDs   map[string]string // chatID -> streamID
 	streamIDsMu sync.Mutex
 
-	// ChatEvent 转换器（累积模式：发送完整内容而非增量）
-	transformer *bus.ChatEventTransformer
-
 	// logger
 	logger *slog.Logger
 
@@ -89,7 +86,6 @@ func NewWxComChannelWithAccount(msgBus *bus.MessageBus, cfg *WxComConfig, accoun
 		handler:     handler,
 		config:      cfg,
 		streamIDs:   make(map[string]string),
-		transformer: bus.NewChatEventTransformer(bus.TransformerModeAccumulate), // 企业微信使用累积模式
 		logger:      logger,
 	}, nil
 }
@@ -192,12 +188,13 @@ func (c *WxComChannel) handleEvent(frame *WsFrame) {
 		// 发送欢迎语 (可选)
 		// 需要在5秒内回复，这里不自动回复，由Agent处理
 		inbound := &bus.InboundMessage{
-			Channel:   c.Name(), // 使用 channel 自己的名称（支持多账号场景）
-			AccountID: c.config.BotID,
-			SenderID:  event.UserID,
-			ChatID:    event.UserID, // 单聊场景，chatID = userID
-			Content:   "", // 空内容表示进入会话事件
-			Timestamp: event.EventTime,
+			Channel:       c.Name(),
+			AccountID:     c.config.BotID,
+			SenderID:      event.UserID,
+			ChatID:        event.UserID,
+			Content:       "", // 空内容表示进入会话事件
+			StreamingMode: bus.StreamingModeAccumulate,
+			Timestamp:     event.EventTime,
 			Metadata: map[string]interface{}{
 				"event_type": EventTypeEnterChat,
 				"req_id":     frame.Headers["req_id"],
@@ -209,12 +206,13 @@ func (c *WxComChannel) handleEvent(frame *WsFrame) {
 	// 处理模板卡片事件
 	if event.EventType == EventTypeTemplateCardEvent {
 		inbound := &bus.InboundMessage{
-			Channel:   c.Name(), // 使用 channel 自己的名称（支持多账号场景）
-			AccountID: c.config.BotID,
-			SenderID:  event.UserID,
-			ChatID:    event.ChatID,
-			Content:   fmt.Sprintf("模板卡片事件: %s", event.EventKey),
-			Timestamp: event.EventTime,
+			Channel:       c.Name(),
+			AccountID:     c.config.BotID,
+			SenderID:      event.UserID,
+			ChatID:        event.ChatID,
+			Content:       fmt.Sprintf("模板卡片事件: %s", event.EventKey),
+			StreamingMode: bus.StreamingModeAccumulate,
+			Timestamp:     event.EventTime,
 			Metadata: map[string]interface{}{
 				"event_type": EventTypeTemplateCardEvent,
 				"event_key":  event.EventKey,
@@ -228,12 +226,13 @@ func (c *WxComChannel) handleEvent(frame *WsFrame) {
 	// 处理反馈事件
 	if event.EventType == EventTypeFeedbackEvent {
 		inbound := &bus.InboundMessage{
-			Channel:   c.Name(), // 使用 channel 自己的名称（支持多账号场景）
-			AccountID: c.config.BotID,
-			SenderID:  event.UserID,
-			ChatID:    event.ChatID,
-			Content:   "用户反馈事件",
-			Timestamp: event.EventTime,
+			Channel:       c.Name(),
+			AccountID:     c.config.BotID,
+			SenderID:      event.UserID,
+			ChatID:        event.ChatID,
+			Content:       "用户反馈事件",
+			StreamingMode: bus.StreamingModeAccumulate,
+			Timestamp:     event.EventTime,
 			Metadata: map[string]interface{}{
 				"event_type": EventTypeFeedbackEvent,
 				"req_id":     frame.Headers["req_id"],
@@ -361,68 +360,40 @@ func (c *WxComChannel) SendStream(ctx context.Context, chatID string, stream <-c
 	}
 }
 
-// HandleChatEvent 处理聊天事件
+// HandleChatEvent 处理聊天事件（仅状态通知）
 func (c *WxComChannel) HandleChatEvent(ctx context.Context, event *bus.ChatEvent) error {
 	if !c.IsRunning() {
 		return nil
 	}
 
-	// 通过转换器处理事件（累积模式下 Content 已是完整内容）
-	transformedEvent := c.transformer.Transform(event)
+	// ChatEvent 现在只做状态通知，不携带内容
+	// 内容通过 OutboundMessage 发送，由 Send/SendStream 处理
+	switch event.State {
+	case bus.ChatEventStateStart:
+		// 开始处理（可选：显示 loading 状态）
+		c.logger.Debug("Chat started", "chat_id", event.ChatID)
 
-	// 只处理当前chatID的事件
-	streamID := c.getOrCreateStreamID(transformedEvent.ChatID)
-
-	// 从metadata获取req_id
-	reqID := ""
-	if transformedEvent.Metadata != nil {
-		if m, ok := transformedEvent.Metadata.(map[string]interface{}); ok {
-			if id, ok := m["req_id"].(string); ok && id != "" {
-				reqID = id
+	case bus.ChatEventStateTool:
+		// 工具调用通知（可选：显示工具调用状态）
+		if event.ToolInfo != nil {
+			if event.ToolInfo.IsStart {
+				c.logger.Info("Tool started", "tool_name", event.ToolInfo.Name, "chat_id", event.ChatID)
+			} else {
+				c.logger.Info("Tool completed", "chat_id", event.ChatID)
 			}
 		}
-	}
 
-	var body map[string]interface{}
-
-	switch transformedEvent.State {
-	case bus.ChatEventStateDelta:
-		// 增量文本（累积模式下 Content 已是完整内容）
-		body = c.handler.BuildStreamReply(streamID, transformedEvent.Content, false, nil, nil)
-
-	case bus.ChatEventStateThinking:
-		// 思考过程（累积模式下 Content 已是完整内容，企业微信不支持thinking类型，作为普通文本处理）
-		body = c.handler.BuildStreamReply(streamID, transformedEvent.Content, false, nil, nil)
-
-	case bus.ChatEventStateFinal:
-		// 最终完成
-		body = c.handler.BuildStreamReply(streamID, transformedEvent.Message, true, nil, nil)
-		c.clearStreamID(transformedEvent.ChatID)
+	case bus.ChatEventStateComplete:
+		// 处理完成
+		c.logger.Debug("Chat completed", "chat_id", event.ChatID)
 
 	case bus.ChatEventStateError:
 		// 错误
-		c.logger.Error("Chat event error", "error", transformedEvent.Error)
-		return nil
+		c.logger.Error("Chat error", "error", event.Error, "chat_id", event.ChatID)
 
 	case bus.ChatEventStateInterrupt:
 		// 中断（等待用户确认）
-		c.clearStreamID(transformedEvent.ChatID)
-		return nil
-
-	case bus.ChatEventStateTool:
-		// 工具调用（暂不处理）
-		return nil
-
-	default:
-		return nil
-	}
-
-	if reqID != "" && body != nil {
-		_, err := c.wsManager.SendReply(ctx, reqID, body, WsCmdResponse)
-		if err != nil {
-			c.logger.Error("Failed to handle chat event", "error", err)
-			return err
-		}
+		c.logger.Debug("Chat interrupted", "chat_id", event.ChatID)
 	}
 
 	return nil

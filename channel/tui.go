@@ -128,7 +128,7 @@ func (t *TUIChannel) HandleChatEvent(ctx context.Context, event *bus.ChatEvent) 
 	}
 }
 
-// SendStream 发送流式消息
+// SendStream 发送流式消息（TUI 使用增量内容）
 func (t *TUIChannel) SendStream(ctx context.Context, chatID string, stream <-chan *bus.StreamMessage) error {
 	for {
 		select {
@@ -137,27 +137,19 @@ func (t *TUIChannel) SendStream(ctx context.Context, chatID string, stream <-cha
 				return nil
 			}
 
-			// 转换为 ChatEvent
-			event := &bus.ChatEvent{
-				Channel: bus.ChannelTUI,
-				ChatID:  chatID,
-				Content: msg.Content,
+			// 转换为 OutboundMessage 发送给 model
+			outbound := &bus.OutboundMessage{
+				Channel:    bus.ChannelTUI,
+				ChatID:     chatID,
+				Content:    msg.Content, // delta 模式下是增量内容
+				IsStreaming: msg.IsFinal == false,
+				IsThinking: msg.IsThinking,
+				IsFinal:    msg.IsFinal,
+				ChunkIndex: msg.ChunkIndex,
+				Error:      msg.Error,
 			}
 
-			if msg.IsThinking {
-				event.State = bus.ChatEventStateThinking
-			} else if msg.IsFinal {
-				event.State = bus.ChatEventStateFinal
-			} else {
-				event.State = bus.ChatEventStateDelta
-			}
-
-			if msg.Error != "" {
-				event.State = bus.ChatEventStateError
-				event.Error = msg.Error
-			}
-
-			return t.HandleChatEvent(ctx, event)
+			return t.Send(ctx, outbound)
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -189,11 +181,12 @@ func (t *TUIChannel) forwardEvents(ctx context.Context) {
 // PublishInbound 发布入站消息（用户输入）
 func (t *TUIChannel) PublishInbound(ctx context.Context, content string, chatID string) error {
 	msg := &bus.InboundMessage{
-		Channel:   bus.ChannelTUI,
-		AccountID: "tui",
-		SenderID:  "",
-		ChatID:    chatID,
-		Content:   content,
+		Channel:       bus.ChannelTUI,
+		AccountID:     "tui",
+		SenderID:      "",
+		ChatID:        chatID,
+		Content:       content,
+		StreamingMode: bus.StreamingModeDelta, // TUI 需要增量内容实时显示
 	}
 
 	return t.ChannelBase.PublishInbound(ctx, msg)

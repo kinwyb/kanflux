@@ -183,16 +183,41 @@ func (m *Manager) dispatchOutbound(ctx context.Context) {
 				continue
 			}
 
-			// 发送消息
-			if err := ch.Send(ctx, msg); err != nil {
-				// 记录错误，但不中断分发
-				continue
+			// 根据消息类型选择发送方式
+			if msg.IsStreaming && !msg.IsFinal {
+				// 流式增量消息：转换为 StreamMessage 并使用 SendStream
+				streamMsg := &bus.StreamMessage{
+					ID:         msg.ID,
+					Channel:    msg.Channel,
+					ChatID:     msg.ChatID,
+					Content:    msg.Content,
+					ChunkIndex: msg.ChunkIndex,
+					IsThinking: msg.IsThinking,
+					IsFinal:    msg.IsFinal,
+					IsComplete: msg.IsFinal,
+					Error:      msg.Error,
+					Metadata:   msg.Metadata,
+				}
+				// 创建单消息 channel 用于 SendStream
+				streamChan := make(chan *bus.StreamMessage, 1)
+				streamChan <- streamMsg
+				close(streamChan)
+				if err := ch.SendStream(ctx, msg.ChatID, streamChan); err != nil {
+					// 记录错误，但不中断分发
+					continue
+				}
+			} else {
+				// 完整消息（非流式或流式最终）：使用 Send
+				if err := ch.Send(ctx, msg); err != nil {
+					// 记录错误，但不中断分发
+					continue
+				}
 			}
 		}
 	}
 }
 
-// dispatchChatEvents 分发聊天事件
+// dispatchChatEvents 分发聊天事件（仅状态通知）
 func (m *Manager) dispatchChatEvents(ctx context.Context) {
 	for {
 		select {
@@ -210,7 +235,7 @@ func (m *Manager) dispatchChatEvents(ctx context.Context) {
 				continue
 			}
 
-			// 处理事件
+			// 处理状态通知事件（start/tool/complete/error/interrupt）
 			if err := ch.HandleChatEvent(ctx, event); err != nil {
 				// 记录错误，但不中断分发
 				continue

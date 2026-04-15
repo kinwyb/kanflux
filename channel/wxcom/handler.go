@@ -126,13 +126,14 @@ func (h *MessageHandler) ParseEvent(frame *WsFrame) (*WsEvent, error) {
 // ConvertToInbound 将WsMessage转换为bus.InboundMessage
 func (h *MessageHandler) ConvertToInbound(msg *WsMessage, channelName, accountID string) *bus.InboundMessage {
 	inbound := &bus.InboundMessage{
-		Channel:   channelName,
-		AccountID: accountID,
-		SenderID:  msg.UserID,
-		ChatID:    msg.ChatID,
-		Content:   msg.Content,
-		Timestamp: msg.MsgTime,
-		Metadata:  make(map[string]interface{}),
+		Channel:       channelName,
+		AccountID:     accountID,
+		SenderID:      msg.UserID,
+		ChatID:        msg.ChatID,
+		Content:       msg.Content,
+		StreamingMode: bus.StreamingModeAccumulate, // 企业微信需要累积内容
+		Timestamp:     msg.MsgTime,
+		Metadata:      make(map[string]interface{}),
 	}
 
 	// 设置消息类型

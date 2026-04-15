@@ -392,10 +392,22 @@ func convertPayloadToChatEvent(p *ws.ChatEventPayload) *bus.ChatEvent {
 		Seq:       p.Seq,
 		AgentName: p.AgentName,
 		State:     p.State,
-		Content:   p.Content,
-		Message:   p.Message,
 		Error:     p.Error,
+		ToolInfo:  convertPayloadToToolInfo(p.ToolInfo),
 		Metadata:  p.Metadata,
+	}
+}
+
+func convertPayloadToToolInfo(p *ws.ToolEventInfoPayload) *bus.ToolEventInfo {
+	if p == nil {
+		return nil
+	}
+	return &bus.ToolEventInfo{
+		Name:      p.Name,
+		ID:        p.ID,
+		Arguments: p.Arguments,
+		Result:    p.Result,
+		IsStart:   p.IsStart,
 	}
 }
 

@@ -69,11 +69,19 @@ type ChatEventPayload struct {
 	RunID     string                 `json:"run_id,omitempty"`
 	Seq       int                    `json:"seq"`
 	AgentName string                 `json:"agent_name"`
-	State     string                 `json:"state"` // delta, thinking, tool, final, error, interrupt
-	Content   string                 `json:"content"`
-	Message   string                 `json:"message,omitempty"`
+	State     string                 `json:"state"` // start, tool, complete, error, interrupt
 	Error     string                 `json:"error,omitempty"`
+	ToolInfo  *ToolEventInfoPayload  `json:"tool_info,omitempty"`
 	Metadata  map[string]interface{} `json:"metadata,omitempty"`
+}
+
+// ToolEventInfoPayload 工具事件信息 payload
+type ToolEventInfoPayload struct {
+	Name      string `json:"name"`
+	ID        string `json:"id"`
+	Arguments string `json:"arguments,omitempty"`
+	Result    string `json:"result,omitempty"`
+	IsStart   bool   `json:"is_start"`
 }
 
 // LogEventPayload 日志事件 payload
@@ -210,10 +218,23 @@ func ConvertChatEventToPayload(event *ChatEvent) *ChatEventPayload {
 		Seq:       event.Seq,
 		AgentName: event.AgentName,
 		State:     event.State,
-		Content:   event.Content,
-		Message:   event.Message,
 		Error:     event.Error,
+		ToolInfo:  ConvertToolEventInfoPayload(event.ToolInfo),
 		Metadata:  metadata,
+	}
+}
+
+// ConvertToolEventInfoPayload 将 ToolEventInfo 转换为 ToolEventInfoPayload
+func ConvertToolEventInfoPayload(info *ToolEventInfo) *ToolEventInfoPayload {
+	if info == nil {
+		return nil
+	}
+	return &ToolEventInfoPayload{
+		Name:      info.Name,
+		ID:        info.ID,
+		Arguments: info.Arguments,
+		Result:    info.Result,
+		IsStart:   info.IsStart,
 	}
 }
 
@@ -267,11 +288,24 @@ func ConvertPayloadToChatEvent(p *ChatEventPayload) *ChatEvent {
 		Seq:       p.Seq,
 		AgentName: p.AgentName,
 		State:     p.State,
-		Content:   p.Content,
-		Message:   p.Message,
 		Error:     p.Error,
+		ToolInfo:  ConvertPayloadToToolEventInfo(p.ToolInfo),
 		Timestamp: time.Now(),
 		Metadata:  p.Metadata,
+	}
+}
+
+// ConvertPayloadToToolEventInfo 将 ToolEventInfoPayload 转换为 ToolEventInfo
+func ConvertPayloadToToolEventInfo(p *ToolEventInfoPayload) *ToolEventInfo {
+	if p == nil {
+		return nil
+	}
+	return &ToolEventInfo{
+		Name:      p.Name,
+		ID:        p.ID,
+		Arguments: p.Arguments,
+		Result:    p.Result,
+		IsStart:   p.IsStart,
 	}
 }
 
@@ -348,11 +382,19 @@ type ChatEvent struct {
 	Seq       int
 	AgentName string
 	State     string
-	Content   string
-	Message   string
 	Error     string
+	ToolInfo  *ToolEventInfo
 	Timestamp time.Time
 	Metadata  interface{}
+}
+
+// ToolEventInfo 工具事件信息
+type ToolEventInfo struct {
+	Name      string
+	ID        string
+	Arguments string
+	Result    string
+	IsStart   bool
 }
 
 // LogEvent 日志事件（本地定义，避免导入 bus）

@@ -354,6 +354,20 @@ func (s *Server) broadcastOutbound(msg *bus.OutboundMessage) {
 	s.broadcastToSubscribers(msg.Channel, msg.ChatID, msgBytes)
 }
 
+// ConvertToolEventInfo 将 bus.ToolEventInfo 转换为 ws.ToolEventInfo
+func ConvertToolEventInfo(info *bus.ToolEventInfo) *ToolEventInfo {
+	if info == nil {
+		return nil
+	}
+	return &ToolEventInfo{
+		Name:      info.Name,
+		ID:        info.ID,
+		Arguments: info.Arguments,
+		Result:    info.Result,
+		IsStart:   info.IsStart,
+	}
+}
+
 // broadcastChatEvent 广播聊天事件
 func (s *Server) broadcastChatEvent(event *bus.ChatEvent) {
 	metadata := make(map[string]interface{})
@@ -371,9 +385,8 @@ func (s *Server) broadcastChatEvent(event *bus.ChatEvent) {
 		Seq:       event.Seq,
 		AgentName: event.AgentName,
 		State:     event.State,
-		Content:   event.Content,
-		Message:   event.Message,
 		Error:     event.Error,
+		ToolInfo:  ConvertToolEventInfo(event.ToolInfo),
 		Metadata:  metadata,
 	})
 

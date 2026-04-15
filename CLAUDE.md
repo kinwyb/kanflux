@@ -46,8 +46,8 @@ go build -o kanflux .
 
 - **`bus/`**: Event bus for message routing
   - `queue.go`: `MessageBus` with pub/sub for inbound/outbound messages, chat events, log events
-  - `streaming.go`: `StreamingMessageBus` extends MessageBus for streaming content
-  - `events.go`: Event types and structures for agent events
+  - `streaming.go`: `StreamMessage` for streaming message chunks (used by Channel.SendStream)
+  - `events.go`: Event types and structures for agent events, including StreamingMode configuration
 
 - **`session/`**: Session management
   - `session.go`: `Session` struct with message history, safe truncation preserving tool call sequences
@@ -77,6 +77,76 @@ go build -o kanflux .
 4. **Tool Registry Middleware**: Implements `WrapInvokableToolCall` and `WrapStreamableToolCall` to intercept tool calls needing approval.
 
 5. **Session History Safety**: `GetHistorySafe()` ensures tool call sequences (assistant+tool messages) aren't truncated mid-sequence.
+
+## Message Sending Flow
+
+消息和事件架构完整隔离，所有内容通过 OutboundMessage 发送，ChatEvent 只做状态通知。
+
+### StreamingMode 配置
+
+Channel 发布 InboundMessage 时设置 `StreamingMode` 字段：
+
+| StreamingMode | Content 含义 | 适用 Channel |
+|---------------|--------------|--------------|
+| `"delta"` | 增量内容（当前 chunk） | TUI（实时显示） |
+| `"accumulate"` | 累积后的完整内容 | WxCom（需要完整内容） |
+
+### Streaming Mode (Streaming=true, StreamingMode 由 Channel 配置)
+
+```
+Agent Event → handleAgentEvent → Manager 累积 → OutboundMessage → Channel Manager 分发
+                                              ↓
+                              Channel 根据 IsStreaming 选择 SendStream 或 Send
+
+EventMessageUpdate: OutboundMessage{IsStreaming=true, IsFinal=false}
+EventMessageEnd: OutboundMessage{IsStreaming=true, IsFinal=true}
+
+同时发送 ChatEvent 状态通知：
+  - ChatEventStateStart: 开始处理
+  - ChatEventStateTool: 工具调用通知
+  - ChatEventStateComplete: 处理完成
+```
+
+### Non-Streaming Mode (Streaming=false)
+
+```
+Agent 完成 → handleInboundMessage → OutboundMessage → Channel Manager → Channel.Send
+
+OutboundMessage{IsStreaming=false, IsFinal=true, Content=完整内容}
+```
+
+### OutboundMessage 流式状态字段
+
+| 字段 | 流式模式 | 非流式模式 |
+|------|----------|-----------|
+| IsStreaming | true | false |
+| IsThinking | 当前 chunk 是否思考内容 | 不使用 |
+| IsFinal | 流结束标记 | true |
+| ChunkIndex | chunk 序号 | 0 |
+
+### ChatEvent States (状态通知，不携带内容)
+
+| State | 常量 | 说明 |
+|-------|------|------|
+| start | `ChatEventStateStart` | 开始处理（UI 显示 loading） |
+| tool | `ChatEventStateTool` | 工具调用通知 |
+| complete | `ChatEventStateComplete` | 处理完成 |
+| error | `ChatEventStateError` | 错误通知 |
+| interrupt | `ChatEventStateInterrupt` | 中断（等待用户确认） |
+
+### Channel 分发逻辑
+
+Channel Manager 根据 `IsStreaming` 和 `IsFinal` 选择发送方式：
+
+```go
+if msg.IsStreaming && !msg.IsFinal {
+    // 流式增量：转换为 StreamMessage 使用 SendStream
+    ch.SendStream(ctx, chatID, stream)
+} else {
+    // 完整消息：使用 Send
+    ch.Send(ctx, msg)
+}
+```
 
 ## Eino Framework Integration
 

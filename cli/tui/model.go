@@ -58,11 +58,12 @@ type (
 		Source  string
 		Message string
 	}
-	// ChatEventMsg 聊天事件消息
+	// ChatEventMsg 聊天事件消息（状态通知）
 	ChatEventMsg struct {
 		AgentName string                 // Agent 名称
-		State     string                 // delta, thinking, tool, final, error, interrupt
-		Content   string                 // 事件内容
+		State     string                 // start, tool, complete, error, interrupt
+		Error     string                 // 错误信息
+		ToolInfo  *bus.ToolEventInfo     // 工具信息
 		Metadata  map[string]interface{} // 元数据
 	}
 )
@@ -367,7 +368,8 @@ func (m *Model) listenChatEvents() tea.Cmd {
 				return ChatEventMsg{
 					AgentName: event.AgentName,
 					State:     event.State,
-					Content:   event.Content,
+					Error:     event.Error,
+					ToolInfo:  event.ToolInfo,
 					Metadata:  metadata,
 				}
 			}
@@ -545,48 +547,41 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		switch msg.State {
-		case bus.ChatEventStateThinking:
-			m.status = fmt.Sprintf("[%s] 思考中...", m.currentAgentName)
-			m.currentThinking += msg.Content // 累加思考内容
-			// 只在第一次思考时记录日志
-			if !m.isThinkingLogged {
-				m.addLog("debug", fmt.Sprintf("[%s] 思考中", m.currentAgentName))
-				m.isThinkingLogged = true
-			}
-		case bus.ChatEventStateDelta:
-			m.status = fmt.Sprintf("[%s] 生成中...", m.currentAgentName)
-			m.currentAIMsg += msg.Content
+		case bus.ChatEventStateStart:
+			m.status = fmt.Sprintf("[%s] 开始处理...", m.currentAgentName)
 		case bus.ChatEventStateTool:
 			m.status = fmt.Sprintf("[%s] 工具调用...", m.currentAgentName)
-			m.currentToolInfo = msg.Content
-			m.addLog("info", fmt.Sprintf("[%s] 工具: %s", m.currentAgentName, msg.Content))
-		case bus.ChatEventStateFinal:
+			if msg.ToolInfo != nil {
+				if msg.ToolInfo.IsStart {
+					m.currentToolInfo = fmt.Sprintf("调用工具: %s", msg.ToolInfo.Name)
+					m.addLog("info", fmt.Sprintf("[%s] 工具开始: %s", m.currentAgentName, msg.ToolInfo.Name))
+				} else {
+					m.addLog("info", fmt.Sprintf("[%s] 工具完成", m.currentAgentName))
+				}
+			}
+		case bus.ChatEventStateComplete:
 			m.status = fmt.Sprintf("[%s] 完成", m.currentAgentName)
-			m.currentAIMsg = msg.Content
-			// 只在第一次完成时记录日志
 			if !m.isFinalLogged {
 				m.addLog("info", fmt.Sprintf("[%s] 响应完成", m.currentAgentName))
 				m.isFinalLogged = true
 			}
 		case bus.ChatEventStateError:
 			m.status = fmt.Sprintf("[%s] 错误", m.currentAgentName)
-			m.currentAIMsg = fmt.Sprintf("错误: %s", msg.Content)
-			m.addLog("error", fmt.Sprintf("[%s] 错误: %s", m.currentAgentName, msg.Content))
+			m.currentAIMsg = fmt.Sprintf("错误: %s", msg.Error)
+			m.addLog("error", fmt.Sprintf("[%s] 错误: %s", m.currentAgentName, msg.Error))
 		case bus.ChatEventStateInterrupt:
 			m.status = fmt.Sprintf("[%s] 等待确认", m.currentAgentName)
-			m.currentToolInfo = msg.Content
-			m.addLog("warn", fmt.Sprintf("[%s] 等待确认: %s", m.currentAgentName, msg.Content))
 			// 检查中断类型
 			if msg.Metadata != nil {
 				if interruptType, ok := msg.Metadata["interrupt_type"].(string); ok {
 					m.interruptType = interruptType
-					m.interruptContent = msg.Content
 					// yes_no 类型进入等待确认状态
 					if interruptType == bus.InterruptTypeYesNo {
 						m.state = StateWaitingApproval
 					}
 				}
 			}
+			m.addLog("warn", fmt.Sprintf("[%s] 等待确认", m.currentAgentName))
 		}
 		m.updateViewports()
 		return m, m.listenChatEvents()
