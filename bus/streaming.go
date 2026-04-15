@@ -1,12 +1,7 @@
 package bus
 
 import (
-	"context"
-	"fmt"
-	"strings"
 	"sync"
-
-	"github.com/google/uuid"
 )
 
 // StreamMessage represents a streaming message update
@@ -23,216 +18,217 @@ type StreamMessage struct {
 	Error      string                 `json:"error,omitempty"`
 }
 
-// StreamingMessageBus extends MessageBus with streaming support
-type StreamingMessageBus struct {
-	*MessageBus
-	streamStreams map[string]chan *StreamMessage
-	streamMu      sync.RWMutex
+// ChatEventTransformerMode 转换器模式
+type ChatEventTransformerMode int
+
+const (
+	// TransformerModeDelta 增量模式：保持原始增量内容输出
+	TransformerModeDelta ChatEventTransformerMode = iota
+	// TransformerModeAccumulate 累积模式：输出累积后的完整内容
+	TransformerModeAccumulate
+)
+
+// ChatEventTransformer 聊天事件转换器
+// 用于将增量 ChatEvent 转换为累积后的完整内容，或保持增量输出
+// 不同 channel 可根据需求选择不同模式
+type ChatEventTransformer struct {
+	mode         ChatEventTransformerMode
+	accumulators map[string]*StreamAccumulator // chatID -> accumulator
+	mu           sync.RWMutex
 }
 
-// NewStreamingMessageBus creates a new streaming message bus
-func NewStreamingMessageBus(bufferSize int) *StreamingMessageBus {
-	return &StreamingMessageBus{
-		MessageBus:    NewMessageBus(bufferSize),
-		streamStreams: make(map[string]chan *StreamMessage),
+// NewChatEventTransformer 创建聊天事件转换器
+// mode: TransformerModeDelta 保持增量输出，TransformerModeAccumulate 累积输出
+func NewChatEventTransformer(mode ChatEventTransformerMode) *ChatEventTransformer {
+	return &ChatEventTransformer{
+		mode:         mode,
+		accumulators: make(map[string]*StreamAccumulator),
 	}
 }
 
-// CreateStream creates a new stream for a chat
-func (b *StreamingMessageBus) CreateStream(chatID string) chan *StreamMessage {
-	b.streamMu.Lock()
-	defer b.streamMu.Unlock()
-
-	stream := make(chan *StreamMessage, 100)
-	b.streamStreams[chatID] = stream
-
-	return stream
-}
-
-// GetStream gets an existing stream for a chat
-func (b *StreamingMessageBus) GetStream(chatID string) (chan *StreamMessage, bool) {
-	b.streamMu.RLock()
-	defer b.streamMu.RUnlock()
-
-	stream, ok := b.streamStreams[chatID]
-	return stream, ok
-}
-
-// PublishStream publishes a streaming message
-func (b *StreamingMessageBus) PublishStream(ctx context.Context, msg *StreamMessage) error {
-	b.streamMu.RLock()
-	defer b.streamMu.RUnlock()
-
-	// Set ID if not set
-	if msg.ID == "" {
-		msg.ID = uuid.New().String()
+// Transform 转换 ChatEvent，返回处理后的事件
+// 增量模式：返回原始事件（Content 保持增量）
+// 累积模式：返回累积后的完整内容
+func (t *ChatEventTransformer) Transform(event *ChatEvent) *ChatEvent {
+	if t.mode == TransformerModeDelta {
+		// 增量模式：直接返回原始事件
+		return event
 	}
 
-	// Get the stream
-	stream, ok := b.streamStreams[msg.ChatID]
-	if !ok {
-		return nil // No stream for this chat
-	}
+	// 累积模式：处理累积逻辑
+	return t.transformAccumulate(event)
+}
 
-	// Publish to stream
-	select {
-	case stream <- msg:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
+// transformAccumulate 累积模式处理逻辑
+func (t *ChatEventTransformer) transformAccumulate(event *ChatEvent) *ChatEvent {
+	// 获取或创建累积器
+	accumulator := t.getOrCreateAccumulator(event.ChatID)
+
+	// 处理不同状态
+	switch event.State {
+	case ChatEventStateDelta:
+		// 累积文本内容
+		accumulatedContent := accumulator.AccumulateDelta(event.Content)
+		// 返回新事件，Content 为累积后的完整内容
+		return &ChatEvent{
+			ID:        event.ID,
+			Channel:   event.Channel,
+			ChatID:    event.ChatID,
+			RunID:     event.RunID,
+			Seq:       event.Seq,
+			AgentName: event.AgentName,
+			State:     event.State,
+			Content:   accumulatedContent, // 替换为累积后的完整内容
+			Message:   event.Message,
+			Error:     event.Error,
+			Timestamp: event.Timestamp,
+			Metadata:  event.Metadata,
+		}
+
+	case ChatEventStateThinking:
+		// 累积思考内容
+		accumulatedThinking := accumulator.AccumulateThinking(event.Content)
+		return &ChatEvent{
+			ID:        event.ID,
+			Channel:   event.Channel,
+			ChatID:    event.ChatID,
+			RunID:     event.RunID,
+			Seq:       event.Seq,
+			AgentName: event.AgentName,
+			State:     event.State,
+			Content:   accumulatedThinking, // 替换为累积后的完整内容
+			Message:   event.Message,
+			Error:     event.Error,
+			Timestamp: event.Timestamp,
+			Metadata:  event.Metadata,
+		}
+
+	case ChatEventStateFinal:
+		// 最终完成：重置累积器
+		accumulator.Reset()
+		t.removeAccumulator(event.ChatID)
+		// Final 状态使用 event.Message（已经是完整内容）
+		return event
+
+	case ChatEventStateError, ChatEventStateInterrupt, ChatEventStateTool:
+		// 这些状态清理累积器
+		accumulator.Reset()
+		t.removeAccumulator(event.ChatID)
+		return event
+
+	default:
+		return event
 	}
 }
 
-// CloseStream closes a stream for a chat
-func (b *StreamingMessageBus) CloseStream(chatID string) {
-	b.streamMu.Lock()
-	defer b.streamMu.Unlock()
+// getOrCreateAccumulator 获取或创建指定 chatID 的累积器
+func (t *ChatEventTransformer) getOrCreateAccumulator(chatID string) *StreamAccumulator {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 
-	if stream, ok := b.streamStreams[chatID]; ok {
-		close(stream)
-		delete(b.streamStreams, chatID)
+	if acc, ok := t.accumulators[chatID]; ok {
+		return acc
 	}
+
+	acc := NewStreamAccumulator()
+	t.accumulators[chatID] = acc
+	return acc
 }
 
-// StreamHandler handles streaming messages
-type StreamHandler struct {
-	bus        *StreamingMessageBus
-	chatID     string
-	stream     chan *StreamMessage
-	content    strings.Builder
-	thinking   strings.Builder
-	final      strings.Builder
-	chunkIndex int
+// removeAccumulator 移除指定 chatID 的累积器
+func (t *ChatEventTransformer) removeAccumulator(chatID string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.accumulators, chatID)
+}
+
+// Clear 清理所有累积器
+func (t *ChatEventTransformer) Clear() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, acc := range t.accumulators {
+		acc.Reset()
+	}
+	t.accumulators = make(map[string]*StreamAccumulator)
+}
+
+// GetMode 获取当前模式
+func (t *ChatEventTransformer) GetMode() ChatEventTransformerMode {
+	return t.mode
+}
+
+// SetMode 设置模式（动态切换）
+func (t *ChatEventTransformer) SetMode(mode ChatEventTransformerMode) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.mode = mode
+	// 切换模式时清理累积器
+	for _, acc := range t.accumulators {
+		acc.Reset()
+	}
+	t.accumulators = make(map[string]*StreamAccumulator)
+}
+
+// StreamAccumulator 流式内容累积器
+// 用于累积增量内容，返回完整内容
+type StreamAccumulator struct {
 	mu         sync.Mutex
-	onChunk    func(*StreamMessage)
-	onComplete func(string)
-	onError    func(error)
+	content    string
+	thinking   string
+	chunkIndex int
 }
 
-// NewStreamHandler creates a new stream handler
-func NewStreamHandler(bus *StreamingMessageBus, chatID string) *StreamHandler {
-	stream, ok := bus.GetStream(chatID)
-	if !ok {
-		stream = bus.CreateStream(chatID)
-	}
-
-	return &StreamHandler{
-		bus:    bus,
-		chatID: chatID,
-		stream: stream,
-	}
+// NewStreamAccumulator 创建新的流式累积器
+func NewStreamAccumulator() *StreamAccumulator {
+	return &StreamAccumulator{}
 }
 
-// OnChunk sets the chunk callback
-func (h *StreamHandler) OnChunk(callback func(*StreamMessage)) *StreamHandler {
-	h.onChunk = callback
-	return h
+// AccumulateDelta 累积增量文本内容，返回累积后的完整内容
+func (a *StreamAccumulator) AccumulateDelta(delta string) string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.content += delta
+	a.chunkIndex++
+	return a.content
 }
 
-// OnComplete sets the complete callback
-func (h *StreamHandler) OnComplete(callback func(string)) *StreamHandler {
-	h.onComplete = callback
-	return h
+// AccumulateThinking 累积思考内容，返回累积后的完整内容
+func (a *StreamAccumulator) AccumulateThinking(delta string) string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.thinking += delta
+	a.chunkIndex++
+	return a.thinking
 }
 
-// OnError sets the error callback
-func (h *StreamHandler) OnError(callback func(error)) *StreamHandler {
-	h.onError = callback
-	return h
+// GetContent 获取当前累积的文本内容
+func (a *StreamAccumulator) GetContent() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.content
 }
 
-// Start starts handling streaming messages
-func (h *StreamHandler) Start(ctx context.Context) {
-	go h.handle(ctx)
+// GetThinking 获取当前累积的思考内容
+func (a *StreamAccumulator) GetThinking() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.thinking
 }
 
-// handle handles streaming messages
-func (h *StreamHandler) handle(ctx context.Context) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case msg, ok := <-h.stream:
-			if !ok {
-				return
-			}
-			h.processChunk(msg)
-		}
-	}
+// GetChunkIndex 获取当前 chunk 序号
+func (a *StreamAccumulator) GetChunkIndex() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.chunkIndex
 }
 
-// processChunk processes a streaming chunk
-func (h *StreamHandler) processChunk(msg *StreamMessage) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	if msg.Error != "" {
-		if h.onError != nil {
-			h.onError(fmt.Errorf("stream error: %s", msg.Error))
-		}
-		return
-	}
-
-	h.chunkIndex = msg.ChunkIndex
-
-	if msg.IsThinking {
-		h.thinking.WriteString(msg.Content)
-	} else if msg.IsFinal {
-		h.final.WriteString(msg.Content)
-	} else {
-		h.content.WriteString(msg.Content)
-	}
-
-	if h.onChunk != nil {
-		h.onChunk(msg)
-	}
-
-	if msg.IsComplete {
-		if h.onComplete != nil {
-			h.onComplete(h.content.String())
-		}
-	}
-}
-
-// GetContent returns the accumulated content
-func (h *StreamHandler) GetContent() string {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.content.String()
-}
-
-// GetThinking returns the accumulated thinking content
-func (h *StreamHandler) GetThinking() string {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.thinking.String()
-}
-
-// GetFinal returns the accumulated final content
-func (h *StreamHandler) GetFinal() string {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.final.String()
-}
-
-// GetChunkIndex returns the current chunk index
-func (h *StreamHandler) GetChunkIndex() int {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.chunkIndex
-}
-
-// Reset resets the handler state
-func (h *StreamHandler) Reset() {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.content.Reset()
-	h.thinking.Reset()
-	h.final.Reset()
-	h.chunkIndex = 0
-}
-
-// Close closes the stream handler
-func (h *StreamHandler) Close() {
-	h.bus.CloseStream(h.chatID)
+// Reset 重置累积器状态
+func (a *StreamAccumulator) Reset() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.content = ""
+	a.thinking = ""
+	a.chunkIndex = 0
 }

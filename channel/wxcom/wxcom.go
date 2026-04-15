@@ -31,6 +31,9 @@ type WxComChannel struct {
 	streamIDs   map[string]string // chatID -> streamID
 	streamIDsMu sync.Mutex
 
+	// ChatEvent 转换器（累积模式：发送完整内容而非增量）
+	transformer *bus.ChatEventTransformer
+
 	// logger
 	logger *slog.Logger
 
@@ -86,6 +89,7 @@ func NewWxComChannelWithAccount(msgBus *bus.MessageBus, cfg *WxComConfig, accoun
 		handler:     handler,
 		config:      cfg,
 		streamIDs:   make(map[string]string),
+		transformer: bus.NewChatEventTransformer(bus.TransformerModeAccumulate), // 企业微信使用累积模式
 		logger:      logger,
 	}, nil
 }
@@ -363,13 +367,16 @@ func (c *WxComChannel) HandleChatEvent(ctx context.Context, event *bus.ChatEvent
 		return nil
 	}
 
+	// 通过转换器处理事件（累积模式下 Content 已是完整内容）
+	transformedEvent := c.transformer.Transform(event)
+
 	// 只处理当前chatID的事件
-	streamID := c.getOrCreateStreamID(event.ChatID)
+	streamID := c.getOrCreateStreamID(transformedEvent.ChatID)
 
 	// 从metadata获取req_id
 	reqID := ""
-	if event.Metadata != nil {
-		if m, ok := event.Metadata.(map[string]interface{}); ok {
+	if transformedEvent.Metadata != nil {
+		if m, ok := transformedEvent.Metadata.(map[string]interface{}); ok {
 			if id, ok := m["req_id"].(string); ok && id != "" {
 				reqID = id
 			}
@@ -378,27 +385,32 @@ func (c *WxComChannel) HandleChatEvent(ctx context.Context, event *bus.ChatEvent
 
 	var body map[string]interface{}
 
-	switch event.State {
+	switch transformedEvent.State {
 	case bus.ChatEventStateDelta:
-		// 增量文本
-		body = c.handler.BuildStreamReply(streamID, event.Content, false, nil, nil)
+		// 增量文本（累积模式下 Content 已是完整内容）
+		body = c.handler.BuildStreamReply(streamID, transformedEvent.Content, false, nil, nil)
 
 	case bus.ChatEventStateThinking:
-		// 思考过程 (企业微信不支持thinking类型，暂作为普通文本处理)
-		body = c.handler.BuildStreamReply(streamID, event.Content, false, nil, nil)
+		// 思考过程（累积模式下 Content 已是完整内容，企业微信不支持thinking类型，作为普通文本处理）
+		body = c.handler.BuildStreamReply(streamID, transformedEvent.Content, false, nil, nil)
 
 	case bus.ChatEventStateFinal:
 		// 最终完成
-		body = c.handler.BuildStreamReply(streamID, event.Message, true, nil, nil)
-		c.clearStreamID(event.ChatID)
+		body = c.handler.BuildStreamReply(streamID, transformedEvent.Message, true, nil, nil)
+		c.clearStreamID(transformedEvent.ChatID)
 
 	case bus.ChatEventStateError:
 		// 错误
-		c.logger.Error("Chat event error", "error", event.Error)
+		c.logger.Error("Chat event error", "error", transformedEvent.Error)
+		return nil
+
+	case bus.ChatEventStateInterrupt:
+		// 中断（等待用户确认）
+		c.clearStreamID(transformedEvent.ChatID)
 		return nil
 
 	case bus.ChatEventStateTool:
-		// 工具调用 (暂不处理)
+		// 工具调用（暂不处理）
 		return nil
 
 	default:
