@@ -418,7 +418,6 @@ channel/
   factory.go        # ChannelFactory 工厂接口定义
   registry.go       # 全局工厂注册表
   thread_binding.go # ThreadBindingService 会话路由
-  tui.go            # TUIChannel 实现
   channel_test.go   # 单元测试
   README.md         # 本文档
   wxcom/            # 企业微信智能机器人 Channel
