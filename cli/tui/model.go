@@ -3,18 +3,12 @@ package tui
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/kinwyb/kanflux/agent"
-	"github.com/kinwyb/kanflux/agent/tools"
 	"github.com/kinwyb/kanflux/bus"
-	"github.com/kinwyb/kanflux/channel"
-	"github.com/kinwyb/kanflux/config"
-	"github.com/kinwyb/kanflux/providers"
-	"github.com/kinwyb/kanflux/session"
 	"github.com/kinwyb/kanflux/ws"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -75,20 +69,14 @@ type (
 
 // Model TUI模型
 type Model struct {
-	ctx        context.Context
-	cfg        *Config
-	manager    *agent.Manager
-	bus        *bus.MessageBus
-	sessionMgr *session.Manager
-	chatID     string
+	ctx    context.Context
+	cfg    *Config
+	chatID string
 
-	// WebSocket 客户端模式
+	// WebSocket 客户端
 	wsClient *ws.Client
 
-	// Channel manager (standalone 模式)
-	channelMgr *channel.Manager
-
-	// 接收事件的 channel（由 TUIChannel 写入或 WebSocket 回调）
+	// 接收事件的 channel（由 WebSocket 回调写入）
 	outboundRecv chan *bus.OutboundMessage
 	eventRecv    chan *bus.ChatEvent
 	logRecv      chan *bus.LogEvent
@@ -135,142 +123,8 @@ type Message struct {
 	Timestamp       time.Time
 }
 
-// NewModel 创建新模型
-func NewModel(ctx context.Context, cfg *Config, channelMgr *channel.Manager) (*Model, error) {
-	var manager *agent.Manager
-	var workspace string
-
-	// 从 channel manager 获取 bus
-	msgBus := channelMgr.GetBus()
-
-	// 设置 slog 默认 logger 使用 bus handler
-	bus.SetupDefaultLogger(msgBus, slog.LevelDebug, bus.ChannelTUI)
-
-	if cfg.AppConfig != nil && len(cfg.AppConfig.Agents) > 0 {
-		// 多 agent 模式：从配置文件自动注册所有 agent
-		workspace = cfg.Workspace
-		if workspace == "" {
-			// 使用默认 agent 的 workspace
-			defaultName := cfg.AppConfig.GetDefaultAgentName()
-			if resolved, err := cfg.AppConfig.ResolveAgentConfig(defaultName); err == nil {
-				workspace = resolved.Workspace
-			}
-		}
-
-		// 创建会话管理器
-		sessionMgr, err := session.NewManager(workspace)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create session manager: %w", err)
-		}
-
-		// 创建 Manager
-		manager = agent.NewManager(msgBus, sessionMgr)
-
-		// 自动注册所有 agent
-		if err := manager.RegisterAgentsFromConfig(ctx, cfg.AppConfig, nil); err != nil {
-			return nil, fmt.Errorf("failed to register agents from config: %w", err)
-		}
-
-	} else {
-		// 单 agent 模式：手动创建单个 agent
-		workspace = cfg.Workspace
-		if workspace == "" {
-			workspace = "."
-		}
-
-		// 创建LLM
-		llm, err := providers.NewOpenAI(ctx, cfg.APIBaseURL, cfg.Model, cfg.APIKey)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create LLM: %w", err)
-		}
-
-		// 创建工具注册器
-		toolRegistry := tools.NewRegistry()
-
-		// 获取默认 skills 目录
-		skillDirs := config.GetDefaultSkillDirs(workspace)
-
-		// 创建Agent配置
-		agentCfg := &agent.Config{
-			LLM:          llm,
-			Workspace:    workspace,
-			MaxIteration: cfg.MaxIteration,
-			ToolRegister: toolRegistry,
-			SkillDirs:    skillDirs,
-			Streaming:    true,
-		}
-
-		// 创建Agent
-		ag, err := agent.NewAgent(ctx, agentCfg)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create agent: %w", err)
-		}
-
-		// 创建会话管理器
-		sessionMgr, err := session.NewManager(workspace)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create session manager: %w", err)
-		}
-
-		// 创建Agent管理器
-		manager = agent.NewManager(msgBus, sessionMgr)
-		manager.RegisterAgent("default", ag, true)
-	}
-
-	// 启动 Manager
-	manager.Start(ctx)
-
-	// 创建输入框
-	ti := textinput.New()
-	ti.Placeholder = "输入消息..."
-	ti.Focus()
-	ti.Width = 50
-
-	// 创建样式
-	styles := NewStyles()
-
-	// 创建左侧主viewport（对话内容）
-	chatVP := viewport.New(60, 20)
-	chatVP.SetContent("")
-	chatVP.Style = styles.ChatViewport
-
-	// 创建右侧小块viewport（系统日志）
-	logVP := viewport.New(20, 20)
-	logVP.SetContent(" [系统日志]")
-	logVP.Style = styles.LogViewport
-	chatID := strings.ToUpper(uuid.NewString())
-
-	// 创建接收 channel
-	outboundRecv := make(chan *bus.OutboundMessage, 100)
-	eventRecv := make(chan *bus.ChatEvent, 100)
-	logRecv := make(chan *bus.LogEvent, 100)
-
-	return &Model{
-		ctx:             ctx,
-		cfg:             cfg,
-		manager:         manager,
-		bus:             msgBus,
-		sessionMgr:      manager.GetSessionManager(),
-		channelMgr:      channelMgr,
-		chatID:          chatID,
-		outboundRecv:    outboundRecv,
-		eventRecv:       eventRecv,
-		logRecv:         logRecv,
-		input:           ti,
-		chatViewport:    chatVP,
-		logViewport:     logVP,
-		messages:        make([]Message, 0),
-		logs:            make([]string, 0),
-		state:           StateIdle,
-		status:          "就绪",
-		styles:          styles,
-		currentThinking: "",
-		currentToolInfo: "",
-	}, nil
-}
-
-// NewModelWithWS 创建使用 WebSocket 的 Model
-func NewModelWithWS(ctx context.Context, cfg *Config, wsClient *ws.Client) (*Model, error) {
+// NewModel 创建使用 WebSocket 的 Model
+func NewModel(ctx context.Context, cfg *Config, wsClient *ws.Client) (*Model, error) {
 	// 创建输入框
 	ti := textinput.New()
 	ti.Placeholder = "输入消息..."
@@ -707,35 +561,12 @@ func (m *Model) sendMessage() tea.Cmd {
 	m.addLog("info", "发送: "+content)
 	m.updateViewports()
 
-	// 发送消息
+	// 通过 WebSocket 发送消息
 	return func() tea.Msg {
-		if m.wsClient != nil {
-			// WebSocket 模式：通过 WebSocket 发送
-			err := m.wsClient.SendInbound(m.ctx, bus.ChannelTUI, "tui", "", m.chatID, content, nil, nil)
-			if err != nil {
-				return AgentResponseMsg{Error: err}
-			}
-		} else if m.bus != nil {
-			// Standalone 模式：通过 bus 发送
-			inMsg := bus.InboundMessage{
-				ID:        fmt.Sprintf("%d", time.Now().UnixNano()),
-				Channel:   bus.ChannelTUI,
-				AccountID: "tui",
-				SenderID:  "",
-				ChatID:    m.chatID,
-				Content:   content,
-				Media:     nil,
-				Metadata:  nil,
-				Timestamp: time.Now(),
-			}
-
-			err := m.bus.PublishInbound(m.ctx, &inMsg)
-			if err != nil {
-				return AgentResponseMsg{Error: err}
-			}
+		err := m.wsClient.SendInbound(m.ctx, bus.ChannelTUI, "tui", "", m.chatID, content, nil, nil)
+		if err != nil {
+			return AgentResponseMsg{Error: err}
 		}
-
-		// 响应会通过 listenOutbound 接收，不需要在这里等待
 		return nil
 	}
 }
@@ -757,35 +588,12 @@ func (m *Model) sendApproval(approved bool) tea.Cmd {
 	m.addLog("info", fmt.Sprintf("审批响应: %s", content))
 	m.updateViewports()
 
-	// 发送到Agent（响应会通过 channel manager 分发回来）
+	// 通过 WebSocket 发送审批响应
 	return func() tea.Msg {
-		if m.wsClient != nil {
-			// WebSocket 模式：通过 WebSocket 发送
-			err := m.wsClient.SendInbound(m.ctx, bus.ChannelTUI, "tui", "", m.chatID, content, nil, nil)
-			if err != nil {
-				return AgentResponseMsg{Error: err}
-			}
-		} else if m.bus != nil {
-			// Standalone 模式：通过 bus 发送
-			inMsg := bus.InboundMessage{
-				ID:            fmt.Sprintf("%d", time.Now().UnixNano()),
-				Channel:       bus.ChannelTUI,
-				AccountID:     "tui",
-				SenderID:      "",
-				ChatID:        m.chatID,
-				Content:       content,
-				StreamingMode: bus.StreamingModeDelta, // TUI 使用 delta 模式
-				Media:         nil,
-				Metadata:      nil,
-				Timestamp:     time.Now(),
-			}
-
-			err := m.bus.PublishInbound(m.ctx, &inMsg)
-			if err != nil {
-				return AgentResponseMsg{Error: err}
-			}
+		err := m.wsClient.SendInbound(m.ctx, bus.ChannelTUI, "tui", "", m.chatID, content, nil, nil)
+		if err != nil {
+			return AgentResponseMsg{Error: err}
 		}
-
 		return nil
 	}
 }
@@ -932,9 +740,4 @@ func (m *Model) IsReady() bool {
 // SetChatID 设置 chatID（TUIModelInterface 实现）
 func (m *Model) SetChatID(chatID string) {
 	m.chatID = chatID
-}
-
-// GetChannelMgr 获取 channel manager
-func (m *Model) GetChannelMgr() *channel.Manager {
-	return m.channelMgr
 }

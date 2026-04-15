@@ -112,7 +112,7 @@ func NewApp(ctx context.Context, cfg *Config) (*App, error) {
 	slog.Info("WebSocket 连接成功")
 
 	// 2. 创建 Model（使用 WebSocket 客户端）
-	model, err := NewModelWithWS(ctx, cfg, wsClient)
+	model, err := NewModel(ctx, cfg, wsClient)
 	if err != nil {
 		wsClient.Close()
 		if service != nil {
