@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/kinwyb/kanflux/bus"
 	"github.com/kinwyb/kanflux/channel"
 )
@@ -27,15 +26,11 @@ type WxComChannel struct {
 	// 配置
 	config *WxComConfig
 
-	// 流式消息管理
-	streamIDs   map[string]string // chatID -> streamID
-	streamIDsMu sync.Mutex
-
 	// logger
 	logger *slog.Logger
 
 	// 运行状态
-	running bool
+	running   bool
 	runningMu sync.Mutex
 }
 
@@ -85,7 +80,6 @@ func NewWxComChannelWithAccount(msgBus *bus.MessageBus, cfg *WxComConfig, accoun
 		wsManager:   wsManager,
 		handler:     handler,
 		config:      cfg,
-		streamIDs:   make(map[string]string),
 		logger:      logger,
 	}, nil
 }
@@ -278,13 +272,7 @@ func (c *WxComChannel) Send(ctx context.Context, msg *bus.OutboundMessage) error
 		return nil
 	}
 
-	// 获取或创建streamID
-	streamID := c.getOrCreateStreamID(msg.ChatID)
-
-	// 构建回复消息
-	body := c.handler.ConvertOutboundToReply(msg, "", streamID, true)
-
-	// 从metadata获取req_id (如果是从入站消息回复)
+	// 从metadata获取req_id，同时用作streamID
 	reqID := ""
 	if msg.Metadata != nil {
 		if id, ok := msg.Metadata["req_id"].(string); ok && id != "" {
@@ -295,6 +283,16 @@ func (c *WxComChannel) Send(ctx context.Context, msg *bus.OutboundMessage) error
 	// 如果没有req_id，生成一个用于主动发送
 	if reqID == "" {
 		reqID = generateReqID(WsCmdSendMsg)
+	}
+
+	// req_id 作为 streamID
+	streamID := reqID
+
+	// 构建回复消息
+	body := c.handler.ConvertOutboundToReply(msg, "", streamID, true)
+
+	// 如果是主动发送（无原始req_id），需要包装成发送消息格式
+	if msg.Metadata == nil || msg.Metadata["req_id"] == nil {
 		body = c.handler.BuildSendMessage(msg.ChatID, body)
 	}
 
@@ -305,59 +303,47 @@ func (c *WxComChannel) Send(ctx context.Context, msg *bus.OutboundMessage) error
 		return err
 	}
 
-	// 清理streamID
-	c.clearStreamID(msg.ChatID)
-
 	return nil
 }
 
 // SendStream 发送流式消息
-func (c *WxComChannel) SendStream(ctx context.Context, chatID string, stream <-chan *bus.StreamMessage) error {
+func (c *WxComChannel) SendStream(ctx context.Context, msg *bus.OutboundMessage) error {
 	if !c.IsRunning() {
 		return nil
 	}
 
-	streamID := c.getOrCreateStreamID(chatID)
-	reqID := "" // 需要从之前的入站消息获取
-
-	for {
-		select {
-		case msg, ok := <-stream:
-			if !ok {
-				// 流结束，发送finish消息
-				body := c.handler.BuildStreamReply(streamID, "", true, nil, nil)
-				// 尝试发送finish
-				c.wsManager.SendReply(ctx, reqID, body, WsCmdResponse)
-				c.clearStreamID(chatID)
-				return nil
-			}
-
-			if msg.Error != "" {
-				c.logger.Error("Stream error", "error", msg.Error)
-				return fmt.Errorf("stream error: %s", msg.Error)
-			}
-
-			// 发送流式消息
-			finish := msg.IsFinal
-			body := c.handler.BuildStreamReply(streamID, msg.Content, finish, nil, nil)
-
-			if reqID != "" {
-				_, err := c.wsManager.SendReply(ctx, reqID, body, WsCmdResponse)
-				if err != nil {
-					c.logger.Error("Failed to send stream message", "error", err)
-					return err
-				}
-			}
-
-			if finish {
-				c.clearStreamID(chatID)
-				return nil
-			}
-
-		case <-ctx.Done():
-			return ctx.Err()
+	// 从metadata获取req_id，同时用作streamID
+	reqID := ""
+	if msg.Metadata != nil {
+		if id, ok := msg.Metadata["req_id"].(string); ok && id != "" {
+			reqID = id
 		}
 	}
+
+	// 如果没有req_id，生成一个（主动发送场景）
+	if reqID == "" {
+		reqID = generateReqID(WsCmdSendMsg)
+	}
+
+	if msg.Error != "" {
+		c.logger.Error("Stream error", "error", msg.Error)
+		return fmt.Errorf("stream error: %s", msg.Error)
+	}
+
+	// req_id 作为 streamID
+	streamID := reqID
+
+	// 发送流式消息
+	finish := msg.IsFinal
+	body := c.handler.BuildStreamReply(streamID, msg.Content, finish, nil, nil)
+
+	_, err := c.wsManager.SendReply(ctx, reqID, body, WsCmdResponse)
+	if err != nil {
+		c.logger.Error("Failed to send stream message", "error", err)
+		return err
+	}
+
+	return nil
 }
 
 // HandleChatEvent 处理聊天事件（仅状态通知）
@@ -403,28 +389,6 @@ func (c *WxComChannel) HandleChatEvent(ctx context.Context, event *bus.ChatEvent
 func (c *WxComChannel) IsAllowed(senderID string) bool {
 	// 企业微信通过后台配置权限，这里始终返回true
 	return c.config.Enabled
-}
-
-// getOrCreateStreamID 获取或创建流式消息ID
-func (c *WxComChannel) getOrCreateStreamID(chatID string) string {
-	c.streamIDsMu.Lock()
-	defer c.streamIDsMu.Unlock()
-
-	if id, ok := c.streamIDs[chatID]; ok {
-		return id
-	}
-
-	// 创建新的streamID
-	id := fmt.Sprintf("stream_%s", uuid.New().String()[:8])
-	c.streamIDs[chatID] = id
-	return id
-}
-
-// clearStreamID 清理流式消息ID
-func (c *WxComChannel) clearStreamID(chatID string) {
-	c.streamIDsMu.Lock()
-	delete(c.streamIDs, chatID)
-	c.streamIDsMu.Unlock()
 }
 
 // ReplyWelcome 回复欢迎语 (需在收到enter_chat事件5秒内调用)

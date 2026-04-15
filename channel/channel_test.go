@@ -223,7 +223,7 @@ func (m *MockChannel) Stop() error {
 }
 func (m *MockChannel) IsRunning() bool { return m.running }
 func (m *MockChannel) Send(ctx context.Context, msg *bus.OutboundMessage) error { return nil }
-func (m *MockChannel) SendStream(ctx context.Context, chatID string, stream <-chan *bus.StreamMessage) error {
+func (m *MockChannel) SendStream(ctx context.Context, msg *bus.OutboundMessage) error {
 	return nil
 }
 func (m *MockChannel) HandleChatEvent(ctx context.Context, event *bus.ChatEvent) error { return nil }

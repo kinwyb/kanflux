@@ -23,12 +23,12 @@ Agent Manager (处理 inbound，发布 outbound)
 ```go
 type Channel interface {
     Name() string                              // 通道名称标识
-    AccountID() string                         // 账号ID（多账号）
+    AccountID() string                         // 号ID（多账号）
     Start(ctx context.Context) error           // 启动通道
     Stop() error                               // 停止通道
     IsRunning() bool                           // 是否运行中
-    Send(ctx context.Context, msg *bus.OutboundMessage) error  // 发送消息
-    SendStream(ctx context.Context, chatID string, stream <-chan *bus.StreamMessage) error // 流式发送
+    Send(ctx context.Context, msg *bus.OutboundMessage) error  // 发送完整消息
+    SendStream(ctx context.Context, msg *bus.OutboundMessage) error // 发送流式增量消息
     HandleChatEvent(ctx context.Context, event *bus.ChatEvent) error // 处理事件
     IsAllowed(senderID string) bool            // 权限检查
 }

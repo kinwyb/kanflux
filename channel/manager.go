@@ -185,24 +185,8 @@ func (m *Manager) dispatchOutbound(ctx context.Context) {
 
 			// 根据消息类型选择发送方式
 			if msg.IsStreaming && !msg.IsFinal {
-				// 流式增量消息：转换为 StreamMessage 并使用 SendStream
-				streamMsg := &bus.StreamMessage{
-					ID:         msg.ID,
-					Channel:    msg.Channel,
-					ChatID:     msg.ChatID,
-					Content:    msg.Content,
-					ChunkIndex: msg.ChunkIndex,
-					IsThinking: msg.IsThinking,
-					IsFinal:    msg.IsFinal,
-					IsComplete: msg.IsFinal,
-					Error:      msg.Error,
-					Metadata:   msg.Metadata,
-				}
-				// 创建单消息 channel 用于 SendStream
-				streamChan := make(chan *bus.StreamMessage, 1)
-				streamChan <- streamMsg
-				close(streamChan)
-				if err := ch.SendStream(ctx, msg.ChatID, streamChan); err != nil {
+				// 流式增量消息：使用 SendStream
+				if err := ch.SendStream(ctx, msg); err != nil {
 					// 记录错误，但不中断分发
 					continue
 				}

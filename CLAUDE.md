@@ -46,7 +46,6 @@ go build -o kanflux .
 
 - **`bus/`**: Event bus for message routing
   - `queue.go`: `MessageBus` with pub/sub for inbound/outbound messages, chat events, log events
-  - `streaming.go`: `StreamMessage` for streaming message chunks (used by Channel.SendStream)
   - `events.go`: Event types and structures for agent events, including StreamingMode configuration
 
 - **`session/`**: Session management
@@ -140,8 +139,8 @@ Channel Manager 根据 `IsStreaming` 和 `IsFinal` 选择发送方式：
 
 ```go
 if msg.IsStreaming && !msg.IsFinal {
-    // 流式增量：转换为 StreamMessage 使用 SendStream
-    ch.SendStream(ctx, chatID, stream)
+    // 流式增量：使用 SendStream
+    ch.SendStream(ctx, msg)
 } else {
     // 完整消息：使用 Send
     ch.Send(ctx, msg)

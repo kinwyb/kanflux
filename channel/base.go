@@ -2,8 +2,6 @@ package channel
 
 import (
 	"context"
-	"fmt"
-	"strings"
 	"sync"
 
 	"github.com/kinwyb/kanflux/bus"
@@ -26,13 +24,14 @@ type Channel interface {
 	// IsRunning 是否运行中
 	IsRunning() bool
 
-	// Send 发送完整消息
+	// Send 发送完整消息（非流式或流式最终消息）
 	Send(ctx context.Context, msg *bus.OutboundMessage) error
 
-	// SendStream 发送流式消息（增量更新）
-	SendStream(ctx context.Context, chatID string, stream <-chan *bus.StreamMessage) error
+	// SendStream 发送流式增量消息
+	// msg 包含 ChatID、Content、IsStreaming、IsThinking、IsFinal 等信息
+	SendStream(ctx context.Context, msg *bus.OutboundMessage) error
 
-	// HandleChatEvent 处理聊天事件 (thinking, tool, delta, final 等)
+	// HandleChatEvent 处理聊天事件 (start, tool, complete, error, interrupt 等)
 	HandleChatEvent(ctx context.Context, event *bus.ChatEvent) error
 
 	// IsAllowed 检查发送者是否允许
@@ -156,32 +155,10 @@ func (c *ChannelBase) GetConfig() BaseChannelConfig {
 	return c.config
 }
 
-// SendStream 发送流式消息 (默认实现，收集所有chunk后一次性发送)
-func (c *ChannelBase) SendStream(ctx context.Context, chatID string, stream <-chan *bus.StreamMessage) error {
-	var content strings.Builder
-
-	for {
-		select {
-		case msg, ok := <-stream:
-			if !ok {
-				return nil
-			}
-			if msg.Error != "" {
-				return fmt.Errorf("stream error: %s", msg.Error)
-			}
-
-			if !msg.IsThinking && !msg.IsFinal {
-				content.WriteString(msg.Content)
-			}
-
-			if msg.IsComplete {
-				// 流结束，由具体 channel 实现决定如何发送
-				return nil
-			}
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
+// SendStream 发送流式消息 (默认实现：直接调用 Send)
+func (c *ChannelBase) SendStream(ctx context.Context, msg *bus.OutboundMessage) error {
+	// 默认实现：直接使用 Send 发送（适用于不支持流式的 Channel）
+	return c.Send(ctx, msg)
 }
 
 // HandleChatEvent 处理聊天事件 (默认空实现，具体 channel 可覆盖)
