@@ -72,50 +72,34 @@ IMPORTANT: When using filesystem tools (ls, read_file, glob, grep, etc.), you MU
 
 // ContextBuilder 构建记忆
 func (b *ContextBuilder) buildMemory() string {
-	memory := fmt.Sprintf(`# Memory Management
+	memory := `# 🧠 Memory Management (Minimalist)
 
-You have memory_tool to manage memory content.
+You use memory_tool to manage memory. 
 
-**Types**:
-- **long**: Long-term memory - for facts, preferences, important decisions
-- **day**: Daily notes - for temporary notes, daily tasks
+**Core Rules**:
+1. **Context**: Long-term memory is already in your context. **Never** use read for type: "long".
+2. **On-Demand**: Use read only for type: "day" to retrieve specific daily notes or tasks.
+3. **Storage**: Use append to save new facts to long or daily logs to day.
 
-**Memory Files**:
-- Long-term: %s/.kanflux/memory/MEMORY.md
-- Daily notes: %s/.kanflux/memory/days/YYYY-MM-DD.md
+### **Actions**
+1. **read**: Strictly for type: "day" only.
+2. **append**: Add new information to the end of long or day.
+3. **edit**: Replace existing text. Requires old_text and new_text.
+4. **write**: Overwrite the entire file content.
 
-**Actions**:
-- **read**: Get current memory content. Returns the actual file content, or empty if file doesn't exist.
-- **append**: Add content to the end. REQUIRES "content" parameter. Use this to add new entries.
-- **edit**: Replace specific text in existing content. REQUIRES "old_text" (must exist in file) and "new_text". FAILS if file is empty or text not found.
-- **write**: Overwrite entire memory. REQUIRES "content" parameter. Use this to completely replace the file.
+### **Parameters**
+- **action**: read, append, edit, write
+- **type**: "day" (default) or "long"
+- **date**: For day type only (YYYY-MM-DD, defaults to today)
+- **content**: Required for append / write.
+- **old_text** / **new_text**: Required for edit.
 
-**Parameters**:
-- action: Required. One of: read, append, edit, write
-- type: "long" or "day" (default: "long")
-- date: For daily notes only (YYYY-MM-DD format, defaults to today)
-- content: Required for append/write. The text to write.
-- old_text: Required for edit. Must match existing text exactly.
-- new_text: Required for edit. The replacement text.
+### **Examples**
+* **Save Fact**: {"action": "append", "type": "long", "content": "User prefers minimalist tools."}
+* **Check Tasks**: {"action": "read", "type": "day"}
+* **Log Work**: {"action": "append", "type": "day", "content": "Updated memory logic."}
 
-**Examples**:
-- Read today: {"action": "read", "type": "day"}
-- Add to long-term: {"action": "append", "type": "long", "content": "User prefers dark mode"}
-- Edit existing: {"action": "edit", "type": "day", "old_text": "task 1", "new_text": "task 1 (done)"}
-- Write new day: {"action": "write", "type": "day", "date": "2026-04-07", "content": "Tasks:\n1. Review code"}
-
-**Common Mistakes**:
-- DON'T use "edit" when file is empty (returns "No notes for..." message) - use "append" or "write" instead
-- DON'T forget "content" parameter for append/write
-- DON'T use "edit" to replace the "No notes" message - that's not file content
-
-**Additional Memory Files**:
-- %s/.kanflux/memory/SOUL.md - Your personality and behavioral guidelines
-- %s/.kanflux/memory/USER.md - User information for personalized assistance
-- %s/.kanflux/memory/IDENTITY.md - Core identity definition
-- %s/.kanflux/memory/AGENTS.md - Agent behavior guidelines
-
-`, b.workspace, b.workspace, b.workspace, b.workspace, b.workspace, b.workspace)
+`
 
 	if memoryContext, err := b.memory.GetMemoryContext(); err == nil && memoryContext != "" {
 		memory = memory + "## Current Memory Content\n\n" + memoryContext
