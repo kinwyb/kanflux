@@ -19,9 +19,9 @@ type WsManager struct {
 	logger *slog.Logger
 
 	// WebSocket连接
-	conn        *websocket.Conn
-	connMu      sync.Mutex
-	isConnected bool
+	conn          *websocket.Conn
+	connMu        sync.Mutex
+	isConnected   bool
 	isManualClose bool
 
 	// 认证状态
@@ -35,23 +35,30 @@ type WsManager struct {
 	reconnectAttempts int
 
 	// 回复队列 (reqID -> queue)
-	replyQueues   map[string][]*replyQueueItem
-	replyQueuesMu sync.Mutex
-	processingQueuesMu sync.Mutex
-	processingQueues   map[string]bool // 正在处理的reqID集合
+	replyQueues     map[string][]*replyQueueItem
+	replyQueuesMu   sync.Mutex
+
+	// 正在处理的 reqID（防止重复通知 worker）
+	processingReqIDs map[string]bool
+	processingMu     sync.Mutex
+
+	// Worker pool 控制
+	replyNotifyCh     chan string           // 无缓冲，阻塞发送保证可靠
+	replyWorkerCtx    context.Context
+	replyWorkerCancel context.CancelFunc
 
 	// 待处理回执
 	pendingAcks   map[string]*pendingAck
 	pendingAcksMu sync.Mutex
 
 	// 回调
-	onConnected    func()
+	onConnected     func()
 	onAuthenticated func()
-	onDisconnected func(reason string)
-	onReconnecting func(attempt int)
-	onError        func(error)
-	onMessage      func(frame *WsFrame)
-	onEvent        func(frame *WsFrame)
+	onDisconnected  func(reason string)
+	onReconnecting  func(attempt int)
+	onError         func(error)
+	onMessage       func(frame *WsFrame)
+	onEvent         func(frame *WsFrame)
 
 	// 接收循环
 	receiveCancel context.CancelFunc
@@ -70,20 +77,24 @@ type replyQueueItem struct {
 
 // pendingAck 待处理回执
 type pendingAck struct {
-	result    chan *WsFrame
-	err       chan error
-	timeout   *time.Timer
-	reqID     string
+	result  chan *WsFrame
+	err     chan error
+	timeout *time.Timer
+	reqID   string
 }
 
 // NewWsManager 创建WebSocket管理器
 func NewWsManager(config *WxComConfig, logger *slog.Logger) *WsManager {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &WsManager{
 		config:           config,
 		logger:           logger,
 		replyQueues:      make(map[string][]*replyQueueItem),
+		processingReqIDs: make(map[string]bool),
 		pendingAcks:      make(map[string]*pendingAck),
-		processingQueues: make(map[string]bool),
+		replyNotifyCh:    make(chan string), // 无缓冲，阻塞发送
+		replyWorkerCtx:   ctx,
+		replyWorkerCancel: cancel,
 		stopChan:         make(chan struct{}),
 	}
 }
@@ -149,6 +160,11 @@ func (m *WsManager) cleanup() {
 	if m.receiveCancel != nil {
 		m.receiveCancel()
 		m.receiveCancel = nil
+	}
+
+	// 停止回复 workers
+	if m.replyWorkerCancel != nil {
+		m.replyWorkerCancel()
 	}
 
 	// 停止心跳
@@ -274,7 +290,7 @@ func (m *WsManager) handleFrame(frame *WsFrame) {
 	m.pendingAcksMu.Unlock()
 
 	// 认证响应
-	if reqID != "" && reqID[:len(WsCmdSubscribe)] == WsCmdSubscribe {
+	if reqID != "" && len(reqID) > len(WsCmdSubscribe) && reqID[:len(WsCmdSubscribe)] == WsCmdSubscribe {
 		if frame.ErrCode != 0 {
 			m.logger.Error("Authentication failed", "errcode", frame.ErrCode, "errmsg", frame.ErrMsg)
 			if m.onError != nil {
@@ -287,6 +303,10 @@ func (m *WsManager) handleFrame(frame *WsFrame) {
 		m.isAuthenticated = true
 		m.connMu.Unlock()
 		m.startHeartbeat()
+
+		// 启动回复 workers（默认 3 个）
+		m.startReplyWorkers(3)
+
 		if m.onAuthenticated != nil {
 			m.onAuthenticated()
 		}
@@ -294,7 +314,7 @@ func (m *WsManager) handleFrame(frame *WsFrame) {
 	}
 
 	// 心跳响应
-	if reqID != "" && reqID[:len(WsCmdHeartbeat)] == WsCmdHeartbeat {
+	if reqID != "" && len(reqID) > len(WsCmdHeartbeat) && reqID[:len(WsCmdHeartbeat)] == WsCmdHeartbeat {
 		if frame.ErrCode != 0 {
 			m.logger.Warn("Heartbeat ack error", "errcode", frame.ErrCode, "errmsg", frame.ErrMsg)
 			return
@@ -429,8 +449,8 @@ func (m *WsManager) send(frame *WsFrame) error {
 	return m.conn.WriteMessage(websocket.TextMessage, data)
 }
 
-// SendReply 通过WebSocket通道发送回复消息 (串行队列版本)
-// 同一个reqID的消息会被放入队列中串行发送
+// SendReply 通过WebSocket通道发送回复消息
+// 同一个reqID的消息会被放入队列中串行发送，不同reqID由不同worker并行处理
 func (m *WsManager) SendReply(ctx context.Context, reqID string, body map[string]interface{}, cmd string) (*WsFrame, error) {
 	frame := &WsFrame{
 		Cmd: cmd,
@@ -446,32 +466,28 @@ func (m *WsManager) SendReply(ctx context.Context, reqID string, body map[string
 		err:    make(chan error, 1),
 	}
 
+	// 加入队列
 	m.replyQueuesMu.Lock()
-	if m.replyQueues[reqID] == nil {
-		m.replyQueues[reqID] = []*replyQueueItem{}
-	}
-
 	queue := m.replyQueues[reqID]
-
-	// 防止队列无限增长
 	if len(queue) >= 100 {
 		m.replyQueuesMu.Unlock()
 		return nil, ErrQueueFull
 	}
-
-	queue = append(queue, item)
-	m.replyQueues[reqID] = queue
-
-	// 如果队列中只有这一条，立即开始处理
-	if len(queue) == 1 {
-		m.processingQueuesMu.Lock()
-		processing := m.processingQueues[reqID]
-		m.processingQueuesMu.Unlock()
-		if !processing {
-			go m.processReplyQueue(ctx, reqID)
-		}
-	}
+	m.replyQueues[reqID] = append(queue, item)
 	m.replyQueuesMu.Unlock()
+
+	// 检查是否正在处理中
+	m.processingMu.Lock()
+	isProcessing := m.processingReqIDs[reqID]
+	if !isProcessing {
+		m.processingReqIDs[reqID] = true // 标记正在处理
+	}
+	m.processingMu.Unlock()
+
+	// 只有不在处理中才通知 worker（阻塞发送保证可靠）
+	if !isProcessing {
+		m.replyNotifyCh <- reqID
+	}
 
 	// 等待结果
 	select {
@@ -484,73 +500,98 @@ func (m *WsManager) SendReply(ctx context.Context, reqID string, body map[string
 	}
 }
 
-// processReplyQueue 处理指定reqID的回复队列
-func (m *WsManager) processReplyQueue(ctx context.Context, reqID string) {
-	m.processingQueuesMu.Lock()
-	m.processingQueues[reqID] = true
-	m.processingQueuesMu.Unlock()
+// startReplyWorkers 启动多个回复 worker
+func (m *WsManager) startReplyWorkers(count int) {
+	// 创建新的 worker context（每次连接成功时重新创建）
+	m.replyWorkerCtx, m.replyWorkerCancel = context.WithCancel(context.Background())
 
-	defer func() {
-		m.processingQueuesMu.Lock()
-		delete(m.processingQueues, reqID)
-		m.processingQueuesMu.Unlock()
-	}()
+	for i := 0; i < count; i++ {
+		go m.replyWorkerLoop(i)
+	}
+	m.logger.Info("Reply workers started", "count", count)
+}
 
+// replyWorkerLoop worker 处理循环
+func (m *WsManager) replyWorkerLoop(workerID int) {
+	for {
+		select {
+		case <-m.replyWorkerCtx.Done():
+			m.logger.Debug("Reply worker stopped", "worker_id", workerID)
+			return
+		case reqID := <-m.replyNotifyCh:
+			m.logger.Debug("Worker received task", "worker_id", workerID, "req_id", reqID)
+			m.processReplyQueueForReqID(reqID)
+			// 处理完后清除标记
+			m.processingMu.Lock()
+			delete(m.processingReqIDs, reqID)
+			m.processingMu.Unlock()
+		}
+	}
+}
+
+// processReplyQueueForReqID 处理指定 reqID 的队列直到空
+func (m *WsManager) processReplyQueueForReqID(reqID string) {
 	for {
 		m.replyQueuesMu.Lock()
 		queue := m.replyQueues[reqID]
 		if len(queue) == 0 {
 			delete(m.replyQueues, reqID)
 			m.replyQueuesMu.Unlock()
-			break
+			return // 队列空，结束处理
 		}
 
 		item := queue[0]
 		m.replyQueuesMu.Unlock()
 
-		// 发送消息
-		if err := m.send(item.frame); err != nil {
-			m.logger.Error("Failed to send reply", "req_id", reqID, "error", err)
-			m.replyQueuesMu.Lock()
-			m.replyQueues[reqID] = m.replyQueues[reqID][1:]
-			m.replyQueuesMu.Unlock()
+		// 发送并等待回执
+		result, err := m.sendAndWaitAck(item.frame, reqID)
+
+		// 移除已处理的消息
+		m.replyQueuesMu.Lock()
+		if q := m.replyQueues[reqID]; len(q) > 0 {
+			m.replyQueues[reqID] = q[1:]
+		}
+		m.replyQueuesMu.Unlock()
+
+		// 返回结果给调用者
+		if err != nil {
 			item.err <- err
-			continue
-		}
-
-		m.logger.Debug("Reply message sent", "req_id", reqID)
-
-		// 设置回执等待
-		ack := &pendingAck{
-			result:  item.result,
-			err:     item.err,
-			reqID:   reqID,
-		}
-		ack.timeout = time.AfterFunc(time.Duration(DefaultReplyAckTimeout)*time.Second, func() {
-			m.onReplyAckTimeout(reqID, ack)
-		})
-
-		m.pendingAcksMu.Lock()
-		m.pendingAcks[reqID] = ack
-		m.pendingAcksMu.Unlock()
-
-		// 等待回执结果
-		select {
-		case result := <-ack.result:
-			// 成功收到回执
-			m.replyQueuesMu.Lock()
-			m.replyQueues[reqID] = m.replyQueues[reqID][1:]
-			m.replyQueuesMu.Unlock()
+		} else {
 			item.result <- result
-		case err := <-ack.err:
-			// 回执错误
-			m.replyQueuesMu.Lock()
-			m.replyQueues[reqID] = m.replyQueues[reqID][1:]
-			m.replyQueuesMu.Unlock()
-			item.err <- err
-		case <-ctx.Done():
-			return
 		}
+	}
+}
+
+// sendAndWaitAck 发送帧并等待回执
+func (m *WsManager) sendAndWaitAck(frame *WsFrame, reqID string) (*WsFrame, error) {
+	if err := m.send(frame); err != nil {
+		return nil, err
+	}
+
+	m.logger.Debug("Reply message sent", "req_id", reqID)
+
+	// 创建 ack channel
+	ackResultCh := make(chan *WsFrame, 1)
+	ackErrCh := make(chan error, 1)
+
+	ack := &pendingAck{
+		result:  ackResultCh,
+		err:     ackErrCh,
+		reqID:   reqID,
+	}
+	ack.timeout = time.AfterFunc(time.Duration(DefaultReplyAckTimeout)*time.Second, func() {
+		m.onReplyAckTimeout(reqID, ack)
+	})
+
+	m.pendingAcksMu.Lock()
+	m.pendingAcks[reqID] = ack
+	m.pendingAcksMu.Unlock()
+
+	select {
+	case result := <-ackResultCh:
+		return result, nil
+	case err := <-ackErrCh:
+		return nil, err
 	}
 }
 
@@ -590,9 +631,9 @@ func (m *WsManager) clearPendingMessages(reason string) {
 		if ack.timeout != nil {
 			ack.timeout.Stop()
 		}
-		ack.err <- fmt.Errorf("%s, reply for req_id %s cancelled", reason, reqID)
+		ack.err <- fmt.Errorf("%s, reply cancelled", reason)
+		delete(m.pendingAcks, reqID)
 	}
-	m.pendingAcks = make(map[string]*pendingAck)
 	m.pendingAcksMu.Unlock()
 
 	m.replyQueuesMu.Lock()
@@ -600,9 +641,13 @@ func (m *WsManager) clearPendingMessages(reason string) {
 		for _, item := range queue {
 			item.err <- fmt.Errorf("%s, reply for req_id %s cancelled", reason, reqID)
 		}
+		delete(m.replyQueues, reqID)
 	}
-	m.replyQueues = make(map[string][]*replyQueueItem)
 	m.replyQueuesMu.Unlock()
+
+	m.processingMu.Lock()
+	m.processingReqIDs = make(map[string]bool)
+	m.processingMu.Unlock()
 }
 
 // Disconnect 断开连接

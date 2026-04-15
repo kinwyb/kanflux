@@ -164,8 +164,8 @@ func (c *WxComChannel) handleMessage(frame *WsFrame) {
 		return
 	}
 
-	// 转换为bus消息
-	inbound := c.handler.ConvertToInbound(msg, bus.ChannelWxCom, c.config.BotID)
+	// 转换为bus消息，使用 channel 自己的名称（支持多账号场景）
+	inbound := c.handler.ConvertToInbound(msg, c.Name(), c.config.BotID)
 
 	// 发布入站消息
 	if err := c.PublishInbound(context.Background(), inbound); err != nil {
@@ -188,7 +188,7 @@ func (c *WxComChannel) handleEvent(frame *WsFrame) {
 		// 发送欢迎语 (可选)
 		// 需要在5秒内回复，这里不自动回复，由Agent处理
 		inbound := &bus.InboundMessage{
-			Channel:   bus.ChannelWxCom,
+			Channel:   c.Name(), // 使用 channel 自己的名称（支持多账号场景）
 			AccountID: c.config.BotID,
 			SenderID:  event.UserID,
 			ChatID:    event.UserID, // 单聊场景，chatID = userID
@@ -205,7 +205,7 @@ func (c *WxComChannel) handleEvent(frame *WsFrame) {
 	// 处理模板卡片事件
 	if event.EventType == EventTypeTemplateCardEvent {
 		inbound := &bus.InboundMessage{
-			Channel:   bus.ChannelWxCom,
+			Channel:   c.Name(), // 使用 channel 自己的名称（支持多账号场景）
 			AccountID: c.config.BotID,
 			SenderID:  event.UserID,
 			ChatID:    event.ChatID,
@@ -224,7 +224,7 @@ func (c *WxComChannel) handleEvent(frame *WsFrame) {
 	// 处理反馈事件
 	if event.EventType == EventTypeFeedbackEvent {
 		inbound := &bus.InboundMessage{
-			Channel:   bus.ChannelWxCom,
+			Channel:   c.Name(), // 使用 channel 自己的名称（支持多账号场景）
 			AccountID: c.config.BotID,
 			SenderID:  event.UserID,
 			ChatID:    event.ChatID,

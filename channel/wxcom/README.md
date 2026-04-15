@@ -7,11 +7,252 @@
 - WebSocket 长连接 (`wss://openws.work.weixin.qq.com`)
 - 自动认证 (bot_id + secret)
 - 心跳保活和断线重连 (指数退避)
+- Worker Pool 消息处理 (固定 3 个 worker，不同会话并行处理)
 - 流式消息回复
 - 模板卡片消息
 - 主动消息推送
 - 事件回调处理
 - 文件下载与 AES-256-CBC 解密
+
+## 消息流转架构
+
+### 整体流程图
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        企业微信服务器                                         │
+│                         wss://openws.work.weixin.qq.com                      │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    ↓ ↑ WebSocket
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        WsManager (ws.go)                                      │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  receiveLoop() → handleFrame()                                                │
+│       ↓                                                                       │
+│  if cmd == WsCmdCallback: onMessage(frame)                                    │
+│  if cmd == WsCmdEventCallback: onEvent(frame)                                 │
+│  if 回执帧: handleReplyAck(reqID, frame, ack)                                 │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    ↓
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        WxComChannel (wxcom.go)                                │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  handleMessage(frame):                                                        │
+│    ParseInboundMessage(frame) → WsMessage                                     │
+│    ConvertToInbound(msg, c.Name(), BotID) → bus.InboundMessage               │
+│    PublishInbound(ctx, inbound) → bus.inbound channel                         │
+│                                                                               │
+│  handleEvent(frame):                                                          │
+│    ParseEvent(frame) → WsEvent                                                │
+│    PublishInbound(ctx, inbound) [含 req_id 在 metadata]                       │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    ↓ bus.InboundMessage
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        Agent Manager (agent/manager.go)                       │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  processMessages():                                                           │
+│    ConsumeInbound(ctx) ← bus.inbound                                          │
+│    RouteInbound(ctx, msg) → handleInboundMessage()                            │
+│                                                                               │
+│  handleInboundMessage():                                                      │
+│    RegisterCallback() → handleAgentEvent() 监听 Agent 输出                    │
+│    Agent.Prompt()/Resume() → 处理消息                                         │
+│                                                                               │
+│  handleAgentEvent():                                                          │
+│    baseMetadata := copy msg.Metadata [含 req_id]                              │
+│    publishChatEvent(ctx, ..., baseMetadata) → bus.chatEvents                  │
+│    PublishOutbound(ctx, outbound) → bus.outbound                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    ↓ bus.ChatEvent / bus.OutboundMessage
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        Channel Manager (channel/manager.go)                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  dispatchChatEvents():                                                        │
+│    ← chatSub.Channel (订阅 ChatEvent)                                         │
+│    ch.HandleChatEvent(ctx, event) → WxComChannel.HandleChatEvent()            │
+│                                                                               │
+│  dispatchOutbound():                                                          │
+│    ← outSub.Channel (订阅 OutboundMessage)                                    │
+│    ch.Send(ctx, msg) → WxComChannel.Send()                                    │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    ↓
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        WxComChannel 发送回复                                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  HandleChatEvent(ctx, event):                                                 │
+│    reqID := event.Metadata["req_id"]                                          │
+│    streamID := getOrCreateStreamID(chatID)                                    │
+│    body := BuildStreamReply(streamID, content, finish)                        │
+│    wsManager.SendReply(ctx, reqID, body, WsCmdResponse)                       │
+│                                                                               │
+│  Send(ctx, msg):                                                              │
+│    reqID := msg.Metadata["req_id"] (或主动发送时生成)                          │
+│    wsManager.SendReply(ctx, reqID, body, cmd)                                 │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    ↓
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        WsManager Worker Pool (ws.go)                          │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                               │
+│   ┌───────────────────────────────────────────────────────────────────┐      │
+│   │                    replyNotifyCh (无缓冲，阻塞发送)                  │      │
+│   │                                                                    │      │
+│   │   SendReply(reqID=A) → 加入队列A → processingReqIDs[A]=true        │      │
+│   │                          → notifyCh ← A (阻塞)                     │      │
+│   │   SendReply(reqID=B) → 加入队列B → processingReqIDs[B]=true        │      │
+│   │                          → notifyCh ← B (阻塞)                     │      │
+│   │   SendReply(reqID=A) → 加入队列A → processingReqIDs[A]=true        │      │
+│   │                          → 不通知 (worker 正在处理)                │      │
+│   └───────────────────────────────────────────────────────────────────┘      │
+│                                    ↓                                          │
+│              ┌──────────────────────────────────────────────┐                 │
+│              │           Worker Pool (3 goroutines)          │                 │
+│              │                                              │                 │
+│              │  ┌─────────┐  ┌─────────┐  ┌─────────┐       │                 │
+│              │  │worker 1 │  │worker 2 │  │worker 3 │       │                 │
+│              │  │处理 reqA│  │处理 reqB│  │等待任务  │       │                 │
+│              │  └─────────┘  └─────────┘  └─────────┘       │                 │
+│              └──────────────────────────────────────────────┘                 │
+│                                    ↓                                          │
+│   processReplyQueueForReqID(reqID):                                           │
+│       for {                                                                    │
+│           item := queue[0]                                                    │
+│           result, err := sendAndWaitAck(item.frame, reqID)                    │
+│           queue = queue[1:]                                                   │
+│           item.result/err ← result/err                                        │
+│           if len(queue) == 0: 清除 processingReqIDs[reqID], return            │
+│       }                                                                        │
+│                                                                               │
+│   sendAndWaitAck(frame, reqID):                                               │
+│       send(frame) → WebSocket                                                 │
+│       创建 ackResultCh, ackErrCh                                              │
+│       注册 pendingAcks[reqID] = ack                                           │
+│       等待 ← ackResultCh 或 ← ackErrCh                                        │
+│                                                                               │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    ↓ ↑ WebSocket 发送/接收回执
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        receiveLoop → handleReplyAck                           │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  收到回执帧 (Headers["req_id"] 在 pendingAcks 中):                            │
+│                                                                               │
+│  handleReplyAck(reqID, frame, ack):                                           │
+│      ack.timeout.Stop()                                                       │
+│      delete(pendingAcks, reqID)                                               │
+│      if frame.ErrCode != 0: ack.err ← error                                   │
+│      else: ack.result ← frame                                                 │
+│                                                                               │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    ↓
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        SendReply 返回结果                                     │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                               │
+│   ackResultCh ← frame (handleReplyAck 写入)                                   │
+│       ↓                                                                       │
+│   sendAndWaitAck 返回 (result, nil)                                           │
+│       ↓                                                                       │
+│   item.result ← result (worker 转发)                                          │
+│       ↓                                                                       │
+│   SendReply 返回 (result, nil)                                                │
+│       ↓                                                                       │
+│   HandleChatEvent / Send 返回                                                 │
+│                                                                               │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### req_id 透传机制
+
+**关键设计**：回复消息必须透传入站消息的 `req_id`，这是企业微信协议的要求。
+
+```
+入站消息 (企业微信推送)
+    ↓
+WsFrame.Headers["req_id"] = "aibot_msg_callback_xxx"
+    ↓
+ParseInboundMessage → WsMessage
+    ↓
+ConvertToInbound → bus.InboundMessage.Metadata["req_id"] = "xxx"
+    ↓
+Agent Manager 处理
+    ↓
+handleAgentEvent → baseMetadata 复制 req_id
+    ↓
+ChatEvent.Metadata["req_id"] = "xxx"
+    ↓
+Channel Manager 分发
+    ↓
+HandleChatEvent → reqID := event.Metadata["req_id"]
+    ↓
+SendReply(reqID, ...) → WsFrame.Headers["req_id"] = "xxx" (透传)
+    ↓
+企业微信服务器匹配原始消息
+```
+
+### Worker Pool 设计
+
+**核心特点**：
+
+| 特性 | 说明 |
+|------|------|
+| 固定 goroutine | 默认 3 个 worker，不随消息量增长 |
+| 并行处理 | 不同 reqID 由不同 worker 并行处理 |
+| 串行保证 | 同一 reqID 的消息串行发送（等待 ack） |
+| 阻塞通知 | 无缓冲 notify channel，保证 worker 收到 |
+| 不重复通知 | processingReqIDs 标记防止同一 reqID 被重复通知 |
+
+**并发处理示意**：
+
+```
+时间线 →
+
+reqID=A 的消息:  [消息1]────等待ack────[消息2]────等待ack────
+                     │                       │
+                     ↓                       ↓
+worker 1:        [处理A]─────────────────[处理A]
+
+reqID=B 的消息:  [消息1]────等待ack────
+                     │
+                     ↓
+worker 2:        [处理B]
+
+reqID=C 的消息:  [消息1]────等待ack────
+                     │
+                     ↓
+worker 3:        [处理C]
+
+说明：
+- A、B、C 三个会话的消息并行处理（不同 worker）
+- A 的多条消息串行处理（同一 worker，等待 ack 后再发下一条）
+```
+
+### Channel 通信架构
+
+**三层 Channel 设计**：
+
+```
+┌──────────────────────┐
+│  SendReply 调用者     │ ← 等待 item.result/item.err
+│  (goroutine A)       │
+└──────────────────────┘
+           ↑
+           │ (转发)
+┌──────────────────────┐
+│  replyWorkerLoop     │ ← 发送消息，等待 ack
+│  (goroutine B)       │ ← 转发结果到 item channel
+└──────────────────────┘
+           ↑
+           │ (写入)
+┌──────────────────────┐
+│  receiveLoop         │ ← 接收 WebSocket 回执
+│  (goroutine C)       │ ← handleReplyAck 写入 ack channel
+└──────────────────────┘
+
+Channel 说明：
+- item.result/err: SendReply 创建，返回给调用者
+- ackResultCh/ackErrCh: worker 创建，等待服务器回执
+- replyNotifyCh: 无缓冲，通知 worker 有新队列
+```
 
 ## 配置
 
