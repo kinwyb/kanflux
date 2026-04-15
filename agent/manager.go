@@ -708,6 +708,7 @@ func (m *Manager) handleInboundMessage(ctx context.Context, msg *bus.InboundMess
 			Content:   "",
 			ReplyTo:   msg.ID,
 			Timestamp: time.Now(),
+			Metadata:  msg.Metadata,
 		}
 		if pubErr := m.bus.PublishOutbound(ctx, outbound); pubErr != nil {
 			m.log(ctx, bus.LogLevelError, "manager", fmt.Sprintf("Failed to publish empty outbound: %v", pubErr))
@@ -744,6 +745,7 @@ func (m *Manager) handleInboundMessage(ctx context.Context, msg *bus.InboundMess
 		Media:            responseMedia,
 		ReplyTo:          msg.ID,
 		Timestamp:        time.Now(),
+		Metadata:         msg.Metadata,
 	}
 
 	if err = m.bus.PublishOutbound(ctx, outbound); err != nil {
@@ -755,20 +757,29 @@ func (m *Manager) handleInboundMessage(ctx context.Context, msg *bus.InboundMess
 
 // handleAgentEvent 处理 Agent 事件，转发到消息总线
 func (m *Manager) handleAgentEvent(ctx context.Context, msg *bus.InboundMessage, agentName string, event *Event, seq int) {
+	// 构建基础 metadata，包含入站消息的 req_id 用于回复透传
+	baseMetadata := make(map[string]interface{})
+	if msg.Metadata != nil {
+		// 复制入站消息的 metadata，特别是 req_id 用于 wxcom channel 回复
+		for k, v := range msg.Metadata {
+			baseMetadata[k] = v
+		}
+	}
+
 	switch event.Type {
 	case EventMessageStart:
-		//m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateDelta, "", seq)
+		//m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateDelta, "", seq, baseMetadata)
 	case EventMessageUpdate:
 		if event.Message != nil {
 			if event.Message.ReasoningContent != "" {
-				m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateThinking, event.Message.ReasoningContent, seq)
+				m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateThinking, event.Message.ReasoningContent, seq, baseMetadata)
 			} else {
-				m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateDelta, event.Message.Content, seq)
+				m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateDelta, event.Message.Content, seq, baseMetadata)
 			}
 		}
 	case EventMessageEnd:
 		if event.Message != nil {
-			m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateFinal, event.Message.Content, seq)
+			m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateFinal, event.Message.Content, seq, baseMetadata)
 		}
 	case EventToolStart:
 		if event.Message != nil && len(event.Message.ToolCalls) > 0 {
@@ -777,17 +788,39 @@ func (m *Manager) handleAgentEvent(ctx context.Context, msg *bus.InboundMessage,
 				"tool_id":   event.Message.ToolCalls[0].ID,
 				"args":      event.Message.ToolCalls[0].Function.Arguments,
 			}
-			m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateTool, fmt.Sprintf("%v", toolInfo), seq)
+			// 合并 baseMetadata 和 toolInfo
+			mergedMeta := make(map[string]interface{})
+			for k, v := range baseMetadata {
+				mergedMeta[k] = v
+			}
+			mergedMeta["tool_info"] = toolInfo
+			m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateTool, fmt.Sprintf("%v", toolInfo), seq, mergedMeta)
 		}
 	case EventToolEnd:
 		if event.Message != nil {
 			toolInfo := map[string]interface{}{
 				"tool_result": event.Message.Content,
 			}
-			m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateTool, fmt.Sprintf("%v", toolInfo), seq)
+			// 合并 baseMetadata 和 toolInfo
+			mergedMeta := make(map[string]interface{})
+			for k, v := range baseMetadata {
+				mergedMeta[k] = v
+			}
+			mergedMeta["tool_info"] = toolInfo
+			m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateTool, fmt.Sprintf("%v", toolInfo), seq, mergedMeta)
 		}
 	case EventInterrupt:
-		m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateInterrupt, event.Message.Content, seq, event.Metadata)
+		// 合并 baseMetadata 和 event.Metadata
+		mergedMeta := make(map[string]interface{})
+		for k, v := range baseMetadata {
+			mergedMeta[k] = v
+		}
+		if event.Metadata != nil {
+			for k, v := range event.Metadata {
+				mergedMeta[k] = v
+			}
+		}
+		m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateInterrupt, event.Message.Content, seq, mergedMeta)
 	}
 }
 

@@ -44,7 +44,7 @@ func TestNewAgent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	content, err := agent.Prompt(ctx, []adk.Message{schema.UserMessage("我叫什么")}, "")
+	content, err := agent.Prompt(ctx, []adk.Message{schema.UserMessage("我叫什么")}, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
