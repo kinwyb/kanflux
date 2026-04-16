@@ -165,8 +165,9 @@ func (m *Manager) RegisterAgentsFromConfig(ctx context.Context, cfg *config.Conf
 		skillDirs := config.GetDefaultSkillDirs(resolved.Workspace)
 
 		// 创建 Memoria 统一记忆系统（替代 RAG Manager + History）
+		// 只有当 MemoriaEnabled 为 true 且有知识库配置或 Embedding 配置时才创建
 		var memInstance *memoria.Memoria
-		if len(resolved.KnowledgePaths) > 0 || resolved.EmbeddingModel != "" {
+		if resolved.MemoriaEnabled && (len(resolved.KnowledgePaths) > 0 || resolved.EmbeddingModel != "") {
 			m.log(ctx, bus.LogLevelInfo, "manager", fmt.Sprintf("Creating Memoria for agent '%s'...", name))
 
 			mem, err := m.createMemoria(ctx, resolved)

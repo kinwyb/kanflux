@@ -91,6 +91,8 @@ type AgentConfig struct {
 	RAGConfig          *RAGConfigOptions     `json:"rag_config"`          // RAG 详细配置
 	// Memoria 记忆摘要配置
 	SummarizeModel     *EmbeddingConfig      `json:"summarize_model"`     // 记忆摘要模型配置（用于 Memoria）
+	// MemoriaEnabled 是否启用 Memoria 记忆系统（默认 true）
+	MemoriaEnabled     bool                  `json:"memoria_enabled"`     // 是否启用 Memoria，默认 true
 }
 
 // KnowledgePathConfig 知识库路径配置
@@ -140,6 +142,8 @@ type ResolvedAgentConfig struct {
 	SummarizeModel      string // 记忆摘要模型名称
 	SummarizeAPIKey     string // 记忆摘要 API Key
 	SummarizeAPIBaseURL string // 记忆摘要 API Base URL
+	// MemoriaEnabled 是否启用 Memoria 记忆系统
+	MemoriaEnabled      bool   // 是否启用 Memoria，默认 true
 }
 
 // Load 从指定路径加载配置文件
@@ -278,6 +282,12 @@ func (c *Config) ResolveAgentConfig(name string) (*ResolvedAgentConfig, error) {
 	// 解析 SummarizeModel 配置（用于 Memoria）
 	summarizeProvider, summarizeModel, summarizeAPIKey, summarizeAPIBaseURL := c.resolveSummarizeModelConfig(agent, providerName, provider, model)
 
+	// 解析 MemoriaEnabled 配置，默认 true
+	memoriaEnabled := true
+	if agent.MemoriaEnabled == false {
+		memoriaEnabled = false
+	}
+
 	return &ResolvedAgentConfig{
 		Name:                agent.Name,
 		Type:                agentType,
@@ -302,6 +312,7 @@ func (c *Config) ResolveAgentConfig(name string) (*ResolvedAgentConfig, error) {
 		SummarizeModel:      summarizeModel,
 		SummarizeAPIKey:     summarizeAPIKey,
 		SummarizeAPIBaseURL: summarizeAPIBaseURL,
+		MemoriaEnabled:      memoriaEnabled,
 	}, nil
 }
 

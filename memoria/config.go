@@ -18,6 +18,8 @@ type EmbeddingConfig struct {
 
 // Config holds configuration for Memoria service
 type Config struct {
+	// Enabled 是否启用 Memoria 记忆系统（默认 true）
+	Enabled         bool                   `json:"enabled"`
 	Workspace       string                 `json:"workspace"`
 	ScheduleConfig  *ScheduleConfig        `json:"schedule_config"`
 	StorageConfig   *types.StorageConfig   `json:"storage_config"`
@@ -42,6 +44,7 @@ type ScheduleConfig struct {
 // DefaultConfig returns default configuration
 func DefaultConfig() *Config {
 	return &Config{
+		Enabled: true, // 默认启用 Memoria
 		ScheduleConfig: &ScheduleConfig{
 			Enabled:         true,
 			ChatInterval:    5 * time.Minute,
@@ -131,6 +134,11 @@ func (c *Config) ApplyOptions(opts ...ConfigOption) *Config {
 		opt(c)
 	}
 	return c
+}
+
+// WithEnabled sets whether Memoria is enabled
+func WithEnabled(enabled bool) ConfigOption {
+	return func(c *Config) { c.Enabled = enabled }
 }
 
 // NewConfig creates a new config with options
