@@ -428,10 +428,11 @@ func (s *Server) broadcastChatEvent(event *bus.ChatEvent) {
 // broadcastLogEvent 广播日志事件
 func (s *Server) broadcastLogEvent(event *bus.LogEvent) {
 	payload := ConvertLogEventToPayload(&LogEvent{
-		ID:      event.ID,
-		Level:   event.Level,
-		Message: event.Message,
-		Source:  event.Source,
+		ID:        event.ID,
+		Level:     event.Level,
+		Message:   event.Message,
+		Source:    event.Source,
+		Timestamp: event.Timestamp,
 	})
 
 	wsMsg, err := NewWSMessage(MsgTypeLogEvent, uuid.New().String(), payload)

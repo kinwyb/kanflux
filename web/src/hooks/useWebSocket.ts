@@ -44,6 +44,8 @@ export function useWebSocket(): UseWebSocketReturn {
   const [logs, setLogs] = useState<LogEvent[]>([])
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectTimeoutRef = useRef<number | undefined>(undefined)
+  const heartbeatIntervalRef = useRef<number | undefined>(undefined)
+  const heartbeatTimeoutRef = useRef<number | undefined>(undefined)
 
   // Pending requests map for request/response pattern
   const pendingRequestsRef = useRef<Map<string, {
@@ -52,20 +54,71 @@ export function useWebSocket(): UseWebSocketReturn {
     timeout: number
   }>>(new Map())
 
+  // Heartbeat interval (30 seconds)
+  const HEARTBEAT_INTERVAL = 30000
+  // Heartbeat timeout (10 seconds) - if no response, reconnect
+  const HEARTBEAT_TIMEOUT = 10000
+
+  const startHeartbeat = useCallback(() => {
+    // Clear existing timers
+    if (heartbeatIntervalRef.current) {
+      clearInterval(heartbeatIntervalRef.current)
+    }
+    if (heartbeatTimeoutRef.current) {
+      clearTimeout(heartbeatTimeoutRef.current)
+    }
+
+    heartbeatIntervalRef.current = window.setInterval(() => {
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        // Send heartbeat
+        const heartbeatMsg: WSMessage = {
+          type: 'heartbeat',
+          id: generateId(),
+          timestamp: Date.now(),
+          payload: { timestamp: Date.now() },
+        }
+        wsRef.current.send(JSON.stringify(heartbeatMsg))
+
+        // Set timeout for response
+        heartbeatTimeoutRef.current = window.setTimeout(() => {
+          console.warn('[WebSocket] Heartbeat timeout, reconnecting...')
+          wsRef.current?.close()
+        }, HEARTBEAT_TIMEOUT)
+      }
+    }, HEARTBEAT_INTERVAL)
+  }, [])
+
+  const stopHeartbeat = useCallback(() => {
+    if (heartbeatIntervalRef.current) {
+      clearInterval(heartbeatIntervalRef.current)
+      heartbeatIntervalRef.current = undefined
+    }
+    if (heartbeatTimeoutRef.current) {
+      clearTimeout(heartbeatTimeoutRef.current)
+      heartbeatTimeoutRef.current = undefined
+    }
+  }, [])
+
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return
 
     setConnectionState('connecting')
+    // Stop heartbeat before connecting
+    stopHeartbeat()
     const ws = new WebSocket(WS_URL)
 
     ws.onopen = () => {
       setConnectionState('connected')
       console.log('[WebSocket] Connected to gateway')
+      // Start heartbeat after connected
+      startHeartbeat()
     }
 
     ws.onclose = () => {
       setConnectionState('disconnected')
       console.log('[WebSocket] Disconnected from gateway')
+      // Stop heartbeat
+      stopHeartbeat()
       // Reject all pending requests
       pendingRequestsRef.current.forEach(({ reject, timeout }) => {
         clearTimeout(timeout)
@@ -87,6 +140,16 @@ export function useWebSocket(): UseWebSocketReturn {
       try {
         const data: WSMessage = JSON.parse(event.data)
 
+        // Handle heartbeat response
+        if (data.type === 'heartbeat_ack') {
+          // Clear heartbeat timeout
+          if (heartbeatTimeoutRef.current) {
+            clearTimeout(heartbeatTimeoutRef.current)
+            heartbeatTimeoutRef.current = undefined
+          }
+          return
+        }
+
         // Check if this is a response to a pending request
         const pending = pendingRequestsRef.current.get(data.id)
         if (pending) {
@@ -105,7 +168,17 @@ export function useWebSocket(): UseWebSocketReturn {
             setEvents(prev => [...prev.slice(-50), data.payload as ChatEvent])
             break
           case 'log_event':
-            setLogs(prev => [...prev.slice(-200), data.payload as LogEvent])
+            {
+              const logPayload = data.payload as { id: string; level: string; message: string; source: string; timestamp: number }
+              const logEvent: LogEvent = {
+                id: logPayload.id,
+                level: logPayload.level as 'debug' | 'info' | 'warn' | 'error',
+                message: logPayload.message,
+                source: logPayload.source,
+                timestamp: new Date(logPayload.timestamp),
+              }
+              setLogs(prev => [...prev.slice(-200), logEvent])
+            }
             break
           case 'error':
             console.error('[WebSocket] Server error:', data.payload)
@@ -117,7 +190,7 @@ export function useWebSocket(): UseWebSocketReturn {
     }
 
     wsRef.current = ws
-  }, [])
+  }, [startHeartbeat, stopHeartbeat])
 
   // Send a request and wait for response
   const sendRequest = useCallback(<T>(type: MessageType, payload: unknown, timeoutMs = 5000): Promise<T> => {
@@ -241,6 +314,7 @@ export function useWebSocket(): UseWebSocketReturn {
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current)
       }
+      stopHeartbeat()
       pendingRequestsRef.current.forEach(({ timeout }) => {
         clearTimeout(timeout)
       })
@@ -248,7 +322,7 @@ export function useWebSocket(): UseWebSocketReturn {
         wsRef.current.close()
       }
     }
-  }, [connect])
+  }, [connect, stopHeartbeat])
 
   return {
     connectionState,

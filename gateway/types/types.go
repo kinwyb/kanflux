@@ -91,10 +91,11 @@ type ToolEventInfoPayload struct {
 
 // LogEventPayload 日志事件 payload
 type LogEventPayload struct {
-	ID      string `json:"id"`
-	Level   string `json:"level"` // debug, info, warn, error
-	Message string `json:"message"`
-	Source  string `json:"source"`
+	ID        string `json:"id"`
+	Level     string `json:"level"` // debug, info, warn, error
+	Message   string `json:"message"`
+	Source    string `json:"source"`
+	Timestamp int64  `json:"timestamp"` // Unix 时间戳（毫秒）
 }
 
 // SubscribePayload 订阅请求 payload
@@ -302,10 +303,11 @@ type ToolEventInfo struct {
 
 // LogEvent 日志事件（本地定义，避免循环导入 bus）
 type LogEvent struct {
-	ID      string
-	Level   string
-	Message string
-	Source  string
+	ID        string
+	Level     string
+	Message   string
+	Source    string
+	Timestamp time.Time
 }
 
 // Media 媒体文件（本地定义，避免循环导入 bus）
@@ -390,10 +392,11 @@ func ConvertToolEventInfoPayload(info *ToolEventInfo) *ToolEventInfoPayload {
 // ConvertLogEventToPayload 将 LogEvent 转换为 LogEventPayload
 func ConvertLogEventToPayload(event *LogEvent) *LogEventPayload {
 	return &LogEventPayload{
-		ID:      event.ID,
-		Level:   event.Level,
-		Message: event.Message,
-		Source:  event.Source,
+		ID:        event.ID,
+		Level:     event.Level,
+		Message:   event.Message,
+		Source:    event.Source,
+		Timestamp: event.Timestamp.UnixMilli(),
 	}
 }
 
