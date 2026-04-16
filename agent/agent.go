@@ -137,7 +137,7 @@ func NewChatModelAgent(ctx context.Context, cfg *Config) (*Agent, error) {
 		Handlers: []adk.ChatModelAgentMiddleware{
 			cfg.ToolRegister,
 			&safeToolMiddleware{},
-			NewInstructionLoggerMiddleware(cfg.Workspace),
+			NewInstructionLoggerMiddleware(cfg.Workspace, cfg.SessionManager),
 		},
 	}
 
@@ -226,7 +226,7 @@ func NewDeepAgent(ctx context.Context, cfg *Config) (*Agent, error) {
 		Handlers: []adk.ChatModelAgentMiddleware{
 			cfg.ToolRegister,
 			&safeToolMiddleware{},
-			NewInstructionLoggerMiddleware(cfg.Workspace),
+			NewInstructionLoggerMiddleware(cfg.Workspace, cfg.SessionManager),
 		},
 	}
 
@@ -411,7 +411,7 @@ func NewSupervisorAgent(ctx context.Context, cfg *Config) (*Agent, error) {
 		Handlers: []adk.ChatModelAgentMiddleware{
 			cfg.ToolRegister,
 			&safeToolMiddleware{},
-			NewInstructionLoggerMiddleware(cfg.Workspace),
+			NewInstructionLoggerMiddleware(cfg.Workspace, cfg.SessionManager),
 		},
 	}
 

@@ -112,6 +112,13 @@ func (m *Manager) save(session *Session) error {
 		return err
 	}
 
+	// 写入 instructions（在 metadata 之后）
+	for _, instr := range session.Instructions {
+		if err := encoder.Encode(instr); err != nil {
+			return err
+		}
+	}
+
 	// 写入消息
 	for _, msg := range session.Messages {
 		if err := encoder.Encode(msg); err != nil {
@@ -258,11 +265,12 @@ func (m *Manager) load(key string) (*Session, error) {
 
 	// 创建会话
 	session := &Session{
-		Key:       key,
-		Messages:  []adk.Message{},
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
-		Metadata:  make(map[string]interface{}),
+		Key:          key,
+		Instructions: []InstructionEntry{},
+		Messages:     []adk.Message{},
+		CreatedAt:    time.Now(),
+		UpdatedAt:    time.Now(),
+		Metadata:     make(map[string]interface{}),
 	}
 
 	// 解析文件
@@ -273,8 +281,22 @@ func (m *Manager) load(key string) (*Session, error) {
 			return nil, err
 		}
 
-		// 检查是否为元数据行
-		if msgType, ok := raw["_type"].(string); ok && msgType == "metadata" {
+		// 检查行类型
+		msgType, ok := raw["_type"].(string)
+		if !ok {
+			// 没有 _type 字段，可能是旧格式的消息行
+			data, _ := json.Marshal(raw)
+			var msg adk.Message
+			if err := json.Unmarshal(data, &msg); err != nil {
+				return nil, err
+			}
+			session.Messages = append(session.Messages, msg)
+			continue
+		}
+
+		switch msgType {
+		case "metadata":
+			// 解析元数据
 			if createdAt, ok := raw["created_at"].(string); ok {
 				session.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
 			}
@@ -284,7 +306,18 @@ func (m *Manager) load(key string) (*Session, error) {
 			if metadata, ok := raw["metadata"].(map[string]interface{}); ok {
 				session.Metadata = metadata
 			}
-		} else {
+
+		case "instruction":
+			// 解析 instruction
+			data, _ := json.Marshal(raw)
+			var instr InstructionEntry
+			if err := json.Unmarshal(data, &instr); err != nil {
+				// 解析失败，跳过该行
+				continue
+			}
+			session.Instructions = append(session.Instructions, instr)
+
+		default:
 			// 消息行
 			data, _ := json.Marshal(raw)
 			var msg adk.Message

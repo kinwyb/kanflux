@@ -10,17 +10,20 @@ import (
 	"time"
 
 	"github.com/cloudwego/eino/adk"
+	"github.com/kinwyb/kanflux/session"
 )
 
 // InstructionLoggerMiddleware 记录每次 agent 执行的 Instruction
 type InstructionLoggerMiddleware struct {
 	*adk.BaseChatModelAgentMiddleware
-	workspace string // 工作目录，用于保存 instruction 文件
+	workspace      string           // 工作目录，用于保存 instruction 文件
+	sessionManager *session.Manager // Session 管理器
 }
 
-func NewInstructionLoggerMiddleware(workspace string) *InstructionLoggerMiddleware {
+func NewInstructionLoggerMiddleware(workspace string, sessionManager *session.Manager) *InstructionLoggerMiddleware {
 	return &InstructionLoggerMiddleware{
-		workspace: workspace,
+		workspace:      workspace,
+		sessionManager: sessionManager,
 	}
 }
 
@@ -62,12 +65,49 @@ func (m *InstructionLoggerMiddleware) BeforeAgent(
 		"agent_name", agentName,
 		"instruction_length", len(instruction))
 
-	// 保存到文件
-	if m.workspace != "" && instruction != "" && sessionID != "" {
+	// 记录到 Session 文件（优先）
+	if m.sessionManager != nil && instruction != "" && sessionID != "" {
+		m.recordInstructionToSession(sessionID, agentName, instruction)
+	} else if m.workspace != "" && instruction != "" && sessionID != "" {
+		// 向后兼容：如果没有 sessionManager，使用旧方式
 		m.saveInstructionToFile(sessionID, agentName, instruction)
 	}
 
 	return ctx, runCtx, nil
+}
+
+// recordInstructionToSession 将 instruction 记录到 Session 文件
+func (m *InstructionLoggerMiddleware) recordInstructionToSession(sessionID, agentName, instruction string) {
+	// 获取或创建 session
+	sess, err := m.sessionManager.GetOrCreate(sessionID)
+	if err != nil {
+		slog.Warn("Failed to get session for instruction logging", "error", err, "session_id", sessionID)
+		return
+	}
+
+	// 创建 instruction entry
+	entry := session.InstructionEntry{
+		AgentName: agentName,
+		Content:   instruction,
+		Timestamp: time.Now(),
+	}
+
+	// 添加 instruction（带去重）
+	added := sess.AddInstruction(entry)
+	if !added {
+		slog.Debug("Instruction skipped (duplicate)", "session_id", sessionID)
+		return
+	}
+
+	// 保存 session
+	if err := m.sessionManager.Save(sess); err != nil {
+		slog.Warn("Failed to save instruction to session", "error", err, "session_id", sessionID)
+	} else {
+		slog.Debug("Instruction recorded to session",
+			"session_id", sessionID,
+			"agent_name", agentName,
+			"instruction_hash", entry.ContentHash)
+	}
 }
 
 func (m *InstructionLoggerMiddleware) saveInstructionToFile(sessionID, agentName, instruction string) {

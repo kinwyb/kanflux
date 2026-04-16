@@ -1,6 +1,8 @@
 package session
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"sync"
 	"time"
 
@@ -10,14 +12,71 @@ import (
 
 const InterruptRole = schema.RoleType("interrupt")
 
+// InstructionEntry 记录一次 agent 执行的 instruction
+type InstructionEntry struct {
+	Type        string    `json:"_type"`        // 固定为 "instruction"，用于 JSONL 解析
+	AgentName   string    `json:"agent_name"`   // 执行的 agent 名称
+	Content     string    `json:"content"`      // instruction 内容（已替换占位符）
+	Timestamp   time.Time `json:"timestamp"`    // 记录时间
+	ContentHash string    `json:"content_hash"` // 内容哈希，用于去重
+}
+
 // Session 会话
 type Session struct {
-	Key       string                 `json:"key"`
-	Messages  []adk.Message          `json:"messages"`
-	CreatedAt time.Time              `json:"created_at"`
-	UpdatedAt time.Time              `json:"updated_at"`
-	Metadata  map[string]interface{} `json:"metadata,omitempty"`
-	mu        sync.RWMutex
+	Key          string                 `json:"key"`
+	Instructions []InstructionEntry     `json:"instructions,omitempty"` // instruction 记录
+	Messages     []adk.Message          `json:"messages"`
+	CreatedAt    time.Time              `json:"created_at"`
+	UpdatedAt    time.Time              `json:"updated_at"`
+	Metadata     map[string]interface{} `json:"metadata,omitempty"`
+	mu           sync.RWMutex
+}
+
+// AddInstruction 添加 instruction 记录（带去重）
+// 返回值：true 表示添加成功，false 表示重复未添加
+func (s *Session) AddInstruction(entry InstructionEntry) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// 计算 content hash（如果未提供）
+	if entry.ContentHash == "" {
+		entry.ContentHash = computeHash(entry.Content)
+	}
+
+	// 去重检查：比较哈希值
+	for _, existing := range s.Instructions {
+		if existing.ContentHash == entry.ContentHash {
+			return false // 重复，不添加
+		}
+	}
+
+	// 设置时间戳（如果未提供）
+	if entry.Timestamp.IsZero() {
+		entry.Timestamp = time.Now()
+	}
+
+	// 设置 Type
+	entry.Type = "instruction"
+
+	s.Instructions = append(s.Instructions, entry)
+	s.UpdatedAt = time.Now()
+	return true
+}
+
+// GetInstructions 获取所有 instruction 记录
+func (s *Session) GetInstructions() []InstructionEntry {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	result := make([]InstructionEntry, len(s.Instructions))
+	copy(result, s.Instructions)
+	return result
+}
+
+// computeHash 计算 SHA256 哈希
+func computeHash(content string) string {
+	h := sha256.Sum256([]byte(content))
+	return hex.EncodeToString(h[:])
 }
 
 // AddMessage 添加消息
@@ -141,12 +200,13 @@ func (s *Session) GetHistoryLen() int {
 	return len(s.Messages)
 }
 
-// Clear 清空消息
+// Clear 清空消息和 instructions
 func (s *Session) Clear() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.Messages = []adk.Message{}
+	s.Instructions = []InstructionEntry{}
 	s.UpdatedAt = time.Now()
 }
 
