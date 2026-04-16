@@ -13,10 +13,11 @@ import (
 
 // Manager 会话管理器
 type Manager struct {
-	sessions  map[string]*Session
-	mu        sync.RWMutex
-	baseDir   string
-	dateIndex map[string]string // session key -> date folder (内存缓存)
+	metaCache  map[string]*SessionMeta // 轻量元数据缓存
+	dataCache  map[string]*SessionData // 重数据缓存（可选）
+	mu         sync.RWMutex
+	baseDir    string
+	dateIndex  map[string]string // session key -> date folder (内存缓存)
 }
 
 // NewManager 创建会话管理器
@@ -27,49 +28,65 @@ func NewManager(baseDir string) (*Manager, error) {
 		return nil, err
 	}
 	return &Manager{
-		sessions:  make(map[string]*Session),
-		baseDir:   baseDir,
-		dateIndex: make(map[string]string),
+		metaCache:  make(map[string]*SessionMeta),
+		dataCache:  make(map[string]*SessionData),
+		baseDir:    baseDir,
+		dateIndex:  make(map[string]string),
 	}, nil
 }
 
 // GetOrCreate 获取或创建会话
 func (m *Manager) GetOrCreate(key string) (*Session, error) {
-	// 先检查内存缓存（用读锁）
+	// 先检查元数据缓存（用读锁）
 	m.mu.RLock()
-	if session, ok := m.sessions[key]; ok {
+	if meta, ok := m.metaCache[key]; ok {
 		m.mu.RUnlock()
-		return session, nil
+		// 返回 Session，数据懒加载
+		return m.newSessionWithLoader(meta), nil
 	}
 	m.mu.RUnlock()
 
-	// 尝试从磁盘加载（不持有锁）
-	session, err := m.load(key)
+	// 尝试从磁盘加载元数据（不持有锁）
+	meta, err := m.loadMetaOnly(key)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			return nil, err
 		}
-		// 文件不存在，创建新会话
-		session = &Session{
-			Key:       key,
-			Messages:  []adk.Message{},
-			CreatedAt: time.Now(),
-			UpdatedAt: time.Now(),
-			Metadata:  make(map[string]interface{}),
+		// 文件不存在，创建新会话元数据
+		meta = &SessionMeta{
+			Key:          key,
+			CreatedAt:    time.Now(),
+			UpdatedAt:    time.Now(),
+			Metadata:     make(map[string]interface{}),
+			MessageCount: 0,
+			InstrCount:   0,
 		}
 	}
 
-	// 添加到缓存（用写锁）
+	// 添加到元数据缓存（用写锁）
 	m.mu.Lock()
 	// 双重检查，防止并发时重复添加
-	if existing, ok := m.sessions[key]; ok {
+	if existing, ok := m.metaCache[key]; ok {
 		m.mu.Unlock()
-		return existing, nil
+		return m.newSessionWithLoader(existing), nil
 	}
-	m.sessions[key] = session
+	m.metaCache[key] = meta
 	m.mu.Unlock()
 
-	return session, nil
+	return m.newSessionWithLoader(meta), nil
+}
+
+// newSessionWithLoader 创建 Session 并设置懒加载函数
+func (m *Manager) newSessionWithLoader(meta *SessionMeta) *Session {
+	sess := &Session{
+		meta: meta,
+		data: nil,
+	}
+	// 设置懒加载函数
+	sess.SetLoader(func() error {
+		return m.loadFullData(sess)
+	})
+	return sess
 }
 
 // Save 保存会话
@@ -79,12 +96,24 @@ func (m *Manager) Save(session *Session) error {
 
 // save 保存会话到磁盘
 func (m *Manager) save(session *Session) error {
-	session.mu.RLock()
-	defer session.mu.RUnlock()
+	// 确保数据已加载
+	if err := session.ensureDataLoaded(); err != nil {
+		return err
+	}
+
+	meta := session.GetMeta()
+	data := session.data
+
+	data.mu.RLock()
+	defer data.mu.RUnlock()
+
+	// 更新计数
+	meta.MessageCount = len(data.Messages)
+	meta.InstrCount = len(data.Instructions)
 
 	// 确定文件路径（使用session的CreatedAt日期）
-	dateFolder := session.CreatedAt.Format("2006-01-02")
-	filePath := m.sessionPath(session.Key, dateFolder)
+	dateFolder := meta.CreatedAt.Format("2006-01-02")
+	filePath := m.sessionPath(meta.Key, dateFolder)
 
 	// 确保日期目录存在
 	dateDir := filepath.Dir(filePath)
@@ -100,27 +129,30 @@ func (m *Manager) save(session *Session) error {
 	}
 	defer file.Close()
 
-	// 写入元数据行
+	// 写入元数据行（包含计数）
 	encoder := json.NewEncoder(file)
 	metadata := map[string]interface{}{
-		"_type":      "metadata",
-		"created_at": session.CreatedAt,
-		"updated_at": session.UpdatedAt,
-		"metadata":   session.Metadata,
+		"_type":           "metadata",
+		"key":             meta.Key,
+		"created_at":      meta.CreatedAt,
+		"updated_at":      meta.UpdatedAt,
+		"metadata":        meta.Metadata,
+		"message_count":   meta.MessageCount,
+		"instruction_count": meta.InstrCount,
 	}
 	if err := encoder.Encode(metadata); err != nil {
 		return err
 	}
 
 	// 写入 instructions（在 metadata 之后）
-	for _, instr := range session.Instructions {
+	for _, instr := range data.Instructions {
 		if err := encoder.Encode(instr); err != nil {
 			return err
 		}
 	}
 
 	// 写入消息
-	for _, msg := range session.Messages {
+	for _, msg := range data.Messages {
 		if err := encoder.Encode(msg); err != nil {
 			return err
 		}
@@ -131,9 +163,10 @@ func (m *Manager) save(session *Session) error {
 		return err
 	}
 
-	// 更新日期索引缓存
+	// 更新日期索引缓存和元数据缓存
 	m.mu.Lock()
-	m.dateIndex[session.Key] = dateFolder
+	m.dateIndex[meta.Key] = dateFolder
+	m.metaCache[meta.Key] = meta
 	m.mu.Unlock()
 
 	return nil
@@ -144,8 +177,11 @@ func (m *Manager) Delete(key string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// 从缓存中删除
-	delete(m.sessions, key)
+	// 从元数据缓存中删除
+	delete(m.metaCache, key)
+
+	// 从数据缓存中删除
+	delete(m.dataCache, key)
 
 	// 从日期索引中删除
 	dateFolder, hasIndex := m.dateIndex[key]
@@ -193,10 +229,10 @@ func (m *Manager) Delete(key string) error {
 	return nil
 }
 
-// List 列出所有会话
+// List 列出所有会话键
 func (m *Manager) List() ([]string, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	// 读取目录
 	entries, err := os.ReadDir(m.baseDir)
@@ -231,8 +267,69 @@ func (m *Manager) List() ([]string, error) {
 	return keys, nil
 }
 
-// load 从磁盘加载会话
-func (m *Manager) load(key string) (*Session, error) {
+// ListMeta 列出所有会话的元数据（快速查询）
+func (m *Manager) ListMeta() ([]*SessionMeta, error) {
+	keys, err := m.List()
+	if err != nil {
+		return nil, err
+	}
+
+	metas := make([]*SessionMeta, 0, len(keys))
+	for _, key := range keys {
+		meta, err := m.GetMeta(key)
+		if err != nil {
+			continue
+		}
+		metas = append(metas, meta)
+	}
+
+	return metas, nil
+}
+
+// GetMeta 获取会话元数据（快速，不加载消息）
+func (m *Manager) GetMeta(key string) (*SessionMeta, error) {
+	// 先检查缓存
+	m.mu.RLock()
+	if meta, ok := m.metaCache[key]; ok {
+		m.mu.RUnlock()
+		return meta, nil
+	}
+	m.mu.RUnlock()
+
+	// 从磁盘加载元数据
+	meta, err := m.loadMetaOnly(key)
+	if err != nil {
+		return nil, err
+	}
+
+	// 添加到缓存
+	m.mu.Lock()
+	m.metaCache[key] = meta
+	m.mu.Unlock()
+
+	return meta, nil
+}
+
+// GetMetaByDateRange 按日期范围获取会话元数据
+func (m *Manager) GetMetaByDateRange(start, end time.Time) ([]*SessionMeta, error) {
+	metas, err := m.ListMeta()
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]*SessionMeta, 0)
+	for _, meta := range metas {
+		if (meta.CreatedAt.After(start) || meta.CreatedAt.Equal(start)) &&
+			(meta.CreatedAt.Before(end) || meta.CreatedAt.Equal(end)) {
+			result = append(result, meta)
+		}
+	}
+
+	return result, nil
+}
+
+// loadMetaOnly 只加载元数据（只读第一行）
+func (m *Manager) loadMetaOnly(key string) (*SessionMeta, error) {
 	// 首先尝试从日期索引缓存中获取路径
 	m.mu.RLock()
 	dateFolder, hasIndex := m.dateIndex[key]
@@ -263,14 +360,100 @@ func (m *Manager) load(key string) (*Session, error) {
 	}
 	defer file.Close()
 
-	// 创建会话
-	session := &Session{
-		Key:          key,
+	// 只读第一行元数据
+	decoder := json.NewDecoder(file)
+	var raw map[string]interface{}
+	if err := decoder.Decode(&raw); err != nil {
+		return nil, err
+	}
+
+	// 解析元数据
+	meta := &SessionMeta{
+		Key:       key,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+		Metadata:  make(map[string]interface{}),
+	}
+
+	// 检查是否是 metadata 行
+	msgType, ok := raw["_type"].(string)
+	if ok && msgType == "metadata" {
+		if createdAt, ok := raw["created_at"].(string); ok {
+			meta.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+		}
+		if updatedAt, ok := raw["updated_at"].(string); ok {
+			meta.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
+		}
+		if metadata, ok := raw["metadata"].(map[string]interface{}); ok {
+			meta.Metadata = metadata
+		}
+		if keyFromRaw, ok := raw["key"].(string); ok {
+			meta.Key = keyFromRaw
+		}
+		// 读取计数（向后兼容，旧文件可能没有）
+		if msgCount, ok := raw["message_count"].(float64); ok {
+			meta.MessageCount = int(msgCount)
+		}
+		if instrCount, ok := raw["instruction_count"].(float64); ok {
+			meta.InstrCount = int(instrCount)
+		}
+	}
+
+	return meta, nil
+}
+
+// loadFullData 加载完整数据（用于懒加载）
+func (m *Manager) loadFullData(session *Session) error {
+	key := session.meta.Key
+
+	// 首先尝试从日期索引缓存中获取路径
+	m.mu.RLock()
+	dateFolder, hasIndex := m.dateIndex[key]
+	m.mu.RUnlock()
+
+	var filePath string
+	if hasIndex && dateFolder != "" {
+		filePath = m.sessionPath(key, dateFolder)
+	} else {
+		// 尝试查找文件（支持日期文件夹和旧格式）
+		var err error
+		filePath, dateFolder, err = m.findSessionFile(key)
+		if err != nil {
+			// 文件不存在，创建空数据
+			session.mu.Lock()
+			session.data = &SessionData{
+				Instructions: []InstructionEntry{},
+				Messages:     []adk.Message{},
+			}
+			session.mu.Unlock()
+			return nil
+		}
+		// 更新索引缓存
+		if dateFolder != "" {
+			m.mu.Lock()
+			m.dateIndex[key] = dateFolder
+			m.mu.Unlock()
+		}
+	}
+
+	// 打开文件
+	file, err := os.Open(filePath)
+	if err != nil {
+		// 文件不存在，创建空数据
+		session.mu.Lock()
+		session.data = &SessionData{
+			Instructions: []InstructionEntry{},
+			Messages:     []adk.Message{},
+		}
+		session.mu.Unlock()
+		return nil
+	}
+	defer file.Close()
+
+	// 创建数据
+	data := &SessionData{
 		Instructions: []InstructionEntry{},
 		Messages:     []adk.Message{},
-		CreatedAt:    time.Now(),
-		UpdatedAt:    time.Now(),
-		Metadata:     make(map[string]interface{}),
 	}
 
 	// 解析文件
@@ -278,57 +461,66 @@ func (m *Manager) load(key string) (*Session, error) {
 	for decoder.More() {
 		var raw map[string]interface{}
 		if err := decoder.Decode(&raw); err != nil {
-			return nil, err
+			return err
 		}
 
 		// 检查行类型
 		msgType, ok := raw["_type"].(string)
 		if !ok {
 			// 没有 _type 字段，可能是旧格式的消息行
-			data, _ := json.Marshal(raw)
+			rawData, _ := json.Marshal(raw)
 			var msg adk.Message
-			if err := json.Unmarshal(data, &msg); err != nil {
-				return nil, err
+			if err := json.Unmarshal(rawData, &msg); err != nil {
+				return err
 			}
-			session.Messages = append(session.Messages, msg)
+			data.Messages = append(data.Messages, msg)
 			continue
 		}
 
 		switch msgType {
 		case "metadata":
-			// 解析元数据
-			if createdAt, ok := raw["created_at"].(string); ok {
-				session.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
-			}
-			if updatedAt, ok := raw["updated_at"].(string); ok {
-				session.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
-			}
-			if metadata, ok := raw["metadata"].(map[string]interface{}); ok {
-				session.Metadata = metadata
+			// 跳过元数据行（已在 loadMetaOnly 中解析）
+			// 但如果 meta 中没有计数，可以在这里计算
+			if session.meta.MessageCount == 0 && session.meta.InstrCount == 0 {
+				// 计数将在读取完成后更新
 			}
 
 		case "instruction":
 			// 解析 instruction
-			data, _ := json.Marshal(raw)
+			rawData, _ := json.Marshal(raw)
 			var instr InstructionEntry
-			if err := json.Unmarshal(data, &instr); err != nil {
+			if err := json.Unmarshal(rawData, &instr); err != nil {
 				// 解析失败，跳过该行
 				continue
 			}
-			session.Instructions = append(session.Instructions, instr)
+			data.Instructions = append(data.Instructions, instr)
 
 		default:
 			// 消息行
-			data, _ := json.Marshal(raw)
+			rawData, _ := json.Marshal(raw)
 			var msg adk.Message
-			if err := json.Unmarshal(data, &msg); err != nil {
-				return nil, err
+			if err := json.Unmarshal(rawData, &msg); err != nil {
+				return err
 			}
-			session.Messages = append(session.Messages, msg)
+			data.Messages = append(data.Messages, msg)
 		}
 	}
 
-	return session, nil
+	// 更新计数（如果旧文件没有）
+	session.meta.MessageCount = len(data.Messages)
+	session.meta.InstrCount = len(data.Instructions)
+
+	// 设置数据
+	session.mu.Lock()
+	session.data = data
+	session.mu.Unlock()
+
+	// 添加到数据缓存
+	m.mu.Lock()
+	m.dataCache[key] = data
+	m.mu.Unlock()
+
+	return nil
 }
 
 // findSessionFile 查找会话文件，返回文件路径和日期文件夹名

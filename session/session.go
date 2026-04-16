@@ -12,6 +12,23 @@ import (
 
 const InterruptRole = schema.RoleType("interrupt")
 
+// SessionMeta 轻量元数据，用于快速查询
+type SessionMeta struct {
+	Key          string                 `json:"key"`
+	CreatedAt    time.Time              `json:"created_at"`
+	UpdatedAt    time.Time              `json:"updated_at"`
+	Metadata     map[string]interface{} `json:"metadata,omitempty"`
+	MessageCount int                    `json:"message_count"`     // 消息数量
+	InstrCount   int                    `json:"instruction_count"` // 指令数量
+}
+
+// SessionData 重数据，懒加载
+type SessionData struct {
+	Instructions []InstructionEntry `json:"instructions,omitempty"`
+	Messages     []adk.Message      `json:"messages"`
+	mu           sync.RWMutex       // 保护 Instructions 和 Messages
+}
+
 // InstructionEntry 记录一次 agent 执行的 instruction
 type InstructionEntry struct {
 	Type        string    `json:"_type"`        // 固定为 "instruction"，用于 JSONL 解析
@@ -21,22 +38,105 @@ type InstructionEntry struct {
 	ContentHash string    `json:"content_hash"` // 内容哈希，用于去重
 }
 
-// Session 会话
+// Session 会话，组合 meta 和 data
 type Session struct {
-	Key          string                 `json:"key"`
-	Instructions []InstructionEntry     `json:"instructions,omitempty"` // instruction 记录
-	Messages     []adk.Message          `json:"messages"`
-	CreatedAt    time.Time              `json:"created_at"`
-	UpdatedAt    time.Time              `json:"updated_at"`
-	Metadata     map[string]interface{} `json:"metadata,omitempty"`
-	mu           sync.RWMutex
+	meta   *SessionMeta // 始终存在
+	data   *SessionData // 懒加载，nil 表示未加载
+	loader func() error // 加载函数（由 Manager 提供）
+	mu     sync.RWMutex // 保护 loaded 状态和 data
+}
+
+// SetLoader 设置懒加载函数（由 Manager 调用）
+func (s *Session) SetLoader(loader func() error) {
+	s.mu.Lock()
+	s.loader = loader
+	s.mu.Unlock()
+}
+
+// IsDataLoaded 检查数据是否已加载
+func (s *Session) IsDataLoaded() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.data != nil
+}
+
+// ensureDataLoaded 确保数据已加载（懒加载触发）
+func (s *Session) ensureDataLoaded() error {
+	// 快速检查（读锁）
+	s.mu.RLock()
+	if s.data != nil {
+		s.mu.RUnlock()
+		return nil
+	}
+	// 检查是否有 loader
+	hasLoader := s.loader != nil
+	s.mu.RUnlock()
+
+	// 如果没有 loader，直接初始化空数据
+	if !hasLoader {
+		s.mu.Lock()
+		if s.data == nil {
+			s.data = &SessionData{
+				Instructions: []InstructionEntry{},
+				Messages:     []adk.Message{},
+			}
+		}
+		s.mu.Unlock()
+		return nil
+	}
+
+	// 调用加载函数（不持有锁，避免死锁）
+	if err := s.loader(); err != nil {
+		return err
+	}
+
+	// 双重检查：loader 应该已经设置了 data，如果没有则初始化
+	s.mu.Lock()
+	if s.data == nil {
+		s.data = &SessionData{
+			Instructions: []InstructionEntry{},
+			Messages:     []adk.Message{},
+		}
+	}
+	s.mu.Unlock()
+
+	return nil
+}
+
+// GetMeta 获取元数据（快速，不加载数据）
+func (s *Session) GetMeta() *SessionMeta {
+	return s.meta
+}
+
+// GetKey 获取会话键
+func (s *Session) GetKey() string {
+	return s.meta.Key
+}
+
+// GetCreatedAt 获取创建时间
+func (s *Session) GetCreatedAt() time.Time {
+	return s.meta.CreatedAt
+}
+
+// GetUpdatedAt 获取更新时间
+func (s *Session) GetUpdatedAt() time.Time {
+	return s.meta.UpdatedAt
+}
+
+// GetMetadata 获取元数据 map
+func (s *Session) GetMetadata() map[string]interface{} {
+	return s.meta.Metadata
 }
 
 // AddInstruction 添加 instruction 记录（带去重）
 // 返回值：true 表示添加成功，false 表示重复未添加
 func (s *Session) AddInstruction(entry InstructionEntry) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	if err := s.ensureDataLoaded(); err != nil {
+		return false
+	}
+
+	s.data.mu.Lock()
+	defer s.data.mu.Unlock()
 
 	// 计算 content hash（如果未提供）
 	if entry.ContentHash == "" {
@@ -44,7 +144,7 @@ func (s *Session) AddInstruction(entry InstructionEntry) bool {
 	}
 
 	// 去重检查：比较哈希值
-	for _, existing := range s.Instructions {
+	for _, existing := range s.data.Instructions {
 		if existing.ContentHash == entry.ContentHash {
 			return false // 重复，不添加
 		}
@@ -58,18 +158,23 @@ func (s *Session) AddInstruction(entry InstructionEntry) bool {
 	// 设置 Type
 	entry.Type = "instruction"
 
-	s.Instructions = append(s.Instructions, entry)
-	s.UpdatedAt = time.Now()
+	s.data.Instructions = append(s.data.Instructions, entry)
+	s.meta.InstrCount = len(s.data.Instructions)
+	s.meta.UpdatedAt = time.Now()
 	return true
 }
 
 // GetInstructions 获取所有 instruction 记录
 func (s *Session) GetInstructions() []InstructionEntry {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	if err := s.ensureDataLoaded(); err != nil {
+		return nil
+	}
 
-	result := make([]InstructionEntry, len(s.Instructions))
-	copy(result, s.Instructions)
+	s.data.mu.RLock()
+	defer s.data.mu.RUnlock()
+
+	result := make([]InstructionEntry, len(s.data.Instructions))
+	copy(result, s.data.Instructions)
 	return result
 }
 
@@ -81,46 +186,59 @@ func computeHash(content string) string {
 
 // AddMessage 添加消息
 func (s *Session) AddMessage(msg adk.Message) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	if err := s.ensureDataLoaded(); err != nil {
+		return
+	}
 
-	s.Messages = append(s.Messages, msg)
-	s.UpdatedAt = time.Now()
+	s.data.mu.Lock()
+	defer s.data.mu.Unlock()
+
+	s.data.Messages = append(s.data.Messages, msg)
+	s.meta.MessageCount = len(s.data.Messages)
+	s.meta.UpdatedAt = time.Now()
 }
 
 // GetHistory 获取历史消息
 func (s *Session) GetHistory(maxMessages int) []adk.Message {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	if err := s.ensureDataLoaded(); err != nil {
+		return nil
+	}
 
-	if maxMessages <= 0 || maxMessages >= len(s.Messages) {
+	s.data.mu.RLock()
+	defer s.data.mu.RUnlock()
+
+	if maxMessages <= 0 || maxMessages >= len(s.data.Messages) {
 		// 返回所有消息的副本
-		result := make([]adk.Message, len(s.Messages))
-		copy(result, s.Messages)
+		result := make([]adk.Message, len(s.data.Messages))
+		copy(result, s.data.Messages)
 		return result
 	}
 
 	// 返回最近的消息
-	start := len(s.Messages) - maxMessages
+	start := len(s.data.Messages) - maxMessages
 	result := make([]adk.Message, maxMessages)
-	copy(result, s.Messages[start:])
+	copy(result, s.data.Messages[start:])
 	return result
 }
 
 // GetHistorySafe 获取历史消息，确保不会在工具调用中间截断
 // 这样可以保证消息的完整性和顺序
 func (s *Session) GetHistorySafe(maxMessages int) []adk.Message {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	if err := s.ensureDataLoaded(); err != nil {
+		return nil
+	}
 
-	if maxMessages <= 0 || maxMessages >= len(s.Messages) {
+	s.data.mu.RLock()
+	defer s.data.mu.RUnlock()
+
+	if maxMessages <= 0 || maxMessages >= len(s.data.Messages) {
 		// 返回所有消息的副本
-		result := make([]adk.Message, len(s.Messages))
-		copy(result, s.Messages)
+		result := make([]adk.Message, len(s.data.Messages))
+		copy(result, s.data.Messages)
 		return result
 	}
 
-	messages := s.Messages
+	messages := s.data.Messages
 
 	// 使用两指针法，找到一组完整的消息
 	// 从 maxMessages 开始，向前扩展到包含完整的工具调用组
@@ -193,34 +311,44 @@ func (s *Session) GetHistorySafe(maxMessages int) []adk.Message {
 	return result
 }
 
-// GetHistoryLen 获取历史消息数量
+// GetHistoryLen 获取历史消息数量（快速，不加载数据）
 func (s *Session) GetHistoryLen() int {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return len(s.Messages)
+	return s.meta.MessageCount
 }
 
 // Clear 清空消息和 instructions
 func (s *Session) Clear() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	if err := s.ensureDataLoaded(); err != nil {
+		return
+	}
 
-	s.Messages = []adk.Message{}
-	s.Instructions = []InstructionEntry{}
-	s.UpdatedAt = time.Now()
+	s.data.mu.Lock()
+	defer s.data.mu.Unlock()
+
+	s.data.Messages = []adk.Message{}
+	s.data.Instructions = []InstructionEntry{}
+	s.meta.MessageCount = 0
+	s.meta.InstrCount = 0
+	s.meta.UpdatedAt = time.Now()
 }
 
 // IsInterrupted 是不是一个中断消息,role中断消息角色
 func (s *Session) IsInterrupted() bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if len(s.Messages) == 0 {
+	if err := s.ensureDataLoaded(); err != nil {
 		return false
 	}
-	lastMessage := s.Messages[len(s.Messages)-1]
+
+	s.data.mu.Lock()
+	defer s.data.mu.Unlock()
+
+	if len(s.data.Messages) == 0 {
+		return false
+	}
+	lastMessage := s.data.Messages[len(s.data.Messages)-1]
 	if lastMessage.Role == InterruptRole {
-		s.Messages = s.Messages[:len(s.Messages)-1]
-		s.UpdatedAt = time.Now()
+		s.data.Messages = s.data.Messages[:len(s.data.Messages)-1]
+		s.meta.MessageCount = len(s.data.Messages)
+		s.meta.UpdatedAt = time.Now()
 		return true
 	}
 	return false
