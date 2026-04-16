@@ -288,7 +288,7 @@ func StartService(ctx context.Context, cfg *Config) (*Service, error) {
 	slog.Debug("ChannelManager 启动完成")
 
 	// 创建 WebSocket Server
-	wsServer := ws.NewServer(msgBus, cfg.WSConfig)
+	wsServer := ws.NewServer(msgBus, cfg.WSConfig, sessionMgr)
 	if err := wsServer.Start(ctx); err != nil {
 		channelMgr.StopAll()
 		agentMgr.Stop()

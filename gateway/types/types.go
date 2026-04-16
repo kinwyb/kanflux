@@ -11,18 +11,22 @@ type MessageType string
 
 const (
 	// 客户端 -> 服务端
-	MsgTypeInbound   MessageType = "inbound"   // 入站消息
-	MsgTypeSubscribe MessageType = "subscribe" // 订阅请求
-	MsgTypeHeartbeat MessageType = "heartbeat" // 心跳
-	MsgTypeControl   MessageType = "control"   // 控制消息（如 shutdown）
+	MsgTypeInbound     MessageType = "inbound"     // 入站消息
+	MsgTypeSubscribe   MessageType = "subscribe"   // 订阅请求
+	MsgTypeHeartbeat   MessageType = "heartbeat"   // 心跳
+	MsgTypeControl     MessageType = "control"     // 控制消息（如 shutdown）
+	MsgTypeSessionList MessageType = "session_list" // 获取 session 列表
+	MsgTypeSessionGet  MessageType = "session_get"  // 获取 session 内容
 
 	// 服务端 -> 客户端
-	MsgTypeOutbound     MessageType = "outbound"     // 出站消息
-	MsgTypeChatEvent    MessageType = "chat_event"   // 聊天事件（流式）
-	MsgTypeLogEvent     MessageType = "log_event"    // 日志事件
-	MsgTypeHeartbeatAck MessageType = "heartbeat_ack" // 心跳响应
-	MsgTypeControlAck   MessageType = "control_ack"   // 控制消息响应
-	MsgTypeError        MessageType = "error"        // 错误消息
+	MsgTypeOutbound        MessageType = "outbound"        // 出站消息
+	MsgTypeChatEvent       MessageType = "chat_event"      // 聊天事件（流式）
+	MsgTypeLogEvent        MessageType = "log_event"       // 日志事件
+	MsgTypeHeartbeatAck    MessageType = "heartbeat_ack"   // 心跳响应
+	MsgTypeControlAck      MessageType = "control_ack"     // 控制消息响应
+	MsgTypeError           MessageType = "error"           // 错误消息
+	MsgTypeSessionListAck  MessageType = "session_list_ack" // session 列表响应
+	MsgTypeSessionGetAck   MessageType = "session_get_ack"  // session 内容响应
 )
 
 // WSMessage WebSocket 消息封装
@@ -136,6 +140,60 @@ type ControlAckPayload struct {
 	Action  string `json:"action"`
 	Success bool   `json:"success"`
 	Message string `json:"message,omitempty"`
+}
+
+// SessionListPayload session 列表请求 payload
+type SessionListPayload struct {
+	DateStart string `json:"date_start,omitempty"` // 开始日期 YYYY-MM-DD
+	DateEnd   string `json:"date_end,omitempty"`   // 结束日期 YYYY-MM-DD
+}
+
+// SessionMetaPayload session 元数据 payload（用于列表返回）
+type SessionMetaPayload struct {
+	Key          string                 `json:"key"`
+	CreatedAt    string                 `json:"created_at"`
+	UpdatedAt    string                 `json:"updated_at"`
+	MessageCount int                    `json:"message_count"`
+	InstrCount   int                    `json:"instruction_count"`
+	Metadata     map[string]interface{} `json:"metadata,omitempty"`
+}
+
+// SessionListAckPayload session 列表响应 payload
+type SessionListAckPayload struct {
+	Success bool                `json:"success"`
+	Error   string              `json:"error,omitempty"`
+	Sessions []*SessionMetaPayload `json:"sessions,omitempty"`
+}
+
+// SessionGetPayload session 内容请求 payload
+type SessionGetPayload struct {
+	Key string `json:"key"` // session key
+}
+
+// MessagePayload 消息 payload（用于 session 内容返回）
+type MessagePayload struct {
+	Role      string `json:"role"`
+	Content   string `json:"content"`
+	ToolCallID string `json:"tool_call_id,omitempty"`
+}
+
+// InstructionPayload instruction payload（用于 session 内容返回）
+type InstructionPayload struct {
+	AgentName string `json:"agent_name"`
+	Content   string `json:"content"`
+	Timestamp string `json:"timestamp"`
+}
+
+// SessionGetAckPayload session 内容响应 payload
+type SessionGetAckPayload struct {
+	Success      bool                 `json:"success"`
+	Error        string               `json:"error,omitempty"`
+	Key          string               `json:"key,omitempty"`
+	CreatedAt    string               `json:"created_at,omitempty"`
+	UpdatedAt    string               `json:"updated_at,omitempty"`
+	Metadata     map[string]interface{} `json:"metadata,omitempty"`
+	Messages     []*MessagePayload    `json:"messages,omitempty"`
+	Instructions []*InstructionPayload `json:"instructions,omitempty"`
 }
 
 // NewWSMessage 创建 WebSocket 消息

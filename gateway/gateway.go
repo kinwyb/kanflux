@@ -113,7 +113,7 @@ func (g *Gateway) Start(ctx context.Context) error {
 	slog.Info("ChannelManager 启动完成")
 
 	// 9. 创建 WebSocket 服务器
-	g.wsServer = ws.NewServer(g.msgBus, g.wsConfig)
+	g.wsServer = ws.NewServer(g.msgBus, g.wsConfig, g.sessionMgr)
 	g.wsServer.SetShutdownCallback(func() {
 		slog.Info("收到远程关闭请求")
 		p, _ := os.FindProcess(os.Getpid())

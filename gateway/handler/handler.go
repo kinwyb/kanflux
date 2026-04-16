@@ -5,6 +5,7 @@ import (
 	"context"
 
 	"github.com/kinwyb/kanflux/gateway/types"
+	"github.com/kinwyb/kanflux/session"
 )
 
 // Conn defines the interface for WebSocket connection that handlers need.
@@ -35,6 +36,8 @@ type Server interface {
 	GetStatus() map[string]interface{}
 	// Context returns the server's context
 	Context() context.Context
+	// GetSessionManager returns the session manager
+	GetSessionManager() *session.Manager
 }
 
 // Logger defines the interface for logging that handlers need.

@@ -13,6 +13,7 @@ import (
 	"github.com/kinwyb/kanflux/bus"
 	"github.com/kinwyb/kanflux/gateway/handler"
 	"github.com/kinwyb/kanflux/gateway/types"
+	"github.com/kinwyb/kanflux/session"
 )
 
 // ServerConfig WebSocket 服务器配置
@@ -54,6 +55,7 @@ func (c *ServerConfig) URL() string {
 type Server struct {
 	config     *ServerConfig
 	bus        *bus.MessageBus
+	sessionMgr *session.Manager
 	logger     *slog.Logger
 
 	upgrader   websocket.Upgrader
@@ -89,7 +91,7 @@ type SubscriptionInfo struct {
 }
 
 // NewServer 创建 WebSocket 服务器
-func NewServer(bus *bus.MessageBus, cfg *ServerConfig) *Server {
+func NewServer(bus *bus.MessageBus, cfg *ServerConfig, sessionMgr *session.Manager) *Server {
 	if cfg == nil {
 		cfg = &ServerConfig{Enabled: true}
 	}
@@ -100,6 +102,7 @@ func NewServer(bus *bus.MessageBus, cfg *ServerConfig) *Server {
 	return &Server{
 		config: cfg,
 		bus:    bus,
+		sessionMgr: sessionMgr,
 		upgrader: websocket.Upgrader{
 			ReadBufferSize:  1024,
 			WriteBufferSize: 4096,
@@ -565,6 +568,11 @@ func (s *Server) GetCommandHandler(action string) handler.Handler {
 // Context returns the server's context (implements handler.Server interface)
 func (s *Server) Context() context.Context {
 	return s.ctx
+}
+
+// GetSessionManager returns the session manager (implements handler.Server interface)
+func (s *Server) GetSessionManager() *session.Manager {
+	return s.sessionMgr
 }
 
 // 内部转换函数
