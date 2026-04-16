@@ -14,10 +14,10 @@ import (
 
 // ClientConfig WebSocket 客户端配置
 type ClientConfig struct {
-	URL              string        // WebSocket URL，如 ws://localhost:8765/ws
-	AuthToken        string        // 认证 token（可选）
-	Reconnect        bool          // 是否自动重连
-	MaxReconnect     int           // 最大重连次数，默认 10
+	URL               string        // WebSocket URL，如 ws://localhost:8765/ws
+	AuthToken         string        // 认证 token（可选）
+	Reconnect         bool          // 是否自动重连
+	MaxReconnect      int           // 最大重连次数，默认 10
 	ReconnectInterval time.Duration // 重连间隔，默认 1秒
 	HeartbeatInterval time.Duration // 心跳间隔，默认 30秒
 }

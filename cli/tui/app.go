@@ -13,7 +13,7 @@ import (
 	"github.com/kinwyb/kanflux/channel"
 	"github.com/kinwyb/kanflux/config"
 	"github.com/kinwyb/kanflux/session"
-	"github.com/kinwyb/kanflux/ws"
+	"github.com/kinwyb/kanflux/gateway/ws"
 
 	"github.com/charmbracelet/bubbletea"
 	"github.com/google/uuid"

@@ -1,6 +1,5 @@
-// Package ws provides WebSocket server and client for kanflux.
-// WebSocket service acts as a message hub between TUI/Web clients and the backend services.
-package ws
+// Package types provides WebSocket message types for the gateway.
+package types
 
 import (
 	"encoding/json"
@@ -35,7 +34,6 @@ type WSMessage struct {
 }
 
 // InboundPayload 入站消息 payload
-// 对应 bus.InboundMessage
 type InboundPayload struct {
 	ID        string                 `json:"id"`
 	Channel   string                 `json:"channel"`
@@ -48,7 +46,6 @@ type InboundPayload struct {
 }
 
 // OutboundPayload 出站消息 payload
-// 对应 bus.OutboundMessage
 type OutboundPayload struct {
 	ID               string                 `json:"id"`
 	Channel          string                 `json:"channel"`
@@ -57,17 +54,15 @@ type OutboundPayload struct {
 	ReasoningContent string                 `json:"reasoning_content,omitempty"`
 	Media            []MediaPayload         `json:"media,omitempty"`
 	ReplyTo          string                 `json:"reply_to,omitempty"`
-	// 流式状态字段
-	IsStreaming bool `json:"is_streaming"` // 是否流式发送
-	IsThinking  bool `json:"is_thinking"`  // 是否为思考内容
-	IsFinal     bool `json:"is_final"`     // 是否最终消息
-	ChunkIndex  int  `json:"chunk_index"`  // chunk序号
-	Error       string                 `json:"error,omitempty"`
-	Metadata    map[string]interface{} `json:"metadata,omitempty"`
+	IsStreaming      bool                   `json:"is_streaming"` // 是否流式发送
+	IsThinking       bool                   `json:"is_thinking"`  // 是否为思考内容
+	IsFinal          bool                   `json:"is_final"`     // 是否最终消息
+	ChunkIndex       int                    `json:"chunk_index"`  // chunk序号
+	Error            string                 `json:"error,omitempty"`
+	Metadata         map[string]interface{} `json:"metadata,omitempty"`
 }
 
 // ChatEventPayload 聊天事件 payload
-// 对应 bus.ChatEvent
 type ChatEventPayload struct {
 	ID        string                 `json:"id"`
 	Channel   string                 `json:"channel"`
@@ -91,7 +86,6 @@ type ToolEventInfoPayload struct {
 }
 
 // LogEventPayload 日志事件 payload
-// 对应 bus.LogEvent
 type LogEventPayload struct {
 	ID      string `json:"id"`
 	Level   string `json:"level"` // debug, info, warn, error
@@ -101,18 +95,17 @@ type LogEventPayload struct {
 
 // SubscribePayload 订阅请求 payload
 type SubscribePayload struct {
-	Channels []string `json:"channels,omitempty"` // 订阅的 channel 类型，空表示订阅所有
-	ChatIDs  []string `json:"chat_ids,omitempty"` // 订阅的 chatID，空表示订阅所有
+	Channels []string `json:"channels,omitempty"` // 订阅的 channel 类型
+	ChatIDs  []string `json:"chat_ids,omitempty"` // 订阅的 chatID
 }
 
 // MediaPayload 媒体 payload
-// 对应 bus.Media
 type MediaPayload struct {
-	Type     string                 `json:"type"`               // image, video, audio, document
-	URL      string                 `json:"url,omitempty"`      // 文件URL
-	Base64   string                 `json:"base64,omitempty"`   // Base64编码内容
-	MimeType string                 `json:"mimetype"`           // MIME类型
-	Metadata map[string]interface{} `json:"metadata,omitempty"` // 额外元数据
+	Type     string                 `json:"type"`
+	URL      string                 `json:"url,omitempty"`
+	Base64   string                 `json:"base64,omitempty"`
+	MimeType string                 `json:"mimetype"`
+	Metadata map[string]interface{} `json:"metadata,omitempty"`
 }
 
 // ErrorPayload 错误消息 payload
@@ -128,14 +121,14 @@ type HeartbeatPayload struct {
 
 // ControlPayload 控制消息 payload
 type ControlPayload struct {
-	Action string                 `json:"action"` // shutdown, status, etc.
+	Action string                 `json:"action"`
 	Data   map[string]interface{} `json:"data,omitempty"`
 }
 
 // 控制消息 Action 常量
 const (
-	ControlActionShutdown = "shutdown" // 关闭服务
-	ControlActionStatus   = "status"   // 获取状态
+	ControlActionShutdown = "shutdown"
+	ControlActionStatus   = "status"
 )
 
 // ControlAckPayload 控制消息响应 payload
@@ -179,7 +172,79 @@ func ParseWSMessage(data []byte) (*WSMessage, error) {
 	return &msg, nil
 }
 
-// ConvertInboundToPayload 将 bus.InboundMessage 转换为 InboundPayload
+// InboundMessage 入站消息（本地定义，避免循环导入 bus）
+type InboundMessage struct {
+	ID        string
+	Channel   string
+	AccountID string
+	SenderID  string
+	ChatID    string
+	Content   string
+	Media     []Media
+	Metadata  map[string]interface{}
+	Timestamp time.Time
+}
+
+// OutboundMessage 出站消息（本地定义，避免循环导入 bus）
+type OutboundMessage struct {
+	ID               string
+	Channel          string
+	ChatID           string
+	Content          string
+	ReasoningContent string
+	Media            []Media
+	ReplyTo          string
+	IsStreaming      bool
+	IsThinking       bool
+	IsFinal          bool
+	ChunkIndex       int
+	Error            string
+	Metadata         map[string]interface{}
+	Timestamp        time.Time
+}
+
+// ChatEvent 聊天事件（本地定义，避免循环导入 bus）
+type ChatEvent struct {
+	ID        string
+	Channel   string
+	ChatID    string
+	RunID     string
+	Seq       int
+	AgentName string
+	State     string
+	Error     string
+	ToolInfo  *ToolEventInfo
+	Timestamp time.Time
+	Metadata  interface{}
+}
+
+// ToolEventInfo 工具事件信息
+type ToolEventInfo struct {
+	Name      string
+	ID        string
+	Arguments string
+	Result    string
+	IsStart   bool
+}
+
+// LogEvent 日志事件（本地定义，避免循环导入 bus）
+type LogEvent struct {
+	ID      string
+	Level   string
+	Message string
+	Source  string
+}
+
+// Media 媒体文件（本地定义，避免循环导入 bus）
+type Media struct {
+	Type     string
+	URL      string
+	Base64   string
+	MimeType string
+	Metadata map[string]interface{}
+}
+
+// ConvertInboundToPayload 将 InboundMessage 转换为 InboundPayload
 func ConvertInboundToPayload(msg *InboundMessage) *InboundPayload {
 	return &InboundPayload{
 		ID:        msg.ID,
@@ -193,7 +258,7 @@ func ConvertInboundToPayload(msg *InboundMessage) *InboundPayload {
 	}
 }
 
-// ConvertOutboundToPayload 将 bus.OutboundMessage 转换为 OutboundPayload
+// ConvertOutboundToPayload 将 OutboundMessage 转换为 OutboundPayload
 func ConvertOutboundToPayload(msg *OutboundMessage) *OutboundPayload {
 	return &OutboundPayload{
 		ID:               msg.ID,
@@ -212,7 +277,7 @@ func ConvertOutboundToPayload(msg *OutboundMessage) *OutboundPayload {
 	}
 }
 
-// ConvertChatEventToPayload 将 bus.ChatEvent 转换为 ChatEventPayload
+// ConvertChatEventToPayload 将 ChatEvent 转换为 ChatEventPayload
 func ConvertChatEventToPayload(event *ChatEvent) *ChatEventPayload {
 	metadata := make(map[string]interface{})
 	if event.Metadata != nil {
@@ -249,7 +314,7 @@ func ConvertToolEventInfoPayload(info *ToolEventInfo) *ToolEventInfoPayload {
 	}
 }
 
-// ConvertLogEventToPayload 将 bus.LogEvent 转换为 LogEventPayload
+// ConvertLogEventToPayload 将 LogEvent 转换为 LogEventPayload
 func ConvertLogEventToPayload(event *LogEvent) *LogEventPayload {
 	return &LogEventPayload{
 		ID:      event.ID,
@@ -259,7 +324,7 @@ func ConvertLogEventToPayload(event *LogEvent) *LogEventPayload {
 	}
 }
 
-// ConvertPayloadToInbound 将 InboundPayload 转换为 bus.InboundMessage
+// ConvertPayloadToInbound 将 InboundPayload 转换为 InboundMessage
 func ConvertPayloadToInbound(p *InboundPayload) *InboundMessage {
 	return &InboundMessage{
 		ID:        p.ID,
@@ -274,7 +339,7 @@ func ConvertPayloadToInbound(p *InboundPayload) *InboundMessage {
 	}
 }
 
-// ConvertPayloadToOutbound 将 OutboundPayload 转换为 bus.OutboundMessage
+// ConvertPayloadToOutbound 将 OutboundPayload 转换为 OutboundMessage
 func ConvertPayloadToOutbound(p *OutboundPayload) *OutboundMessage {
 	return &OutboundMessage{
 		ID:               p.ID,
@@ -294,7 +359,7 @@ func ConvertPayloadToOutbound(p *OutboundPayload) *OutboundMessage {
 	}
 }
 
-// ConvertPayloadToChatEvent 将 ChatEventPayload 转换为 bus.ChatEvent
+// ConvertPayloadToChatEvent 将 ChatEventPayload 转换为 ChatEvent
 func ConvertPayloadToChatEvent(p *ChatEventPayload) *ChatEvent {
 	return &ChatEvent{
 		ID:        p.ID,
@@ -359,79 +424,4 @@ func convertPayloadToMedia(media []MediaPayload) []Media {
 		}
 	}
 	return result
-}
-
-// 以下是从 bus/events.go 复制的类型定义，用于避免循环导入
-
-// InboundMessage 入站消息（本地定义，避免导入 bus）
-type InboundMessage struct {
-	ID        string
-	Channel   string
-	AccountID string
-	SenderID  string
-	ChatID    string
-	Content   string
-	Media     []Media
-	Metadata  map[string]interface{}
-	Timestamp time.Time
-}
-
-// OutboundMessage 出站消息（本地定义，避免导入 bus）
-type OutboundMessage struct {
-	ID               string
-	Channel          string
-	ChatID           string
-	Content          string
-	ReasoningContent string
-	Media            []Media
-	ReplyTo          string
-	// 流式状态字段
-	IsStreaming bool // 是否流式发送
-	IsThinking  bool // 是否为思考内容
-	IsFinal     bool // 是否最终消息
-	ChunkIndex  int  // chunk序号
-	Error       string
-	Metadata    map[string]interface{}
-	Timestamp   time.Time
-}
-
-// ChatEvent 聊天事件（本地定义，避免导入 bus）
-type ChatEvent struct {
-	ID        string
-	Channel   string
-	ChatID    string
-	RunID     string
-	Seq       int
-	AgentName string
-	State     string
-	Error     string
-	ToolInfo  *ToolEventInfo
-	Timestamp time.Time
-	Metadata  interface{}
-}
-
-// ToolEventInfo 工具事件信息
-type ToolEventInfo struct {
-	Name      string
-	ID        string
-	Arguments string
-	Result    string
-	IsStart   bool
-}
-
-// LogEvent 日志事件（本地定义，避免导入 bus）
-type LogEvent struct {
-	ID      string
-	Level   string
-	Message string
-	Source  string
-}
-
-// Media 媒体文件（本地定义，避免导入 bus）
-type Media struct {
-	Type     string
-	URL      string
-	Base64   string
-	MimeType string
-	Metadata map[string]interface{}
 }

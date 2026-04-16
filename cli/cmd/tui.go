@@ -7,7 +7,7 @@ import (
 
 	"github.com/kinwyb/kanflux/cli/tui"
 	"github.com/kinwyb/kanflux/config"
-	"github.com/kinwyb/kanflux/ws"
+	"github.com/kinwyb/kanflux/gateway/ws"
 
 	"github.com/spf13/cobra"
 )

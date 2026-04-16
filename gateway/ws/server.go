@@ -11,6 +11,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/kinwyb/kanflux/bus"
+	"github.com/kinwyb/kanflux/gateway/handler"
+	"github.com/kinwyb/kanflux/gateway/types"
 )
 
 // ServerConfig WebSocket 服务器配置
@@ -75,6 +77,9 @@ type Server struct {
 	// shutdown callback
 	shutdownCallback func()
 	shutdownMu       sync.Mutex
+
+	// 命令处理器
+	commandHandlers map[string]handler.Handler
 }
 
 // SubscriptionInfo 订阅信息
@@ -103,12 +108,18 @@ func NewServer(bus *bus.MessageBus, cfg *ServerConfig) *Server {
 				return true
 			},
 		},
-		connections:   make(map[string]*Connection),
-		subscriptions: make(map[string]*SubscriptionInfo),
-		logger:        slog.Default().With("component", "ws-server"),
-		ctx:           ctx,
-		cancel:        cancel,
+		connections:    make(map[string]*Connection),
+		subscriptions:  make(map[string]*SubscriptionInfo),
+		commandHandlers: make(map[string]handler.Handler),
+		logger:         slog.Default().With("component", "ws-server"),
+		ctx:            ctx,
+		cancel:         cancel,
 	}
+}
+
+// RegisterCommandHandler 注册命令处理器
+func (s *Server) RegisterCommandHandler(action string, h handler.Handler) {
+	s.commandHandlers[action] = h
 }
 
 // Start 启动 WebSocket 服务器
@@ -241,18 +252,18 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	// 注册连接
 	s.connMu.Lock()
-	s.connections[conn.ID] = conn
+	s.connections[conn.ID()] = conn
 	s.connMu.Unlock()
 
 	// 初始化订阅信息（默认订阅所有）
 	s.subMu.Lock()
-	s.subscriptions[conn.ID] = &SubscriptionInfo{
+	s.subscriptions[conn.ID()] = &SubscriptionInfo{
 		Channels: make(map[string]bool),
 		ChatIDs:  make(map[string]bool),
 	}
 	s.subMu.Unlock()
 
-	s.logger.Info("WebSocket connection established", "conn_id", conn.ID)
+	s.logger.Info("WebSocket connection established", "conn_id", conn.ID())
 
 	// 启动连接处理
 	go conn.Handle(s.ctx)
@@ -539,6 +550,21 @@ func (s *Server) ConnectionCount() int {
 	s.connMu.RLock()
 	defer s.connMu.RUnlock()
 	return len(s.connections)
+}
+
+// GetCommandHandler 获取命令处理器
+func (s *Server) GetCommandHandler(action string) handler.Handler {
+	// 检查自定义命令处理器
+	if h, ok := s.commandHandlers[action]; ok {
+		return h
+	}
+	// 返回默认 handler registry 中的处理器
+	return handler.Get(types.MsgTypeControl)
+}
+
+// Context returns the server's context (implements handler.Server interface)
+func (s *Server) Context() context.Context {
+	return s.ctx
 }
 
 // 内部转换函数

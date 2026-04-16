@@ -9,7 +9,7 @@ import (
 
 	"github.com/kinwyb/kanflux/agent"
 	"github.com/kinwyb/kanflux/bus"
-	"github.com/kinwyb/kanflux/ws"
+	"github.com/kinwyb/kanflux/gateway/ws"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
