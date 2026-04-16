@@ -4,10 +4,14 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/kinwyb/kanflux/agent"
 	"github.com/kinwyb/kanflux/agent/tools"
+	"github.com/kinwyb/kanflux/bus"
+	"github.com/kinwyb/kanflux/channel"
 	"github.com/kinwyb/kanflux/config"
 	"github.com/kinwyb/kanflux/providers"
 	"github.com/kinwyb/kanflux/session"
@@ -19,18 +23,24 @@ import (
 // NewAgentCmd 创建agent子命令
 func NewAgentCmd() *cobra.Command {
 	var (
-		configPath string
-		agentName  string
-		message    string
-		streaming  bool
-		listAgents bool
+		configPath  string
+		agentName   string
+		message     string
+		streaming   bool
+		listAgents  bool
+		channelName string
+		chatID      string
 	)
 
 	cmd := &cobra.Command{
 		Use:   "agent [message]",
 		Short: "直接向指定的Agent发送消息并返回结果",
-		Long:  `通过命令行直接向配置文件中定义的Agent发送消息，输出Agent的响应结果。`,
-		Args:  cobra.MaximumNArgs(1),
+		Long: `通过命令行直接向配置文件中定义的Agent发送消息，输出Agent的响应结果。
+
+支持两种模式：
+1. 直接模式（无 --channel 参数）：直接输出到终端
+2. Channel 模式（有 --channel 参数）：通过指定 channel 发送消息，用于验证 channel 功能`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := context.Background()
 
@@ -53,138 +63,13 @@ func NewAgentCmd() *cobra.Command {
 				return fmt.Errorf("请提供要发送的消息（作为参数或使用 --message 标志）")
 			}
 
-			// 如果未指定agent名称，使用默认agent
-			if agentName == "" {
-				agentName = cfg.GetDefaultAgentName()
-			}
-			if agentName == "" {
-				return fmt.Errorf("未指定Agent名称且配置文件中没有默认Agent")
+			// 如果指定了 channel，使用 Channel 模式
+			if channelName != "" {
+				return runWithChannel(ctx, cfg, agentName, channelName, chatID, message, streaming)
 			}
 
-			// 解析agent配置
-			resolved, err := cfg.ResolveAgentConfig(agentName)
-			if err != nil {
-				return fmt.Errorf("解析Agent配置失败: %w", err)
-			}
-
-			// 创建LLM
-			llm, err := providers.NewOpenAI(ctx, resolved.APIBaseURL, resolved.Model, resolved.APIKey)
-			if err != nil {
-				return fmt.Errorf("创建LLM失败: %w", err)
-			}
-
-			// 创建工具注册器
-			toolRegistry := tools.NewRegistry()
-
-			// 获取默认skills目录
-			skillDirs := config.GetDefaultSkillDirs(resolved.Workspace)
-
-			// 处理子agent（如果配置中有）
-			var subAgents []*agent.Agent
-			if len(resolved.SubAgents) > 0 {
-				subAgents, err = createSubAgents(ctx, cfg, resolved.SubAgents)
-				if err != nil {
-					return fmt.Errorf("创建子Agent失败: %w", err)
-				}
-			}
-
-			// 创建Agent配置
-			agentCfg := &agent.Config{
-				Name:          resolved.Name,
-				Type:          resolved.Type,
-				Description:   resolved.Description,
-				LLM:           llm,
-				Workspace:     resolved.Workspace,
-				MaxIteration:  resolved.MaxIteration,
-				ToolRegister:  toolRegistry,
-				SkillDirs:     skillDirs,
-				SubAgents:     subAgents,
-				SubAgentNames: resolved.SubAgents,
-				Streaming:     streaming,
-			}
-
-			// 创建Agent
-			ag, err := agent.NewAgent(ctx, agentCfg)
-			if err != nil {
-				return fmt.Errorf("创建Agent失败: %w", err)
-			}
-
-			// 创建会话管理器
-			sessionMgr, err := session.NewManager(resolved.Workspace)
-			if err != nil {
-				return fmt.Errorf("创建会话管理器失败: %w", err)
-			}
-
-			// 创建会话
-			sessionKey := fmt.Sprintf("cli:%s:%d", agentName, time.Now().Unix())
-			sess, err := sessionMgr.GetOrCreate(sessionKey)
-			if err != nil {
-				return fmt.Errorf("创建会话失败: %w", err)
-			}
-
-			// 加载历史消息
-			maxHistory := 50
-			history := sess.GetHistorySafe(maxHistory)
-
-			// 构建消息
-			userMsg := schema.UserMessage(message)
-			allMessages := append(history, userMsg)
-
-			// 注册回调处理流式输出
-			if streaming {
-				cbID := ag.RegisterCallback(func(event *agent.Event) {
-					switch event.Type {
-					case agent.EventMessageUpdate:
-						if event.Message != nil {
-							if event.Message.ReasoningContent != "" {
-								fmt.Fprint(os.Stderr, "\r[思考] "+event.Message.ReasoningContent)
-							} else if event.Message.Content != "" {
-								fmt.Fprint(os.Stdout, event.Message.Content)
-							}
-						}
-					case agent.EventToolStart:
-						if event.Message != nil && len(event.Message.ToolCalls) > 0 {
-							toolName := event.Message.ToolCalls[0].Function.Name
-							fmt.Fprintln(os.Stderr, "\n[工具调用] "+toolName)
-						}
-					case agent.EventToolEnd:
-						if event.Message != nil {
-							result := truncate(event.Message.Content, 100)
-							fmt.Fprintln(os.Stderr, "[工具结果] "+result)
-						}
-					}
-				})
-				defer ag.UnregisterCallback(cbID)
-			}
-
-			// 发送消息给Agent
-			resp, err := ag.Prompt(ctx, allMessages, sessionKey, "")
-			if err != nil {
-				return fmt.Errorf("Agent处理失败: %w", err)
-			}
-
-			// 保存会话
-			if len(resp) > len(history) {
-				newResp := resp[len(history):]
-				for _, m := range newResp {
-					sess.AddMessage(m)
-				}
-			}
-			sessionMgr.Save(sess)
-
-			// 输出结果
-			if len(resp) > 0 {
-				lastMsg := resp[len(resp)-1]
-				if !streaming {
-					// 非流式模式，直接输出完整响应
-					fmt.Fprintln(os.Stdout, lastMsg.Content)
-				} else {
-					// 流式模式，确保最后有换行
-					fmt.Fprintln(os.Stdout)
-				}
-			}
-
-			return nil
+			// 否则使用直接模式
+			return runDirect(ctx, cfg, agentName, message, streaming)
 		},
 	}
 
@@ -194,8 +79,329 @@ func NewAgentCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&message, "message", "m", "", "要发送的消息")
 	cmd.Flags().BoolVarP(&streaming, "stream", "s", true, "启用流式输出")
 	cmd.Flags().BoolVarP(&listAgents, "list", "l", false, "列出配置文件中所有可用的Agent")
+	cmd.Flags().StringVarP(&channelName, "channel", "C", "", "指定 channel 名称 (如 wxcom, telegram)")
+	cmd.Flags().StringVar(&chatID, "chat-id", "", "指定聊天ID (channel 模式必需)")
 
 	return cmd
+}
+
+// runDirect 直接模式：创建 Agent 直接发送消息
+func runDirect(ctx context.Context, cfg *config.Config, agentName, message string, streaming bool) error {
+	// 如果未指定agent名称，使用默认agent
+	if agentName == "" {
+		agentName = cfg.GetDefaultAgentName()
+	}
+	if agentName == "" {
+		return fmt.Errorf("未指定Agent名称且配置文件中没有默认Agent")
+	}
+
+	// 解析agent配置
+	resolved, err := cfg.ResolveAgentConfig(agentName)
+	if err != nil {
+		return fmt.Errorf("解析Agent配置失败: %w", err)
+	}
+
+	// 创建LLM
+	llm, err := providers.NewOpenAI(ctx, resolved.APIBaseURL, resolved.Model, resolved.APIKey)
+	if err != nil {
+		return fmt.Errorf("创建LLM失败: %w", err)
+	}
+
+	// 创建工具注册器
+	toolRegistry := tools.NewRegistry()
+
+	// 获取默认skills目录
+	skillDirs := config.GetDefaultSkillDirs(resolved.Workspace)
+
+	// 处理子agent（如果配置中有）
+	var subAgents []*agent.Agent
+	if len(resolved.SubAgents) > 0 {
+		subAgents, err = createSubAgents(ctx, cfg, resolved.SubAgents)
+		if err != nil {
+			return fmt.Errorf("创建子Agent失败: %w", err)
+		}
+	}
+
+	// 创建Agent配置
+	agentCfg := &agent.Config{
+		Name:          resolved.Name,
+		Type:          resolved.Type,
+		Description:   resolved.Description,
+		LLM:           llm,
+		Workspace:     resolved.Workspace,
+		MaxIteration:  resolved.MaxIteration,
+		ToolRegister:  toolRegistry,
+		SkillDirs:     skillDirs,
+		SubAgents:     subAgents,
+		SubAgentNames: resolved.SubAgents,
+		Streaming:     streaming,
+	}
+
+	// 创建Agent
+	ag, err := agent.NewAgent(ctx, agentCfg)
+	if err != nil {
+		return fmt.Errorf("创建Agent失败: %w", err)
+	}
+
+	// 创建会话管理器
+	sessionMgr, err := session.NewManager(resolved.Workspace)
+	if err != nil {
+		return fmt.Errorf("创建会话管理器失败: %w", err)
+	}
+
+	// 创建会话
+	sessionKey := fmt.Sprintf("cli:%s:%d", agentName, time.Now().Unix())
+	sess, err := sessionMgr.GetOrCreate(sessionKey)
+	if err != nil {
+		return fmt.Errorf("创建会话失败: %w", err)
+	}
+
+	// 加载历史消息
+	maxHistory := 50
+	history := sess.GetHistorySafe(maxHistory)
+
+	// 构建消息
+	userMsg := schema.UserMessage(message)
+	allMessages := append(history, userMsg)
+
+	// 注册回调处理流式输出
+	if streaming {
+		cbID := ag.RegisterCallback(func(event *agent.Event) {
+			switch event.Type {
+			case agent.EventMessageUpdate:
+				if event.Message != nil {
+					if event.Message.ReasoningContent != "" {
+						fmt.Fprint(os.Stderr, "\r[思考] "+event.Message.ReasoningContent)
+					} else if event.Message.Content != "" {
+						fmt.Fprint(os.Stdout, event.Message.Content)
+					}
+				}
+			case agent.EventToolStart:
+				if event.Message != nil && len(event.Message.ToolCalls) > 0 {
+					toolName := event.Message.ToolCalls[0].Function.Name
+					fmt.Fprintln(os.Stderr, "\n[工具调用] "+toolName)
+				}
+			case agent.EventToolEnd:
+				if event.Message != nil {
+					result := truncate(event.Message.Content, 100)
+					fmt.Fprintln(os.Stderr, "[工具结果] "+result)
+				}
+			}
+		})
+		defer ag.UnregisterCallback(cbID)
+	}
+
+	// 发送消息给Agent
+	resp, err := ag.Prompt(ctx, allMessages, sessionKey, "")
+	if err != nil {
+		return fmt.Errorf("Agent处理失败: %w", err)
+	}
+
+	// 保存会话
+	if len(resp) > len(history) {
+		newResp := resp[len(history):]
+		for _, m := range newResp {
+			sess.AddMessage(m)
+		}
+	}
+	sessionMgr.Save(sess)
+
+	// 输出结果
+	if len(resp) > 0 {
+		lastMsg := resp[len(resp)-1]
+		if !streaming {
+			// 非流式模式，直接输出完整响应
+			fmt.Fprintln(os.Stdout, lastMsg.Content)
+		} else {
+			// 流式模式，确保最后有换行
+			fmt.Fprintln(os.Stdout)
+		}
+	}
+
+	return nil
+}
+
+// runWithChannel Channel 模式：通过 channel 发送消息
+func runWithChannel(ctx context.Context, cfg *config.Config, agentName, channelName, chatID, message string, streaming bool) error {
+	// 验证参数
+	if chatID == "" {
+		return fmt.Errorf("channel 模式需要指定 --chat-id 参数")
+	}
+
+	// 如果未指定agent名称，使用默认agent
+	if agentName == "" {
+		agentName = cfg.GetDefaultAgentName()
+	}
+	if agentName == "" {
+		return fmt.Errorf("未指定Agent名称且配置文件中没有默认Agent")
+	}
+
+	// 解析 agent 配置获取 workspace
+	resolved, err := cfg.ResolveAgentConfig(agentName)
+	if err != nil {
+		return fmt.Errorf("解析Agent配置失败: %w", err)
+	}
+
+	// 创建 MessageBus
+	msgBus := bus.NewMessageBus(100)
+
+	// 创建 SessionManager
+	sessionMgr, err := session.NewManager(resolved.Workspace)
+	if err != nil {
+		return fmt.Errorf("创建会话管理器失败: %w", err)
+	}
+
+	// 创建 AgentManager
+	agentMgr := agent.NewManager(msgBus, sessionMgr)
+	if err := agentMgr.RegisterAgentsFromConfig(ctx, cfg, nil); err != nil {
+		return fmt.Errorf("注册Agent失败: %w", err)
+	}
+
+	// 创建 ChannelManager
+	channelMgr := channel.NewManager(msgBus)
+	if err := channelMgr.InitializeFromConfig(ctx, cfg.Channels); err != nil {
+		return fmt.Errorf("初始化Channel失败: %w", err)
+	}
+
+	// 验证指定的 channel 是否存在
+	channels := channelMgr.List()
+	channelFound := false
+	for _, ch := range channels {
+		if ch == channelName {
+			channelFound = true
+			break
+		}
+	}
+	if !channelFound {
+		return fmt.Errorf("指定的 channel '%s' 不存在，可用 channels: %v", channelName, channels)
+	}
+
+	// 订阅 OutboundMessage
+	streamingMode := bus.StreamingModeDelta
+	if !streaming {
+		streamingMode = bus.StreamingModeAccumulate
+	}
+
+	outSub := msgBus.SubscribeOutboundFiltered([]string{channelName})
+	chatSub := msgBus.SubscribeChatEventFiltered([]string{channelName})
+
+	// 处理完成信号
+	done := make(chan struct{})
+	var lastContent string
+
+	// 处理出站消息
+	go func() {
+		for {
+			select {
+			case msg, ok := <-outSub.Channel:
+				if !ok {
+					return
+				}
+				if msg.ChatID == chatID {
+					if msg.IsStreaming && !msg.IsFinal {
+						// 流式增量输出
+						if msg.IsThinking {
+							fmt.Fprint(os.Stderr, "\r[思考] "+msg.Content)
+						} else {
+							fmt.Fprint(os.Stdout, msg.Content)
+						}
+					} else if msg.IsFinal {
+						// 最终消息
+						lastContent = msg.Content
+					}
+					if msg.Error != "" {
+						fmt.Fprintln(os.Stderr, "[错误] "+msg.Error)
+					}
+				}
+			case event, ok := <-chatSub.Channel:
+				if !ok {
+					return
+				}
+				if event.ChatID == chatID {
+					switch event.State {
+					case bus.ChatEventStateStart:
+						fmt.Fprintln(os.Stderr, "[开始处理]")
+					case bus.ChatEventStateTool:
+						if event.ToolInfo != nil {
+							if event.ToolInfo.IsStart {
+								fmt.Fprintln(os.Stderr, "[工具调用] "+event.ToolInfo.Name)
+							} else {
+								result := truncate(event.ToolInfo.Result, 100)
+								fmt.Fprintln(os.Stderr, "[工具结果] "+result)
+							}
+						}
+					case bus.ChatEventStateComplete:
+						fmt.Fprintln(os.Stderr, "[处理完成]")
+						close(done)
+						return
+					case bus.ChatEventStateError:
+						fmt.Fprintln(os.Stderr, "[错误] "+event.Error)
+						close(done)
+						return
+					case bus.ChatEventStateInterrupt:
+						fmt.Fprintln(os.Stderr, "[中断] 等待用户确认")
+					}
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	// 启动 AgentManager
+	agentMgr.Start(ctx)
+
+	// 启动 ChannelManager
+	if err := channelMgr.StartAll(ctx); err != nil {
+		return fmt.Errorf("启动Channel失败: %w", err)
+	}
+
+	// 构建并发布 InboundMessage
+	inbound := &bus.InboundMessage{
+		ID:            fmt.Sprintf("cli-%d", time.Now().UnixNano()),
+		Channel:       channelName,
+		AccountID:     "",
+		SenderID:      "cli_user",
+		ChatID:        chatID,
+		Content:       message,
+		StreamingMode: streamingMode,
+		Timestamp:     time.Now(),
+	}
+
+	// 设置目标 agent
+	if agentName != "" {
+		inbound.Metadata = map[string]interface{}{
+			"target_agent": agentName,
+		}
+	}
+
+	msgBus.PublishInbound(ctx, inbound)
+
+	// 等待处理完成或中断信号
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	select {
+	case <-done:
+		// 处理完成
+		if !streaming && lastContent != "" {
+			fmt.Fprintln(os.Stdout, lastContent)
+		} else if streaming {
+			fmt.Fprintln(os.Stdout) // 确保最后有换行
+		}
+	case sig := <-sigChan:
+		fmt.Fprintf(os.Stderr, "\n收到信号 %v，正在停止...\n", sig)
+	case <-ctx.Done():
+		fmt.Fprintln(os.Stderr, "\n上下文已取消")
+	}
+
+	// 清理
+	outSub.Unsubscribe()
+	chatSub.Unsubscribe()
+	channelMgr.StopAll()
+	agentMgr.Stop()
+
+	return nil
 }
 
 // listAvailableAgents 列出所有可用的agents
