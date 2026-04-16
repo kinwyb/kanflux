@@ -128,11 +128,27 @@ func (h *SessionGetHandler) Handle(ctx context.Context, conn Conn, msg *types.WS
 	// 转换消息为 payload 格式
 	msgs := make([]*types.MessagePayload, 0, len(history))
 	for _, m := range history {
-		msgs = append(msgs, &types.MessagePayload{
+		msgPayload := &types.MessagePayload{
 			Role:       string(m.Role),
 			Content:    m.Content,
 			ToolCallID: m.ToolCallID,
-		})
+			Name:       m.Name,
+		}
+		// 转换 ToolCalls
+		if len(m.ToolCalls) > 0 {
+			msgPayload.ToolCalls = make([]*types.ToolCallPayload, 0, len(m.ToolCalls))
+			for _, tc := range m.ToolCalls {
+				msgPayload.ToolCalls = append(msgPayload.ToolCalls, &types.ToolCallPayload{
+					ID:   tc.ID,
+					Type: tc.Type,
+					Function: &types.ToolFunctionPayload{
+						Name:      tc.Function.Name,
+						Arguments: tc.Function.Arguments,
+					},
+				})
+			}
+		}
+		msgs = append(msgs, msgPayload)
 	}
 
 	// 转换 instructions 为 payload 格式

@@ -172,9 +172,24 @@ type SessionGetPayload struct {
 
 // MessagePayload 消息 payload（用于 session 内容返回）
 type MessagePayload struct {
-	Role      string `json:"role"`
-	Content   string `json:"content"`
-	ToolCallID string `json:"tool_call_id,omitempty"`
+	Role       string             `json:"role"`
+	Content    string             `json:"content"`
+	ToolCallID string             `json:"tool_call_id,omitempty"`
+	Name       string             `json:"name,omitempty"`
+	ToolCalls  []*ToolCallPayload `json:"tool_calls,omitempty"`
+}
+
+// ToolCallPayload 工具调用 payload
+type ToolCallPayload struct {
+	ID       string             `json:"id"`
+	Type     string             `json:"type"`
+	Function *ToolFunctionPayload `json:"function"`
+}
+
+// ToolFunctionPayload 工具函数 payload
+type ToolFunctionPayload struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
 }
 
 // InstructionPayload instruction payload（用于 session 内容返回）

@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Send, Bot, User, Sparkles, Loader2, Wrench } from 'lucide-react'
+import { Send, Bot, User, Sparkles, Loader2, Wrench, CheckCircle2, XCircle, ChevronDown, ChevronRight } from 'lucide-react'
 import { useWebSocket } from '../hooks/useWebSocket'
-import type { ChatMessage, InboundMessage, ToolCall } from '../types'
+import type { ChatMessage, InboundMessage, ToolCallDisplay } from '../types'
 import { format } from 'date-fns'
 
 export default function ChatPanel() {
@@ -11,7 +11,8 @@ export default function ChatPanel() {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
   const [isAgentThinking, setIsAgentThinking] = useState(false)
   const [_currentStreamingId, setCurrentStreamingId] = useState<string | null>(null)
-  const [currentToolCalls, setCurrentToolCalls] = useState<ToolCall[]>([])
+  const [runningToolCalls, setRunningToolCalls] = useState<Map<string, ToolCallDisplay>>(new Map())
+  const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set())
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -41,21 +42,51 @@ export default function ChatPanel() {
           content: '',
           timestamp: new Date(),
           isStreaming: true,
+          toolCallDisplays: [],
         }
         setChatMessages(prev => [...prev, newMsg])
         setCurrentStreamingId(event.run_id)
       } else if (event.state === 'tool' && event.tool_info) {
+        const toolId = event.tool_info.id
+        const toolName = event.tool_info.name
+
         if (event.tool_info.is_start) {
-          setCurrentToolCalls(prev => [...prev, {
-            id: event.tool_info!.id,
-            type: 'function',
-            function: {
-              name: event.tool_info!.name,
-              arguments: event.tool_info!.arguments || '',
-            }
-          }])
+          // Tool call started
+          const newTool: ToolCallDisplay = {
+            id: toolId,
+            name: toolName,
+            arguments: event.tool_info.arguments || '',
+            status: 'running',
+            startTime: new Date(),
+          }
+          setRunningToolCalls(prev => new Map(prev).set(toolId, newTool))
         } else {
-          setCurrentToolCalls(prev => prev.filter(t => t.id !== event.tool_info!.id))
+          // Tool call completed
+          const completedTool = runningToolCalls.get(toolId)
+          if (completedTool) {
+            const updatedTool: ToolCallDisplay = {
+              ...completedTool,
+              result: event.tool_info.result || '',
+              status: event.tool_info.result && !event.tool_info.result.startsWith('Error') ? 'completed' : 'error',
+              endTime: new Date(),
+            }
+
+            // Remove from running and add to message's tool displays
+            setRunningToolCalls(prev => {
+              const newMap = new Map(prev)
+              newMap.delete(toolId)
+              return newMap
+            })
+
+            // Add to the current streaming message
+            setChatMessages(prev => prev.map(msg => {
+              if (msg.isStreaming) {
+                const displays = msg.toolCallDisplays || []
+                return { ...msg, toolCallDisplays: [...displays, updatedTool] }
+              }
+              return msg
+            }))
+          }
         }
       } else if (event.state === 'complete' || event.state === 'error') {
         setIsAgentThinking(false)
@@ -66,6 +97,8 @@ export default function ChatPanel() {
             ? { ...msg, isStreaming: false }
             : msg
         ))
+        // Clear running tool calls
+        setRunningToolCalls(new Map())
       }
     }
 
@@ -130,6 +163,122 @@ export default function ChatPanel() {
       e.preventDefault()
       handleSendMessage()
     }
+  }
+
+  const toggleToolExpand = (toolId: string) => {
+    setExpandedTools(prev => {
+      const newSet = new Set(prev)
+      if (newSet.has(toolId)) {
+        newSet.delete(toolId)
+      } else {
+        newSet.add(toolId)
+      }
+      return newSet
+    })
+  }
+
+  const parseJsonArgs = (args: string): string => {
+    try {
+      const parsed = JSON.parse(args)
+      return JSON.stringify(parsed, null, 2)
+    } catch (_e) {
+      return args
+    }
+  }
+
+  const renderToolCall = (tool: ToolCallDisplay, isRunning: boolean = false) => {
+    const isExpanded = expandedTools.has(tool.id)
+
+    return (
+      <motion.div
+        key={tool.id}
+        initial={{ opacity: 0, x: -10 }}
+        animate={{ opacity: 1, x: 0 }}
+        className="tool-call-container"
+      >
+        {/* Tool Call Section - 参数 */}
+        <div
+          className="flex items-center gap-2 px-3 py-2 rounded-lg bg-ocean-depth/10 cursor-pointer hover:bg-ocean-depth/15"
+          onClick={() => toggleToolExpand(tool.id)}
+        >
+          {/* Tool Icon */}
+          <Wrench size={14} className="text-cyan-mist" />
+
+          {/* Status Icon */}
+          {isRunning ? (
+            <Loader2 size={12} className="text-cyan-electric animate-spin" />
+          ) : tool.status === 'completed' ? (
+            <CheckCircle2 size={12} className="text-green-500" />
+          ) : (
+            <XCircle size={12} className="text-red-500" />
+          )}
+
+          {/* Tool Name */}
+          <div className="flex items-center gap-1">
+            <Wrench size={10} className="text-cyan-electric" />
+            <span className="text-xs font-mono text-cyan-electric font-medium">
+              {tool.name}
+            </span>
+          </div>
+
+          {/* Expand Icon */}
+          {isExpanded ? (
+            <ChevronDown size={14} className="text-ocean-depth/50" />
+          ) : (
+            <ChevronRight size={14} className="text-ocean-depth/50" />
+          )}
+
+          {/* Time */}
+          {!isRunning && tool.endTime && (
+            <span className="text-xs text-ocean-depth/40 font-body ml-auto">
+              {Math.round((tool.endTime.getTime() - tool.startTime.getTime()) / 1000)}s
+            </span>
+          )}
+        </div>
+
+        {/* Expanded Content */}
+        <AnimatePresence>
+          {isExpanded && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              exit={{ opacity: 0, height: 0 }}
+              className="mt-2 ml-4 space-y-2 overflow-hidden"
+            >
+              {/* Arguments - 工具调用参数 */}
+              <div className="tool-section">
+                <div className="flex items-center gap-2 mb-1">
+                  <Wrench size={12} className="text-cyan-mist" />
+                  <span className="text-xs font-body text-ocean-depth/60 uppercase">工具调用</span>
+                </div>
+                <pre className="text-xs font-mono text-ocean-depth/70 bg-ocean-depth/5 p-2 rounded overflow-x-auto">
+                  {parseJsonArgs(tool.arguments)}
+                </pre>
+              </div>
+
+              {/* Result - 工具结果 */}
+              {!isRunning && tool.result && (
+                <div className="tool-section">
+                  <div className="flex items-center gap-2 mb-1">
+                    <Wrench size={12} className={tool.status === 'completed' ? 'text-green-500' : 'text-red-500'} />
+                    <span className="text-xs font-body text-ocean-depth/60 uppercase">
+                      工具结果
+                    </span>
+                  </div>
+                  <pre className={`text-xs font-mono p-2 rounded overflow-x-auto ${
+                    tool.status === 'completed'
+                      ? 'text-green-600 bg-green-500/10'
+                      : 'text-red-500 bg-red-500/10'
+                  }`}>
+                    {tool.result}
+                  </pre>
+                </div>
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </motion.div>
+    )
   }
 
   return (
@@ -207,21 +356,17 @@ export default function ChatPanel() {
 
               {/* Message Content */}
               <div className="flex flex-col gap-1 max-w-[75%]">
-                {/* Tool Calls */}
-                {msg.role === 'assistant' && msg.isStreaming && currentToolCalls.length > 0 && (
+                {/* Running Tool Calls */}
+                {msg.role === 'assistant' && msg.isStreaming && runningToolCalls.size > 0 && (
                   <div className="flex flex-col gap-2 mb-2">
-                    {currentToolCalls.map((tool) => (
-                      <motion.div
-                        key={tool.id}
-                        initial={{ opacity: 0, x: -10 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        className="flex items-center gap-2 px-3 py-2 rounded-lg bg-ocean-depth/10"
-                      >
-                        <Loader2 size={14} className="text-cyan-electric animate-spin" />
-                        <Wrench size={14} className="text-cyan-mist" />
-                        <span className="text-xs font-mono text-cyan-electric">{tool.function.name}</span>
-                      </motion.div>
-                    ))}
+                    {Array.from(runningToolCalls.values()).map((tool) => renderToolCall(tool, true))}
+                  </div>
+                )}
+
+                {/* Completed Tool Calls */}
+                {msg.role === 'assistant' && msg.toolCallDisplays && msg.toolCallDisplays.length > 0 && (
+                  <div className="flex flex-col gap-2 mb-2">
+                    {msg.toolCallDisplays.map((tool) => renderToolCall(tool, false))}
                   </div>
                 )}
 
@@ -233,9 +378,11 @@ export default function ChatPanel() {
                 )}
 
                 {/* Message Bubble */}
-                <div className={`message-bubble ${msg.role === 'user' ? 'message-user' : 'message-agent'}`}>
-                  <p className="font-body whitespace-pre-wrap">{msg.content}</p>
-                </div>
+                {msg.content && (
+                  <div className={`message-bubble ${msg.role === 'user' ? 'message-user' : 'message-agent'}`}>
+                    <p className="font-body whitespace-pre-wrap">{msg.content}</p>
+                  </div>
+                )}
 
                 {/* Timestamp */}
                 <span className={`text-xs text-ocean-depth/40 font-body ${msg.role === 'user' ? 'text-right' : ''}`}>
