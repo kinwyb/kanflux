@@ -104,10 +104,10 @@ export default function SessionsPanel() {
   return (
     <div className="glass-card-solid h-full flex flex-col overflow-hidden">
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-cyan-electric/10">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-cyan-electric/15">
         <div className="flex items-center gap-3">
           <Calendar size={18} className="text-cyan-electric" />
-          <h2 className="font-display font-semibold text-foam">Session History</h2>
+          <h2 className="font-display font-semibold text-ocean-deep">Session History</h2>
         </div>
         <motion.button
           onClick={handleRefresh}
@@ -121,10 +121,10 @@ export default function SessionsPanel() {
       </div>
 
       {/* Filters */}
-      <div className="px-4 py-3 border-b border-cyan-electric/10 space-y-3">
+      <div className="px-4 py-3 border-b border-cyan-electric/15 space-y-3">
         {/* Date Filter */}
         <div className="flex items-center gap-3">
-          <label className="text-xs font-body text-foam/60 shrink-0">Date:</label>
+          <label className="text-xs font-body text-ocean-depth/60 shrink-0">Date:</label>
           <input
             type="date"
             value={searchDate}
@@ -137,14 +137,14 @@ export default function SessionsPanel() {
               className="p-1"
               whileTap={{ scale: 0.9 }}
             >
-              <X size={14} className="text-foam/40 hover:text-foam" />
+              <X size={14} className="text-ocean-depth/40 hover:text-ocean-depth" />
             </motion.button>
           )}
         </div>
 
         {/* Search Filter */}
         <div className="flex items-center gap-3">
-          <Search size={14} className="text-foam/40" />
+          <Search size={14} className="text-ocean-depth/40" />
           <input
             type="text"
             value={searchQuery}
@@ -158,7 +158,7 @@ export default function SessionsPanel() {
               className="p-1"
               whileTap={{ scale: 0.9 }}
             >
-              <X size={14} className="text-foam/40 hover:text-foam" />
+              <X size={14} className="text-ocean-depth/40 hover:text-ocean-depth" />
             </motion.button>
           )}
         </div>
@@ -172,8 +172,8 @@ export default function SessionsPanel() {
             animate={{ opacity: 1 }}
             className="flex flex-col items-center justify-center h-full text-center"
           >
-            <FileText size={32} className="text-foam/30 mb-3" />
-            <p className="text-sm text-foam/50 font-body">No sessions found</p>
+            <FileText size={32} className="text-ocean-depth/30 mb-3" />
+            <p className="text-sm text-ocean-depth/50 font-body">No sessions found</p>
           </motion.div>
         ) : (
           <div className="space-y-4">
@@ -187,11 +187,11 @@ export default function SessionsPanel() {
                 >
                   {/* Date Header */}
                   <div className="flex items-center gap-2 mb-2">
-                    <div className="w-2 h-2 rounded-full bg-cyan-electric/50" />
-                    <span className="text-xs font-mono text-cyan-electric/60">
+                    <div className="w-2 h-2 rounded-full bg-cyan-electric" />
+                    <span className="text-xs font-mono text-cyan-electric">
                       {format(parseISO(date), 'EEEE, MMMM d')}
                     </span>
-                    <span className="text-xs text-foam/40 font-body">
+                    <span className="text-xs text-ocean-depth/50 font-body">
                       ({dateSessions.length} sessions)
                     </span>
                   </div>
@@ -216,22 +216,22 @@ export default function SessionsPanel() {
                         >
                           <div className="flex items-center gap-2">
                             {expandedSessions.has(session.key) ? (
-                              <ChevronDown size={16} className="text-cyan-electric/60" />
+                              <ChevronDown size={16} className="text-cyan-electric" />
                             ) : (
-                              <ChevronRight size={16} className="text-cyan-electric/60" />
+                              <ChevronRight size={16} className="text-cyan-electric" />
                             )}
-                            <span className="font-mono text-sm text-foam truncate max-w-[200px]">
+                            <span className="font-mono text-sm text-ocean-deep truncate max-w-[200px]">
                               {session.key}
                             </span>
                           </div>
-                          <span className="text-xs text-foam/40 font-body">
+                          <span className="text-xs text-ocean-depth/50 font-body">
                             {format(session.created_at, 'HH:mm')}
                           </span>
                         </div>
 
                         {/* Preview */}
                         {!expandedSessions.has(session.key) && session.messages.length > 0 && (
-                          <p className="text-xs text-foam/50 font-body mt-2 truncate pl-6">
+                          <p className="text-xs text-ocean-depth/50 font-body mt-2 truncate pl-6">
                             {session.messages[session.messages.length - 1]?.content.slice(0, 60)}...
                           </p>
                         )}
@@ -248,17 +248,17 @@ export default function SessionsPanel() {
                               {session.messages.slice(-4).map((msg, idx) => (
                                 <div key={idx} className="flex items-start gap-2">
                                   {msg.role === 'user' ? (
-                                    <User size={12} className="text-ocean-light shrink-0 mt-0.5" />
+                                    <User size={12} className="text-ocean-surface shrink-0 mt-0.5" />
                                   ) : (
                                     <Bot size={12} className="text-cyan-electric shrink-0 mt-0.5" />
                                   )}
-                                  <p className="text-xs text-foam/70 font-body line-clamp-2">
+                                  <p className="text-xs text-ocean-depth/70 font-body line-clamp-2">
                                     {msg.content}
                                   </p>
                                 </div>
                               ))}
                               {session.messages.length > 4 && (
-                                <p className="text-xs text-foam/40 italic">
+                                <p className="text-xs text-ocean-depth/40 italic">
                                   +{session.messages.length - 4} more messages
                                 </p>
                               )}
@@ -281,7 +281,7 @@ export default function SessionsPanel() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-ocean-deep/80 backdrop-blur-sm"
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-ocean-depth/20 backdrop-blur-sm"
             onClick={() => setSelectedSession(null)}
           >
             <motion.div
@@ -292,10 +292,10 @@ export default function SessionsPanel() {
               onClick={(e) => e.stopPropagation()}
             >
               {/* Modal Header */}
-              <div className="flex items-center justify-between px-4 py-3 border-b border-cyan-electric/10">
+              <div className="flex items-center justify-between px-4 py-3 border-b border-cyan-electric/15">
                 <div>
-                  <h3 className="font-display font-semibold text-foam">Session Detail</h3>
-                  <p className="text-xs font-mono text-cyan-electric/60 mt-1">{selectedSession.key}</p>
+                  <h3 className="font-display font-semibold text-ocean-deep">Session Detail</h3>
+                  <p className="text-xs font-mono text-cyan-electric mt-1">{selectedSession.key}</p>
                 </div>
                 <motion.button
                   onClick={() => setSelectedSession(null)}
@@ -308,16 +308,16 @@ export default function SessionsPanel() {
               </div>
 
               {/* Session Meta */}
-              <div className="px-4 py-3 border-b border-cyan-electric/10 flex items-center gap-4">
+              <div className="px-4 py-3 border-b border-cyan-electric/15 flex items-center gap-4">
                 <div className="flex items-center gap-2">
-                  <Calendar size={14} className="text-cyan-electric/60" />
-                  <span className="text-xs text-foam/60 font-body">
+                  <Calendar size={14} className="text-cyan-electric/70" />
+                  <span className="text-xs text-ocean-depth/60 font-body">
                     Created: {format(selectedSession.created_at, 'PPpp')}
                   </span>
                 </div>
                 <div className="flex items-center gap-2">
-                  <FileText size={14} className="text-cyan-electric/60" />
-                  <span className="text-xs text-foam/60 font-body">
+                  <FileText size={14} className="text-cyan-electric/70" />
+                  <span className="text-xs text-ocean-depth/60 font-body">
                     {selectedSession.messages.length} messages
                   </span>
                 </div>
@@ -335,7 +335,7 @@ export default function SessionsPanel() {
                   >
                     <div className="flex items-start gap-2">
                       {msg.role === 'user' ? (
-                        <User size={14} className="text-ocean-deep shrink-0" />
+                        <User size={14} className="text-white shrink-0" />
                       ) : (
                         <Bot size={14} className="text-cyan-electric shrink-0" />
                       )}

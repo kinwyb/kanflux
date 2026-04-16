@@ -135,14 +135,14 @@ export default function ChatPanel() {
   return (
     <div className="glass-card-solid h-full flex flex-col overflow-hidden">
       {/* Chat Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-cyan-electric/10">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-cyan-electric/15">
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-cyan-electric to-cyan-glow flex items-center justify-center">
-            <Bot size={16} className="text-ocean-deep" />
+          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-cyan-electric to-cyan-glow flex items-center justify-center shadow-md">
+            <Bot size={16} className="text-white" />
           </div>
           <div>
-            <h2 className="font-display font-semibold text-foam">AI Agent</h2>
-            <p className="text-xs text-foam/50 font-body">
+            <h2 className="font-display font-semibold text-ocean-deep">AI Agent</h2>
+            <p className="text-xs text-ocean-depth/50 font-body">
               {connectionState === 'connected' ? 'Ready to assist' : 'Connecting...'}
             </p>
           </div>
@@ -155,7 +155,7 @@ export default function ChatPanel() {
               initial={{ opacity: 0, scale: 0.9 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.9 }}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-cyan-electric/10"
+              className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-cyan-electric/15"
             >
               <Sparkles size={14} className="text-cyan-electric animate-pulse" />
               <span className="text-xs font-body text-cyan-electric">Thinking</span>
@@ -172,13 +172,13 @@ export default function ChatPanel() {
             animate={{ opacity: 1, y: 0 }}
             className="flex flex-col items-center justify-center h-full text-center"
           >
-            <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-cyan-electric/20 to-cyan-glow/20 flex items-center justify-center mb-4">
+            <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-cyan-electric/20 to-cyan-glow/20 flex items-center justify-center mb-4 shadow-md">
               <Bot size={32} className="text-cyan-electric" />
             </div>
-            <h3 className="font-display font-semibold text-foam text-lg mb-2">
+            <h3 className="font-display font-semibold text-ocean-deep text-lg mb-2">
               Start a Conversation
             </h3>
-            <p className="text-sm text-foam/50 font-body max-w-xs">
+            <p className="text-sm text-ocean-depth/50 font-body max-w-xs">
               Send a message to begin interacting with your AI agent.
             </p>
           </motion.div>
@@ -193,15 +193,15 @@ export default function ChatPanel() {
               className={`flex items-start gap-3 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}
             >
               {/* Avatar */}
-              <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${
+              <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 shadow-md ${
                 msg.role === 'user'
                   ? 'bg-ocean-surface'
                   : 'bg-gradient-to-br from-cyan-electric to-cyan-glow'
               }`}>
                 {msg.role === 'user' ? (
-                  <User size={16} className="text-foam" />
+                  <User size={16} className="text-white" />
                 ) : (
-                  <Bot size={16} className="text-ocean-deep" />
+                  <Bot size={16} className="text-white" />
                 )}
               </div>
 
@@ -215,7 +215,7 @@ export default function ChatPanel() {
                         key={tool.id}
                         initial={{ opacity: 0, x: -10 }}
                         animate={{ opacity: 1, x: 0 }}
-                        className="flex items-center gap-2 px-3 py-2 rounded-lg bg-ocean-depth/50"
+                        className="flex items-center gap-2 px-3 py-2 rounded-lg bg-ocean-depth/10"
                       >
                         <Loader2 size={14} className="text-cyan-electric animate-spin" />
                         <Wrench size={14} className="text-cyan-mist" />
@@ -227,8 +227,8 @@ export default function ChatPanel() {
 
                 {/* Reasoning */}
                 {msg.reasoning && (
-                  <div className="px-3 py-2 rounded-lg bg-ocean-depth/30 border border-cyan-electric/5 mb-1">
-                    <p className="text-xs text-foam/60 font-body italic">{msg.reasoning}</p>
+                  <div className="px-3 py-2 rounded-lg bg-ocean-depth/10 border border-cyan-electric/10 mb-1">
+                    <p className="text-xs text-ocean-depth/60 font-body italic">{msg.reasoning}</p>
                   </div>
                 )}
 
@@ -238,7 +238,7 @@ export default function ChatPanel() {
                 </div>
 
                 {/* Timestamp */}
-                <span className={`text-xs text-foam/40 font-body ${msg.role === 'user' ? 'text-right' : ''}`}>
+                <span className={`text-xs text-ocean-depth/40 font-body ${msg.role === 'user' ? 'text-right' : ''}`}>
                   {format(msg.timestamp, 'HH:mm:ss')}
                 </span>
               </div>
@@ -250,7 +250,7 @@ export default function ChatPanel() {
       </div>
 
       {/* Input Area */}
-      <div className="px-4 py-3 border-t border-cyan-electric/10">
+      <div className="px-4 py-3 border-t border-cyan-electric/15">
         <div className="flex items-center gap-3">
           <input
             ref={inputRef}
