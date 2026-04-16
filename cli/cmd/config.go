@@ -64,7 +64,7 @@ func NewConfigCmd() *cobra.Command {
 	return cmd
 }
 
-// createDefaultConfig 创建默认配置
+// createDefaultConfig 创建完整默认配置
 func createDefaultConfig(workspace string) *config.Config {
 	return &config.Config{
 		Providers: map[string]*config.ProviderConfig{
@@ -82,16 +82,56 @@ func createDefaultConfig(workspace string) *config.Config {
 		DefaultProvider: "qwen",
 		Agents: []*config.AgentConfig{
 			{
-				Name:        "main",
-				Type:        config.AgentTypeDeep, // 默认使用 deep agent
-				Description: "Main agent for general tasks",
-				Workspace:   workspace,
-				// 可选：配置专门的记忆摘要模型（用于 memory 命令）
-				// SummarizeModel: &config.EmbeddingConfig{
-				// 	Provider: "qwen",
-				// 	Model:    "qwen3.5-plus",
+				Name:           "main",
+				Type:           config.AgentTypeDeep,
+				Description:    "Main agent for general tasks",
+				Workspace:      workspace,
+				MaxIteration:   10,
+				Streaming:      true,
+				MemoriaEnabled: true,
+			},
+		},
+		Tools: &config.ToolsConfig{
+			Approval: []string{
+				// "run_shell", // 示例：shell 命令需要审批
+			},
+		},
+		Channels: &config.ChannelsConfig{
+			CLI: &config.CLIChannelConfig{
+				Enabled: true,
+			},
+			WxCom: &config.WxComChannelConfig{
+				Enabled: false, // 默认关闭，需要配置后启用
+				Accounts: map[string]config.WxComAccountConfig{
+					"work": {
+						Enabled: false,
+						BotID:   "your-bot-id",
+						Secret:  "your-bot-secret",
+					},
+				},
+			},
+			ThreadBindings: []config.ThreadBindingConfig{
+				// 示例：将 TUI 会话转发到企业微信
+				// {
+				// 	SessionKey:   "tui:chat123",
+				// 	TargetChannel: "wxcom:work",
 				// },
 			},
+		},
+		WebSocket: &config.WebSocketConfig{
+			Enabled:      true,
+			Port:         8765,
+			Host:         "localhost",
+			Path:         "/ws",
+			ReadTimeout:  60,
+			WriteTimeout: 60,
+		},
+		Log: &config.LogConfig{
+			Level:      "info",
+			MaxSize:    100,
+			MaxBackups: 3,
+			MaxAge:     7,
+			Compress:   false,
 		},
 	}
 }
