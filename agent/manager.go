@@ -641,7 +641,8 @@ func (m *Manager) handleInboundMessage(ctx context.Context, msg *bus.InboundMess
 	// 生成会话键
 	sessionKey := fmt.Sprintf("%s:%s:%s", msg.Channel, msg.AccountID, msg.ChatID)
 	if msg.ChatID == "default" || msg.ChatID == "" {
-		sessionKey = fmt.Sprintf("%s:%s:%d", msg.Channel, msg.AccountID, msg.Timestamp.Unix())
+		// 使用日期格式，同一天共用一个 session
+		sessionKey = fmt.Sprintf("%s:%s:%s", msg.Channel, msg.AccountID, msg.Timestamp.Format("2006-01-02"))
 	}
 
 	sess, err := m.sessionMgr.GetOrCreate(sessionKey)
