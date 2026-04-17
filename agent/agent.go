@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +12,8 @@ import (
 	"sync"
 
 	"github.com/cloudwego/eino/adk/middlewares/filesystem"
+	"github.com/cloudwego/eino/schema"
+	jsonschema "github.com/eino-contrib/jsonschema"
 	"github.com/kinwyb/kanflux/agent/tools"
 	"github.com/kinwyb/kanflux/config"
 	"github.com/kinwyb/kanflux/memoria"
@@ -25,7 +28,6 @@ import (
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/compose"
-	"github.com/cloudwego/eino/schema"
 )
 
 // AgentType alias to config.AgentType
@@ -60,6 +62,8 @@ type Config struct {
 	Streaming     bool
 	Tools         []string // 允许使用的工具列表，空表示所有工具可用
 	ToolsApproval []string // 需要审批的工具列表
+	// MCP 工具配置
+	MCPConfigs []tools.MCPConfig // MCP 工具配置列表
 	// Memoria 统一记忆系统（替代 RAGManager）
 	Memoria *memoria.Memoria // 统一记忆系统：L1/L2/L3 三层架构
 	// Session 配置
@@ -124,6 +128,11 @@ func NewChatModelAgent(ctx context.Context, cfg *Config) (*Agent, error) {
 
 	// 注册 Memoria 工具（替代 RAG 和 History 工具）
 	buildMemoriaTool(cfg.ToolRegister, cfg.Memoria)
+
+	// 加载 MCP 工具
+	if err := loadMCPTools(ctx, cfg.ToolRegister, cfg.MCPConfigs); err != nil {
+		slog.Warn("Failed to load MCP tools", "error", err)
+	}
 
 	// 应用工具配置
 	applyToolConfig(cfg)
@@ -195,6 +204,11 @@ func NewDeepAgent(ctx context.Context, cfg *Config) (*Agent, error) {
 
 	// 注册 Memoria 工具（替代 RAG 和 History 工具）
 	buildMemoriaTool(cfg.ToolRegister, cfg.Memoria)
+
+	// 加载 MCP 工具
+	if err := loadMCPTools(ctx, cfg.ToolRegister, cfg.MCPConfigs); err != nil {
+		slog.Warn("Failed to load MCP tools", "error", err)
+	}
 
 	// 应用工具配置
 	applyToolConfig(cfg)
@@ -297,6 +311,11 @@ func NewPlanExecuteAgent(ctx context.Context, cfg *Config) (*Agent, error) {
 	// 注册 Memoria 工具（替代 RAG 和 History 工具）
 	buildMemoriaTool(cfg.ToolRegister, cfg.Memoria)
 
+	// 加载 MCP 工具
+	if err := loadMCPTools(ctx, cfg.ToolRegister, cfg.MCPConfigs); err != nil {
+		slog.Warn("Failed to load MCP tools", "error", err)
+	}
+
 	// 应用工具配置
 	applyToolConfig(cfg)
 
@@ -384,6 +403,11 @@ func NewSupervisorAgent(ctx context.Context, cfg *Config) (*Agent, error) {
 	// 注册 Memoria 工具（替代 RAG 和 History 工具）
 	buildMemoriaTool(cfg.ToolRegister, cfg.Memoria)
 
+	// 加载 MCP 工具
+	if err := loadMCPTools(ctx, cfg.ToolRegister, cfg.MCPConfigs); err != nil {
+		slog.Warn("Failed to load MCP tools", "error", err)
+	}
+
 	// 应用工具配置
 	applyToolConfig(cfg)
 
@@ -453,6 +477,106 @@ func buildMemoriaTool(register *tools.Registry, memoriaObj *memoria.Memoria) {
 	}
 	register.Register(memoria.NewHistoryTool(memoriaObj))
 	register.Register(memoria.NewRAGTool(memoriaObj))
+}
+
+// loadMCPTools 加载 MCP 工具到注册表
+func loadMCPTools(ctx context.Context, register *tools.Registry, mcpConfigs []tools.MCPConfig) error {
+	if len(mcpConfigs) == 0 || register == nil {
+		return nil
+	}
+
+	loader := tools.NewMCPLoader()
+	mcpTools, err := loader.LoadTools(ctx, mcpConfigs)
+	if err != nil {
+		return fmt.Errorf("failed to load MCP tools: %w", err)
+	}
+
+	for _, t := range mcpTools {
+		info, err := t.Info(ctx)
+		if err != nil {
+			slog.Warn("Failed to get MCP tool info", "error", err)
+			continue
+		}
+		// 将 MCP 工具包装为 invokeableTool
+		// 从 ParamsOneOf 获取参数 schema
+		params := make(map[string]interface{})
+		if info.ParamsOneOf != nil {
+			js, err := info.ParamsOneOf.ToJSONSchema()
+			if err == nil && js != nil {
+				// 将 jsonschema.Schema 转换为 map
+				params = schemaToMap(js)
+			}
+		}
+		wrappedTool := &mcpToolWrapper{baseTool: t, name: info.Name, desc: info.Desc, params: params}
+		if err := register.Register(wrappedTool); err != nil {
+			slog.Warn("Failed to register MCP tool", "name", info.Name, "error", err)
+		}
+	}
+
+	return nil
+}
+
+// schemaToMap 将 jsonschema.Schema 转换为 map[string]interface{}
+func schemaToMap(js *jsonschema.Schema) map[string]interface{} {
+	if js == nil {
+		return nil
+	}
+	// 使用 json 序列化再反序列化来转换
+	data, err := json.Marshal(js)
+	if err != nil {
+		return nil
+	}
+	var result map[string]interface{}
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil
+	}
+	return result
+}
+
+// mcpToolWrapper 包装 MCP 工具以实现 Tool 接口
+type mcpToolWrapper struct {
+	baseTool tool.BaseTool
+	name     string
+	desc     string
+	params   map[string]interface{}
+}
+
+func (w *mcpToolWrapper) Name() string {
+	return w.name
+}
+
+func (w *mcpToolWrapper) Description() string {
+	return w.desc
+}
+
+func (w *mcpToolWrapper) Parameters() map[string]interface{} {
+	return w.params
+}
+
+func (w *mcpToolWrapper) Execute(ctx context.Context, args map[string]interface{}) (string, error) {
+	// MCP 工具通过 InvokableRun 执行
+	invokable, ok := w.baseTool.(tool.InvokableTool)
+	if !ok {
+		return "", fmt.Errorf("MCP tool %s is not invokable", w.name)
+	}
+
+	argsJSON, err := jsonArgs(args)
+	if err != nil {
+		return "", err
+	}
+
+	return invokable.InvokableRun(ctx, argsJSON)
+}
+
+func jsonArgs(args map[string]interface{}) (string, error) {
+	if len(args) == 0 {
+		return "{}", nil
+	}
+	data, err := json.Marshal(args)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal args: %w", err)
+	}
+	return string(data), nil
 }
 
 // buildSubAgentPrompt 构建子 agent 描述提示词

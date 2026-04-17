@@ -95,6 +95,23 @@ func createDefaultConfig(workspace string) *config.Config {
 			Approval: []string{
 				// "run_shell", // 示例：shell 命令需要审批
 			},
+			MCP: []config.MCPConfig{
+				// 示例 MCP 配置（已禁用，需要配置后启用）
+				// {
+				// 	Name:    "filesystem",
+				// 	Type:    "stdio",
+				// 	Command: "mcp-server-filesystem",
+				// 	Args:    []string{"/path/to/workspace"},
+				// 	Enabled: true,
+				// },
+				// {
+				// 	Name:        "custom-server",
+				// 	Type:        "sse",
+				// 	URL:         "http://localhost:8080/sse",
+				// 	Enabled:     true,
+				// 	InitTimeout: 30,
+				// },
+			},
 		},
 		Channels: &config.ChannelsConfig{
 			CLI: &config.CLIChannelConfig{

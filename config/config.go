@@ -92,6 +92,20 @@ type EmbeddingConfig struct {
 // ToolsConfig 工具配置
 type ToolsConfig struct {
 	Approval []string `json:"approval"` // 需要审批的工具名称列表
+	MCP      []MCPConfig `json:"mcp"`    // MCP 工具配置列表
+}
+
+// MCPConfig MCP 工具配置
+type MCPConfig struct {
+	Name     string            `json:"name"`      // MCP 服务名称（用于标识）
+	Type     string            `json:"type"`      // 连接类型: "sse" 或 "stdio"
+	URL      string            `json:"url"`       // SSE 连接地址（type=sse 时使用）
+	Command  string            `json:"command"`   // Stdio 命令（type=stdio 时使用）
+	Args     []string          `json:"args"`      // Stdio 命令参数
+	Env      map[string]string `json:"env"`       // Stdio 环境变量
+	Tools    []string          `json:"tools"`     // 要加载的工具列表（空表示全部）
+	Enabled  bool              `json:"enabled"`   // 是否启用，默认 true
+	InitTimeout int            `json:"init_timeout"` // 初始化超时（秒），默认 30
 }
 
 // ProviderConfig 供应商配置
@@ -169,6 +183,8 @@ type ResolvedAgentConfig struct {
 	Streaming      bool
 	Tools          []string  // 允许使用的工具列表，空表示所有工具可用
 	ToolsApproval  []string  // 需要审批的工具列表
+	// MCP 工具配置
+	MCPConfigs      []MCPConfig // MCP 工具配置列表（从全局 Tools 配置继承）
 	// RAG 配置
 	KnowledgePaths      []KnowledgePathConfig // 知识库路径配置（私有 + 公共）
 	RAGConfig           *RAGConfigOptions     // RAG 详细配置
@@ -328,6 +344,21 @@ func (c *Config) ResolveAgentConfig(name string) (*ResolvedAgentConfig, error) {
 		memoriaEnabled = false
 	}
 
+	// 解析 MCP 配置（从全局 Tools 配置继承）
+	mcpConfigs := make([]MCPConfig, 0)
+	if c.Tools != nil && len(c.Tools.MCP) > 0 {
+		for _, mcp := range c.Tools.MCP {
+			// 设置默认值
+			if mcp.Enabled == false {
+				continue // 跳过禁用的 MCP
+			}
+			if mcp.InitTimeout <= 0 {
+				mcp.InitTimeout = 30
+			}
+			mcpConfigs = append(mcpConfigs, mcp)
+		}
+	}
+
 	return &ResolvedAgentConfig{
 		Name:                agent.Name,
 		Type:                agentType,
@@ -342,6 +373,7 @@ func (c *Config) ResolveAgentConfig(name string) (*ResolvedAgentConfig, error) {
 		Streaming:           agent.Streaming,
 		Tools:               tools,
 		ToolsApproval:       toolsApproval,
+		MCPConfigs:          mcpConfigs,
 		KnowledgePaths:      knowledgePaths,
 		RAGConfig:           c.resolveFinalRAGConfig(agent),
 		EmbeddingProvider:   embeddingProvider,
