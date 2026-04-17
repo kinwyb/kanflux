@@ -25,6 +25,8 @@ type looper struct {
 	callbackMu  sync.RWMutex
 	callbackID  int64         // 回调 ID 计数器
 	done        chan struct{} // 停止信号
+	stopped     bool          // 防止重复停止
+	stopMu      sync.Mutex    // 停止锁
 	cancelFunc  context.CancelFunc
 	mu          sync.Mutex
 	checkPoints map[string]*checkPoint // 按sessionID存储中断检查点
@@ -108,6 +110,12 @@ func (o *looper) eventLoop() {
 
 // Stop 停止事件循环
 func (o *looper) Stop() {
+	o.stopMu.Lock()
+	defer o.stopMu.Unlock()
+	if o.stopped {
+		return
+	}
+	o.stopped = true
 	close(o.done)
 }
 

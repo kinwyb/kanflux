@@ -47,10 +47,15 @@ type Manager struct {
 	// 流式内容累积器（按入站消息ID标识，避免同一chatID多条消息混淆）
 	accumulators   map[string]*streamAccumulator // inboundMsgID -> accumulator
 	accumulatorsMu sync.Mutex
+	// processMessages goroutine 控制
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
 }
 
 // NewManager 创建 Agent 管理器
 func NewManager(msgBus *bus.MessageBus, sessionMgr *session.Manager) *Manager {
+	ctx, cancel := context.WithCancel(context.Background())
 	ret := &Manager{
 		agents:           make(map[string]*Agent),
 		bus:              msgBus,
@@ -58,6 +63,8 @@ func NewManager(msgBus *bus.MessageBus, sessionMgr *session.Manager) *Manager {
 		resumeConverters: make(map[reflect.Type]ResumeParamConverter),
 		commands:         make(map[string]CommandHandler),
 		accumulators:     make(map[string]*streamAccumulator),
+		ctx:              ctx,
+		cancel:           cancel,
 	}
 
 	// 注册 ApprovalResult 类型的转换器
@@ -491,13 +498,24 @@ func (m *Manager) ListAgents() []string {
 
 // Start 启动消息处理器
 func (m *Manager) Start(ctx context.Context) error {
+	// 使用传入的 ctx 作为父 context，这样 Gateway 取消时会传递到这里
+	m.ctx, m.cancel = context.WithCancel(ctx)
 	// 启动消息处理器
-	go m.processMessages(ctx)
+	m.wg.Add(1)
+	go m.processMessages()
 	return nil
 }
 
 // Stop 停止所有 Agent
 func (m *Manager) Stop() error {
+	// 先取消 context，让 processMessages 退出
+	if m.cancel != nil {
+		m.cancel()
+	}
+	// 等待 processMessages 完全退出
+	m.wg.Wait()
+
+	// 然后停止所有 agents
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -510,22 +528,29 @@ func (m *Manager) Stop() error {
 }
 
 // processMessages 处理入站消息
-func (m *Manager) processMessages(ctx context.Context) {
+func (m *Manager) processMessages() {
+	defer m.wg.Done()
+
 	for {
 		select {
-		case <-ctx.Done():
+		case <-m.ctx.Done():
 			return
 		default:
-			msg, err := m.bus.ConsumeInbound(ctx)
+			msg, err := m.bus.ConsumeInbound(m.ctx)
 			if err != nil {
+				// ctx 被取消时退出循环
 				if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-					continue
+					return
+				}
+				// bus 已关闭时退出循环
+				if errors.Is(err, bus.ErrBusClosed) {
+					return
 				}
 				continue
 			}
 
-			if err = m.RouteInbound(ctx, msg); err != nil {
-				m.log(ctx, bus.LogLevelError, "manager", fmt.Sprintf("Failed to route message: %v", err))
+			if err = m.RouteInbound(m.ctx, msg); err != nil {
+				m.log(m.ctx, bus.LogLevelError, "manager", fmt.Sprintf("Failed to route message: %v", err))
 			}
 		}
 	}

@@ -524,6 +524,10 @@ func (a *Agent) Stop() error {
 	if a.cancel != nil {
 		a.cancel()
 	}
+	// 停止 looper 的 eventLoop goroutine
+	if a.loop != nil {
+		a.loop.Stop()
+	}
 	return nil
 }
 
