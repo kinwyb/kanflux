@@ -134,6 +134,12 @@ export type MessageType =
   | 'control'
   | 'session_list'
   | 'session_get'
+  | 'task_list'
+  | 'task_add'
+  | 'task_update'
+  | 'task_remove'
+  | 'task_trigger'
+  | 'task_status'
   | 'outbound'
   | 'chat_event'
   | 'log_event'
@@ -142,6 +148,12 @@ export type MessageType =
   | 'error'
   | 'session_list_ack'
   | 'session_get_ack'
+  | 'task_list_ack'
+  | 'task_add_ack'
+  | 'task_update_ack'
+  | 'task_remove_ack'
+  | 'task_trigger_ack'
+  | 'task_status_ack'
 
 // Session List Request/Response
 export interface SessionListPayload {
@@ -201,4 +213,154 @@ export interface InstructionPayload {
   agent_name: string
   content: string
   timestamp: string
+}
+
+// ========== Task Scheduler Types ==========
+
+export type TaskMessageType =
+  | 'task_list'
+  | 'task_add'
+  | 'task_update'
+  | 'task_remove'
+  | 'task_trigger'
+  | 'task_status'
+  | 'task_list_ack'
+  | 'task_add_ack'
+  | 'task_update_ack'
+  | 'task_remove_ack'
+  | 'task_trigger_ack'
+  | 'task_status_ack'
+
+// Task Schedule Config
+export interface ScheduleConfig {
+  cron: string
+}
+
+// Task Target Config
+export interface TargetConfig {
+  channel: string
+  account_id?: string
+  chat_id: string
+  agent_name?: string
+}
+
+// Task Content Config
+export interface ContentConfig {
+  prompt: string
+}
+
+// Task Config (for add/update)
+export interface TaskConfig {
+  id: string
+  name: string
+  description?: string
+  enabled: boolean
+  schedule: ScheduleConfig
+  target: TargetConfig
+  content: ContentConfig
+}
+
+// Task State
+export interface TaskState {
+  last_run?: number // Unix timestamp (ms)
+  last_result?: string
+  last_error?: string
+  success_count: number
+  fail_count: number
+  next_run?: number // Unix timestamp (ms)
+}
+
+// Task Detail (full task info with state)
+export interface TaskDetail {
+  id: string
+  name: string
+  description?: string
+  enabled: boolean
+  schedule: ScheduleConfig
+  target: TargetConfig
+  content: ContentConfig
+  next_run?: number // Unix timestamp (ms)
+  last_run?: number // Unix timestamp (ms)
+  is_running: boolean
+  state?: TaskState
+}
+
+// Task List Response
+export interface TaskListAckPayload {
+  success: boolean
+  error?: string
+  tasks?: TaskDetail[]
+}
+
+// Task Add Request
+export interface TaskAddPayload {
+  id: string
+  name: string
+  description?: string
+  enabled: boolean
+  schedule: ScheduleConfig
+  target: TargetConfig
+  content: ContentConfig
+}
+
+// Task Add Response
+export interface TaskAddAckPayload {
+  success: boolean
+  error?: string
+  id?: string
+}
+
+// Task Update Request
+export interface TaskUpdatePayload {
+  id: string
+  name?: string
+  description?: string
+  enabled?: boolean
+  schedule?: ScheduleConfig
+  target?: TargetConfig
+  content?: ContentConfig
+}
+
+// Task Update Response
+export interface TaskUpdateAckPayload {
+  success: boolean
+  error?: string
+  id?: string
+}
+
+// Task Remove Request
+export interface TaskRemovePayload {
+  id: string
+}
+
+// Task Remove Response
+export interface TaskRemoveAckPayload {
+  success: boolean
+  error?: string
+  id?: string
+}
+
+// Task Trigger Request
+export interface TaskTriggerPayload {
+  id: string
+}
+
+// Task Trigger Response
+export interface TaskTriggerAckPayload {
+  success: boolean
+  error?: string
+  id?: string
+}
+
+// Task Status Request
+export interface TaskStatusPayload {
+  id: string
+}
+
+// Task Status Response
+export interface TaskStatusAckPayload {
+  success: boolean
+  error?: string
+  id?: string
+  state?: TaskState
 }

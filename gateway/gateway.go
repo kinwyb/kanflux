@@ -15,7 +15,9 @@ import (
 	"github.com/kinwyb/kanflux/bus"
 	"github.com/kinwyb/kanflux/channel"
 	"github.com/kinwyb/kanflux/config"
+	"github.com/kinwyb/kanflux/gateway/handler"
 	"github.com/kinwyb/kanflux/gateway/ws"
+	"github.com/kinwyb/kanflux/scheduler"
 	"github.com/kinwyb/kanflux/session"
 )
 
@@ -29,6 +31,7 @@ type Gateway struct {
 	channelMgr   *channel.Manager
 	wsServer     *ws.Server
 	wsConfig     *ws.ServerConfig
+	taskScheduler *scheduler.Scheduler // 定时任务调度器
 
 	ctx          context.Context
 	cancel       context.CancelFunc
@@ -112,13 +115,29 @@ func (g *Gateway) Start(ctx context.Context) error {
 	}
 	slog.Info("ChannelManager 启动完成")
 
-	// 9. 创建 WebSocket 服务器
+	// 9. 创建并启动定时任务调度器
+	if g.cfg.Scheduler != nil && g.cfg.Scheduler.Enabled {
+		g.taskScheduler = scheduler.NewScheduler(g.cfg.Scheduler, g.msgBus, g.workspace)
+		if err := g.taskScheduler.Start(ctx); err != nil {
+			slog.Warn("启动定时任务调度器失败", "error", err)
+		} else {
+			slog.Info("定时任务调度器启动完成", "tasks", g.taskScheduler.GetTaskCount())
+		}
+	}
+
+	// 10. 创建 WebSocket 服务器
 	g.wsServer = ws.NewServer(g.msgBus, g.wsConfig, g.sessionMgr)
 	g.wsServer.SetShutdownCallback(func() {
 		slog.Info("收到远程关闭请求")
 		p, _ := os.FindProcess(os.Getpid())
 		p.Signal(syscall.SIGTERM)
 	})
+	// 设置定时任务调度器（如果启用）
+	if g.taskScheduler != nil {
+		g.wsServer.SetTaskScheduler(g.taskScheduler)
+		// 注册定时任务处理器
+		handler.RegisterTaskHandlers()
+	}
 	if err := g.wsServer.Start(ctx); err != nil {
 		slog.Warn("启动 WebSocket 服务器失败", "error", err)
 	} else {
@@ -151,7 +170,15 @@ func (g *Gateway) Stop() error {
 		slog.Info("Channels 已停止")
 	}
 
-	// 4. 停止 Agents
+	// 4. 停止定时任务调度器
+	if g.taskScheduler != nil {
+		if err := g.taskScheduler.Stop(); err != nil {
+			slog.Warn("停止定时任务调度器时出错", "error", err)
+		}
+		slog.Info("定时任务调度器已停止")
+	}
+
+	// 5. 停止 Agents
 	if g.agentMgr != nil {
 		if err := g.agentMgr.Stop(); err != nil {
 			slog.Warn("停止 Agents 时出错", "error", err)
@@ -159,7 +186,7 @@ func (g *Gateway) Stop() error {
 		slog.Info("Agents 已停止")
 	}
 
-	// 5. 关闭消息总线
+	// 6. 关闭消息总线
 	if g.msgBus != nil {
 		if err := g.msgBus.Close(); err != nil {
 			slog.Warn("关闭消息总线时出错", "error", err)
@@ -167,7 +194,7 @@ func (g *Gateway) Stop() error {
 		slog.Info("消息总线已关闭")
 	}
 
-	// 6. 关闭日志文件
+	// 7. 关闭日志文件
 	if g.logFile != nil {
 		g.logFile.Close()
 	}

@@ -1,13 +1,14 @@
 import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { MessageSquare, Clock, Terminal, Settings, ChevronLeft, ChevronRight } from 'lucide-react'
+import { MessageSquare, Clock, Terminal, Settings, ChevronLeft, ChevronRight, Calendar } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import ChatPanel from './components/ChatPanel'
 import SessionsPanel from './components/SessionsPanel'
 import LogsPanel from './components/LogsPanel'
+import TasksPanel from './components/TasksPanel'
 import './index.css'
 
-type TabType = 'chat' | 'sessions' | 'logs'
+type TabType = 'chat' | 'sessions' | 'tasks' | 'logs'
 
 interface Tab {
   id: TabType
@@ -23,6 +24,7 @@ function App() {
   const tabs: Tab[] = [
     { id: 'chat', label: 'Chat', icon: MessageSquare },
     { id: 'sessions', label: 'Sessions', icon: Clock },
+    { id: 'tasks', label: 'Tasks', icon: Calendar },
     { id: 'logs', label: 'Logs', icon: Terminal },
   ]
 
@@ -206,6 +208,19 @@ function App() {
               className="h-[calc(100vh-32px)]"
             >
               <SessionsPanel />
+            </motion.div>
+          )}
+
+          {activeTab === 'tasks' && (
+            <motion.div
+              key="tasks"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              transition={{ duration: 0.25 }}
+              className="h-[calc(100vh-32px)]"
+            >
+              <TasksPanel />
             </motion.div>
           )}
 

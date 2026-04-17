@@ -22,6 +22,46 @@ type Config struct {
 	WebSocket *WebSocketConfig `json:"websocket"` // WebSocket 服务配置
 	// Log 配置
 	Log *LogConfig `json:"log"` // 日志配置
+	// Scheduler 配置 (定时任务)
+	Scheduler *SchedulerConfig `json:"scheduler"` // 定时任务调度器配置
+}
+
+// SchedulerConfig 定时任务调度器配置
+type SchedulerConfig struct {
+	Enabled       bool         `json:"enabled"`        // 是否启用，默认 true
+	Tasks         []TaskConfig `json:"tasks"`          // 任务列表
+	CheckInterval string       `json:"check_interval"` // 检查间隔，如 "1m", "5m"
+	PersistState  bool         `json:"persist_state"`  // 是否持久化状态
+	StateFile     string       `json:"state_file"`     // 状态文件路径
+}
+
+// TaskConfig 定时任务配置
+type TaskConfig struct {
+	ID          string         `json:"id"`          // 任务唯一ID
+	Name        string         `json:"name"`        // 任务名称
+	Description string         `json:"description"` // 任务描述
+	Enabled     bool           `json:"enabled"`     // 是否启用
+	Schedule    ScheduleConfig `json:"schedule"`    // 调度配置
+	Target      TargetConfig   `json:"target"`      // 目标配置
+	Content     ContentConfig  `json:"content"`     // 内容配置
+}
+
+// ScheduleConfig 调度配置
+type ScheduleConfig struct {
+	Cron string `json:"cron"` // Cron 表达式 (标准5字段格式: 分 时 日 月 周)
+}
+
+// TargetConfig 目标配置
+type TargetConfig struct {
+	Channel   string `json:"channel"`    // 目标 Channel (tui, telegram, feishu, wxcom 等)
+	AccountID string `json:"account_id"` // 账号ID (多账号场景)
+	ChatID    string `json:"chat_id"`    // 目标 ChatID
+	AgentName string `json:"agent_name"` // 可选，指定使用的 Agent
+}
+
+// ContentConfig 内容配置
+type ContentConfig struct {
+	Prompt string `json:"prompt"` // Prompt 内容，通过 Agent 处理后发送
 }
 
 // LogConfig 日志配置

@@ -587,8 +587,19 @@ func (m *Manager) RouteInbound(ctx context.Context, msg *bus.InboundMessage) err
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	// 使用默认 Agent
+	// 选择 Agent
+	// 优先从 Metadata["target_agent"] 获取指定的 Agent
 	agent := m.defaultAgent
+	if msg.Metadata != nil {
+		if targetAgent, ok := msg.Metadata["target_agent"].(string); ok && targetAgent != "" {
+			if ag, exists := m.agents[targetAgent]; exists {
+				agent = ag
+			} else {
+				m.log(ctx, bus.LogLevelWarn, "manager", fmt.Sprintf("Target agent '%s' not found, using default", targetAgent))
+			}
+		}
+	}
+
 	if agent == nil {
 		return fmt.Errorf("no agent available")
 	}

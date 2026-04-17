@@ -20,6 +20,24 @@ type ErrorPayload = types.ErrorPayload
 type HeartbeatPayload = types.HeartbeatPayload
 type ControlPayload = types.ControlPayload
 type ControlAckPayload = types.ControlAckPayload
+// 定时任务相关
+type TaskListPayload = types.TaskListPayload
+type TaskAddPayload = types.TaskAddPayload
+type TaskUpdatePayload = types.TaskUpdatePayload
+type TaskRemovePayload = types.TaskRemovePayload
+type TaskTriggerPayload = types.TaskTriggerPayload
+type TaskStatusPayload = types.TaskStatusPayload
+type SchedulePayload = types.SchedulePayload
+type TargetPayload = types.TargetPayload
+type ContentPayload = types.ContentPayload
+type TaskListAckPayload = types.TaskListAckPayload
+type TaskDetailPayload = types.TaskDetailPayload
+type TaskStatePayload = types.TaskStatePayload
+type TaskAddAckPayload = types.TaskAddAckPayload
+type TaskUpdateAckPayload = types.TaskUpdateAckPayload
+type TaskRemoveAckPayload = types.TaskRemoveAckPayload
+type TaskTriggerAckPayload = types.TaskTriggerAckPayload
+type TaskStatusAckPayload = types.TaskStatusAckPayload
 
 // InboundMessage = types.InboundMessage
 type InboundMessage = types.InboundMessage
@@ -35,12 +53,31 @@ const (
 	MsgTypeSubscribe    = types.MsgTypeSubscribe
 	MsgTypeHeartbeat    = types.MsgTypeHeartbeat
 	MsgTypeControl      = types.MsgTypeControl
-	MsgTypeOutbound     = types.MsgTypeOutbound
-	MsgTypeChatEvent    = types.MsgTypeChatEvent
-	MsgTypeLogEvent     = types.MsgTypeLogEvent
-	MsgTypeHeartbeatAck = types.MsgTypeHeartbeatAck
-	MsgTypeControlAck   = types.MsgTypeControlAck
-	MsgTypeError        = types.MsgTypeError
+	MsgTypeSessionList  = types.MsgTypeSessionList
+	MsgTypeSessionGet   = types.MsgTypeSessionGet
+	// 定时任务
+	MsgTypeTaskList     = types.MsgTypeTaskList
+	MsgTypeTaskAdd      = types.MsgTypeTaskAdd
+	MsgTypeTaskUpdate   = types.MsgTypeTaskUpdate
+	MsgTypeTaskRemove   = types.MsgTypeTaskRemove
+	MsgTypeTaskTrigger  = types.MsgTypeTaskTrigger
+	MsgTypeTaskStatus   = types.MsgTypeTaskStatus
+	// 响应
+	MsgTypeOutbound        = types.MsgTypeOutbound
+	MsgTypeChatEvent       = types.MsgTypeChatEvent
+	MsgTypeLogEvent        = types.MsgTypeLogEvent
+	MsgTypeHeartbeatAck    = types.MsgTypeHeartbeatAck
+	MsgTypeControlAck      = types.MsgTypeControlAck
+	MsgTypeError           = types.MsgTypeError
+	MsgTypeSessionListAck  = types.MsgTypeSessionListAck
+	MsgTypeSessionGetAck   = types.MsgTypeSessionGetAck
+	// 定时任务响应
+	MsgTypeTaskListAck    = types.MsgTypeTaskListAck
+	MsgTypeTaskAddAck     = types.MsgTypeTaskAddAck
+	MsgTypeTaskUpdateAck  = types.MsgTypeTaskUpdateAck
+	MsgTypeTaskRemoveAck  = types.MsgTypeTaskRemoveAck
+	MsgTypeTaskTriggerAck = types.MsgTypeTaskTriggerAck
+	MsgTypeTaskStatusAck  = types.MsgTypeTaskStatusAck
 	ControlActionShutdown = types.ControlActionShutdown
 	ControlActionStatus   = types.ControlActionStatus
 )

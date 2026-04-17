@@ -11,8 +11,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/kinwyb/kanflux/bus"
+	"github.com/kinwyb/kanflux/config"
 	"github.com/kinwyb/kanflux/gateway/handler"
 	"github.com/kinwyb/kanflux/gateway/types"
+	"github.com/kinwyb/kanflux/scheduler"
 	"github.com/kinwyb/kanflux/session"
 )
 
@@ -56,6 +58,7 @@ type Server struct {
 	config     *ServerConfig
 	bus        *bus.MessageBus
 	sessionMgr *session.Manager
+	taskScheduler *scheduler.Scheduler // 定时任务调度器
 	logger     *slog.Logger
 
 	upgrader   websocket.Upgrader
@@ -576,6 +579,221 @@ func (s *Server) GetSessionManager() *session.Manager {
 	return s.sessionMgr
 }
 
+// SetTaskScheduler 设置定时任务调度器
+func (s *Server) SetTaskScheduler(ts *scheduler.Scheduler) {
+	s.taskScheduler = ts
+}
+
+// GetTaskScheduler 获取定时任务调度器
+func (s *Server) GetTaskScheduler() *scheduler.Scheduler {
+	return s.taskScheduler
+}
+
+// HandleTaskList 处理任务列表请求
+func (s *Server) HandleTaskList(connID string, msgID string) error {
+	if s.taskScheduler == nil {
+		return s.sendTaskError(connID, msgID, MsgTypeTaskListAck, "task scheduler not available")
+	}
+
+	details := s.taskScheduler.ListTaskDetails()
+	tasks := make([]*TaskDetailPayload, 0, len(details))
+	for _, detail := range details {
+		tasks = append(tasks, convertTaskDetailToPayload(detail))
+	}
+
+	ack := &TaskListAckPayload{
+		Success: true,
+		Tasks:   tasks,
+	}
+
+	return s.sendTaskResponse(connID, msgID, MsgTypeTaskListAck, ack)
+}
+
+// HandleTaskAdd 处理添加任务请求
+func (s *Server) HandleTaskAdd(connID string, msgID string, payload *TaskAddPayload) error {
+	if s.taskScheduler == nil {
+		return s.sendTaskError(connID, msgID, MsgTypeTaskAddAck, "task scheduler not available")
+	}
+
+	taskConfig := &config.TaskConfig{
+		ID:          payload.ID,
+		Name:        payload.Name,
+		Description: payload.Description,
+		Enabled:     payload.Enabled,
+		Schedule:    config.ScheduleConfig{Cron: payload.Schedule.Cron},
+		Target:      config.TargetConfig{
+			Channel:   payload.Target.Channel,
+			AccountID: payload.Target.AccountID,
+			ChatID:    payload.Target.ChatID,
+			AgentName: payload.Target.AgentName,
+		},
+		Content:     config.ContentConfig{Prompt: payload.Content.Prompt},
+	}
+
+	if err := s.taskScheduler.AddTask(taskConfig); err != nil {
+		return s.sendTaskError(connID, msgID, MsgTypeTaskAddAck, err.Error())
+	}
+
+	ack := &TaskAddAckPayload{
+		Success: true,
+		ID:      payload.ID,
+	}
+
+	return s.sendTaskResponse(connID, msgID, MsgTypeTaskAddAck, ack)
+}
+
+// HandleTaskUpdate 处理更新任务请求
+func (s *Server) HandleTaskUpdate(connID string, msgID string, payload *TaskUpdatePayload) error {
+	if s.taskScheduler == nil {
+		return s.sendTaskError(connID, msgID, MsgTypeTaskUpdateAck, "task scheduler not available")
+	}
+
+	// 获取现有任务配置
+	taskConfigs := s.taskScheduler.ListTasks()
+	var existing *config.TaskConfig
+	for _, tc := range taskConfigs {
+		if tc.ID == payload.ID {
+			existing = tc
+			break
+		}
+	}
+
+	if existing == nil {
+		return s.sendTaskError(connID, msgID, MsgTypeTaskUpdateAck, fmt.Sprintf("task '%s' not found", payload.ID))
+	}
+
+	// 更新配置（只更新提供的字段）
+	if payload.Name != "" {
+		existing.Name = payload.Name
+	}
+	if payload.Description != "" {
+		existing.Description = payload.Description
+	}
+	if payload.Schedule != nil {
+		existing.Schedule.Cron = payload.Schedule.Cron
+	}
+	if payload.Target != nil {
+		existing.Target.Channel = payload.Target.Channel
+		existing.Target.AccountID = payload.Target.AccountID
+		existing.Target.ChatID = payload.Target.ChatID
+		existing.Target.AgentName = payload.Target.AgentName
+	}
+	if payload.Content != nil {
+		existing.Content.Prompt = payload.Content.Prompt
+	}
+
+	if err := s.taskScheduler.UpdateTask(existing); err != nil {
+		return s.sendTaskError(connID, msgID, MsgTypeTaskUpdateAck, err.Error())
+	}
+
+	ack := &TaskUpdateAckPayload{
+		Success: true,
+		ID:      payload.ID,
+	}
+
+	return s.sendTaskResponse(connID, msgID, MsgTypeTaskUpdateAck, ack)
+}
+
+// HandleTaskRemove 处理删除任务请求
+func (s *Server) HandleTaskRemove(connID string, msgID string, payload *TaskRemovePayload) error {
+	if s.taskScheduler == nil {
+		return s.sendTaskError(connID, msgID, MsgTypeTaskRemoveAck, "task scheduler not available")
+	}
+
+	if err := s.taskScheduler.RemoveTask(payload.ID); err != nil {
+		return s.sendTaskError(connID, msgID, MsgTypeTaskRemoveAck, err.Error())
+	}
+
+	ack := &TaskRemoveAckPayload{
+		Success: true,
+		ID:      payload.ID,
+	}
+
+	return s.sendTaskResponse(connID, msgID, MsgTypeTaskRemoveAck, ack)
+}
+
+// HandleTaskTrigger 处理触发任务请求
+func (s *Server) HandleTaskTrigger(connID string, msgID string, payload *TaskTriggerPayload) error {
+	if s.taskScheduler == nil {
+		return s.sendTaskError(connID, msgID, MsgTypeTaskTriggerAck, "task scheduler not available")
+	}
+
+	if err := s.taskScheduler.TriggerTask(payload.ID); err != nil {
+		return s.sendTaskError(connID, msgID, MsgTypeTaskTriggerAck, err.Error())
+	}
+
+	ack := &TaskTriggerAckPayload{
+		Success: true,
+		ID:      payload.ID,
+	}
+
+	return s.sendTaskResponse(connID, msgID, MsgTypeTaskTriggerAck, ack)
+}
+
+// HandleTaskStatus 处理获取任务状态请求
+func (s *Server) HandleTaskStatus(connID string, msgID string, payload *TaskStatusPayload) error {
+	if s.taskScheduler == nil {
+		return s.sendTaskError(connID, msgID, MsgTypeTaskStatusAck, "task scheduler not available")
+	}
+
+	state, err := s.taskScheduler.GetTaskStatus(payload.ID)
+	if err != nil {
+		return s.sendTaskError(connID, msgID, MsgTypeTaskStatusAck, err.Error())
+	}
+
+	ack := &TaskStatusAckPayload{
+		Success: true,
+		ID:      payload.ID,
+		State:   convertTaskStateToPayload(state),
+	}
+
+	return s.sendTaskResponse(connID, msgID, MsgTypeTaskStatusAck, ack)
+}
+
+// sendTaskResponse 发送任务响应
+func (s *Server) sendTaskResponse(connID string, msgID string, msgType MessageType, payload interface{}) error {
+	s.connMu.RLock()
+	conn, ok := s.connections[connID]
+	s.connMu.RUnlock()
+
+	if !ok {
+		return fmt.Errorf("connection %s not found", connID)
+	}
+
+	wsMsg, err := NewWSMessage(msgType, msgID, payload)
+	if err != nil {
+		return err
+	}
+
+	msgBytes, err := wsMsg.Marshal()
+	if err != nil {
+		return err
+	}
+
+	conn.Send(msgBytes)
+	return nil
+}
+
+// sendTaskError 发送任务错误响应
+func (s *Server) sendTaskError(connID string, msgID string, msgType MessageType, errMsg string) error {
+	switch msgType {
+	case MsgTypeTaskListAck:
+		return s.sendTaskResponse(connID, msgID, msgType, &TaskListAckPayload{Success: false, Error: errMsg})
+	case MsgTypeTaskAddAck:
+		return s.sendTaskResponse(connID, msgID, msgType, &TaskAddAckPayload{Success: false, Error: errMsg})
+	case MsgTypeTaskUpdateAck:
+		return s.sendTaskResponse(connID, msgID, msgType, &TaskUpdateAckPayload{Success: false, Error: errMsg})
+	case MsgTypeTaskRemoveAck:
+		return s.sendTaskResponse(connID, msgID, msgType, &TaskRemoveAckPayload{Success: false, Error: errMsg})
+	case MsgTypeTaskTriggerAck:
+		return s.sendTaskResponse(connID, msgID, msgType, &TaskTriggerAckPayload{Success: false, Error: errMsg})
+	case MsgTypeTaskStatusAck:
+		return s.sendTaskResponse(connID, msgID, msgType, &TaskStatusAckPayload{Success: false, Error: errMsg})
+	default:
+		return s.sendTaskResponse(connID, msgID, MsgTypeError, &ErrorPayload{Message: errMsg})
+	}
+}
+
 // 内部转换函数
 
 func convertBusMediaToPayload(media []bus.Media) []Media {
@@ -610,4 +828,46 @@ func convertPayloadToBusMedia(media []Media) []bus.Media {
 		}
 	}
 	return result
+}
+
+// 定时任务相关转换函数
+
+func convertTaskDetailToPayload(detail scheduler.TaskDetail) *TaskDetailPayload {
+	payload := &TaskDetailPayload{
+		ID:          detail.Config.ID,
+		Name:        detail.Config.Name,
+		Description: detail.Config.Description,
+		Enabled:     detail.Config.Enabled,
+		Schedule:    SchedulePayload{Cron: detail.Config.Schedule.Cron},
+		Target:      TargetPayload{
+			Channel:   detail.Config.Target.Channel,
+			AccountID: detail.Config.Target.AccountID,
+			ChatID:    detail.Config.Target.ChatID,
+			AgentName: detail.Config.Target.AgentName,
+		},
+		Content:     ContentPayload{Prompt: detail.Config.Content.Prompt},
+		NextRun:     detail.NextRun.UnixMilli(),
+		LastRun:     detail.LastRun.UnixMilli(),
+		IsRunning:   detail.IsRunning,
+	}
+
+	if detail.State != nil {
+		payload.State = convertTaskStateToPayload(detail.State)
+	}
+
+	return payload
+}
+
+func convertTaskStateToPayload(state *scheduler.TaskState) *TaskStatePayload {
+	if state == nil {
+		return nil
+	}
+	return &TaskStatePayload{
+		LastRun:      state.LastRun.UnixMilli(),
+		LastResult:   state.LastResult,
+		LastError:    state.LastError,
+		SuccessCount: state.SuccessCount,
+		FailCount:    state.FailCount,
+		NextRun:      state.NextRun.UnixMilli(),
+	}
 }

@@ -17,6 +17,13 @@ const (
 	MsgTypeControl     MessageType = "control"     // 控制消息（如 shutdown）
 	MsgTypeSessionList MessageType = "session_list" // 获取 session 列表
 	MsgTypeSessionGet  MessageType = "session_get"  // 获取 session 内容
+	// 定时任务管理
+	MsgTypeTaskList    MessageType = "task_list"    // 获取任务列表
+	MsgTypeTaskAdd     MessageType = "task_add"     // 添加任务
+	MsgTypeTaskUpdate  MessageType = "task_update"  // 更新任务
+	MsgTypeTaskRemove  MessageType = "task_remove"  // 删除任务
+	MsgTypeTaskTrigger MessageType = "task_trigger" // 触发任务
+	MsgTypeTaskStatus  MessageType = "task_status"  // 获取任务状态
 
 	// 服务端 -> 客户端
 	MsgTypeOutbound        MessageType = "outbound"        // 出站消息
@@ -27,6 +34,13 @@ const (
 	MsgTypeError           MessageType = "error"           // 错误消息
 	MsgTypeSessionListAck  MessageType = "session_list_ack" // session 列表响应
 	MsgTypeSessionGetAck   MessageType = "session_get_ack"  // session 内容响应
+	// 定时任务响应
+	MsgTypeTaskListAck    MessageType = "task_list_ack"    // 任务列表响应
+	MsgTypeTaskAddAck     MessageType = "task_add_ack"     // 添加任务响应
+	MsgTypeTaskUpdateAck  MessageType = "task_update_ack"  // 更新任务响应
+	MsgTypeTaskRemoveAck  MessageType = "task_remove_ack"  // 删除任务响应
+	MsgTypeTaskTriggerAck MessageType = "task_trigger_ack" // 触发任务响应
+	MsgTypeTaskStatusAck  MessageType = "task_status_ack"  // 任务状态响应
 )
 
 // WSMessage WebSocket 消息封装
@@ -210,6 +224,134 @@ type SessionGetAckPayload struct {
 	Metadata     map[string]interface{} `json:"metadata,omitempty"`
 	Messages     []*MessagePayload    `json:"messages,omitempty"`
 	Instructions []*InstructionPayload `json:"instructions,omitempty"`
+}
+
+// ========== 定时任务相关 Payload ==========
+
+// TaskListPayload 任务列表请求 payload（空）
+type TaskListPayload struct{}
+
+// TaskAddPayload 添加任务请求 payload
+type TaskAddPayload struct {
+	ID          string         `json:"id"`
+	Name        string         `json:"name"`
+	Description string         `json:"description,omitempty"`
+	Enabled     bool           `json:"enabled"`
+	Schedule    SchedulePayload `json:"schedule"`
+	Target      TargetPayload   `json:"target"`
+	Content     ContentPayload  `json:"content"`
+}
+
+// TaskUpdatePayload 更新任务请求 payload
+type TaskUpdatePayload struct {
+	ID          string          `json:"id"`
+	Name        string          `json:"name,omitempty"`
+	Description string          `json:"description,omitempty"`
+	Enabled     bool            `json:"enabled,omitempty"`
+	Schedule    *SchedulePayload `json:"schedule,omitempty"`
+	Target      *TargetPayload   `json:"target,omitempty"`
+	Content     *ContentPayload  `json:"content,omitempty"`
+}
+
+// TaskRemovePayload 删除任务请求 payload
+type TaskRemovePayload struct {
+	ID string `json:"id"`
+}
+
+// TaskTriggerPayload 触发任务请求 payload
+type TaskTriggerPayload struct {
+	ID string `json:"id"`
+}
+
+// TaskStatusPayload 获取任务状态请求 payload
+type TaskStatusPayload struct {
+	ID string `json:"id"`
+}
+
+// SchedulePayload 调度配置 payload
+type SchedulePayload struct {
+	Cron string `json:"cron"`
+}
+
+// TargetPayload 目标配置 payload
+type TargetPayload struct {
+	Channel   string `json:"channel"`
+	AccountID string `json:"account_id,omitempty"`
+	ChatID    string `json:"chat_id"`
+	AgentName string `json:"agent_name,omitempty"`
+}
+
+// ContentPayload 内容配置 payload
+type ContentPayload struct {
+	Prompt string `json:"prompt"`
+}
+
+// TaskListAckPayload 任务列表响应 payload
+type TaskListAckPayload struct {
+	Success bool              `json:"success"`
+	Error   string            `json:"error,omitempty"`
+	Tasks   []*TaskDetailPayload `json:"tasks,omitempty"`
+}
+
+// TaskDetailPayload 任务详情 payload
+type TaskDetailPayload struct {
+	ID          string            `json:"id"`
+	Name        string            `json:"name"`
+	Description string            `json:"description,omitempty"`
+	Enabled     bool              `json:"enabled"`
+	Schedule    SchedulePayload   `json:"schedule"`
+	Target      TargetPayload     `json:"target"`
+	Content     ContentPayload    `json:"content"`
+	NextRun     int64             `json:"next_run,omitempty"`   // Unix 时间戳（毫秒）
+	LastRun     int64             `json:"last_run,omitempty"`   // Unix 时间戳（毫秒）
+	IsRunning   bool              `json:"is_running"`
+	State       *TaskStatePayload `json:"state,omitempty"`
+}
+
+// TaskStatePayload 任务状态 payload
+type TaskStatePayload struct {
+	LastRun      int64  `json:"last_run,omitempty"`    // Unix 时间戳（毫秒）
+	LastResult   string `json:"last_result,omitempty"`
+	LastError    string `json:"last_error,omitempty"`
+	SuccessCount int    `json:"success_count"`
+	FailCount    int    `json:"fail_count"`
+	NextRun      int64  `json:"next_run,omitempty"`    // Unix 时间戳（毫秒）
+}
+
+// TaskAddAckPayload 添加任务响应 payload
+type TaskAddAckPayload struct {
+	Success bool   `json:"success"`
+	Error   string `json:"error,omitempty"`
+	ID      string `json:"id,omitempty"`
+}
+
+// TaskUpdateAckPayload 更新任务响应 payload
+type TaskUpdateAckPayload struct {
+	Success bool   `json:"success"`
+	Error   string `json:"error,omitempty"`
+	ID      string `json:"id,omitempty"`
+}
+
+// TaskRemoveAckPayload 删除任务响应 payload
+type TaskRemoveAckPayload struct {
+	Success bool   `json:"success"`
+	Error   string `json:"error,omitempty"`
+	ID      string `json:"id,omitempty"`
+}
+
+// TaskTriggerAckPayload 触发任务响应 payload
+type TaskTriggerAckPayload struct {
+	Success bool   `json:"success"`
+	Error   string `json:"error,omitempty"`
+	ID      string `json:"id,omitempty"`
+}
+
+// TaskStatusAckPayload 任务状态响应 payload
+type TaskStatusAckPayload struct {
+	Success bool              `json:"success"`
+	Error   string            `json:"error,omitempty"`
+	ID      string            `json:"id,omitempty"`
+	State   *TaskStatePayload `json:"state,omitempty"`
 }
 
 // NewWSMessage 创建 WebSocket 消息

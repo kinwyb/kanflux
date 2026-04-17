@@ -15,6 +15,19 @@ import type {
   SessionMessage,
   MessageType,
   ToolCall,
+  TaskDetail,
+  TaskListAckPayload,
+  TaskAddPayload,
+  TaskAddAckPayload,
+  TaskUpdatePayload,
+  TaskUpdateAckPayload,
+  TaskRemovePayload,
+  TaskRemoveAckPayload,
+  TaskTriggerPayload,
+  TaskTriggerAckPayload,
+  TaskStatusPayload,
+  TaskStatusAckPayload,
+  TaskConfig,
 } from '../types'
 
 const WS_URL = 'ws://localhost:8765/ws'
@@ -30,6 +43,13 @@ interface UseWebSocketReturn {
   // Session methods
   fetchSessionList: (dateStart?: string, dateEnd?: string) => Promise<SessionMetaPayload[]>
   fetchSession: (key: string) => Promise<Session | null>
+  // Task methods
+  fetchTaskList: () => Promise<TaskDetail[]>
+  addTask: (config: TaskConfig) => Promise<{ success: boolean; id?: string; error?: string }>
+  updateTask: (id: string, config: Partial<TaskConfig>) => Promise<{ success: boolean; id?: string; error?: string }>
+  removeTask: (id: string) => Promise<{ success: boolean; id?: string; error?: string }>
+  triggerTask: (id: string) => Promise<{ success: boolean; id?: string; error?: string }>
+  fetchTaskStatus: (id: string) => Promise<TaskStatusAckPayload>
 }
 
 // Generate unique message ID
@@ -307,6 +327,125 @@ export function useWebSocket(): UseWebSocketReturn {
     }
   }, [sendRequest])
 
+  // ========== Task Methods ==========
+
+  // Fetch task list
+  const fetchTaskList = useCallback(async (): Promise<TaskDetail[]> => {
+    try {
+      const response = await sendRequest<TaskListAckPayload>('task_list', {})
+      if (!response.success) {
+        throw new Error(response.error || 'Failed to fetch task list')
+      }
+      return response.tasks || []
+    } catch (error) {
+      console.error('[WebSocket] Fetch task list error:', error)
+      return []
+    }
+  }, [sendRequest])
+
+  // Add task
+  const addTask = useCallback(async (config: TaskConfig): Promise<{ success: boolean; id?: string; error?: string }> => {
+    try {
+      const payload: TaskAddPayload = {
+        id: config.id,
+        name: config.name,
+        description: config.description,
+        enabled: config.enabled,
+        schedule: config.schedule,
+        target: config.target,
+        content: config.content,
+      }
+      const response = await sendRequest<TaskAddAckPayload>('task_add', payload)
+      return {
+        success: response.success,
+        id: response.id,
+        error: response.error,
+      }
+    } catch (error) {
+      console.error('[WebSocket] Add task error:', error)
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      }
+    }
+  }, [sendRequest])
+
+  // Update task
+  const updateTask = useCallback(async (id: string, config: Partial<TaskConfig>): Promise<{ success: boolean; id?: string; error?: string }> => {
+    try {
+      const payload: TaskUpdatePayload = {
+        id,
+        ...config,
+      }
+      const response = await sendRequest<TaskUpdateAckPayload>('task_update', payload)
+      return {
+        success: response.success,
+        id: response.id,
+        error: response.error,
+      }
+    } catch (error) {
+      console.error('[WebSocket] Update task error:', error)
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      }
+    }
+  }, [sendRequest])
+
+  // Remove task
+  const removeTask = useCallback(async (id: string): Promise<{ success: boolean; id?: string; error?: string }> => {
+    try {
+      const payload: TaskRemovePayload = { id }
+      const response = await sendRequest<TaskRemoveAckPayload>('task_remove', payload)
+      return {
+        success: response.success,
+        id: response.id,
+        error: response.error,
+      }
+    } catch (error) {
+      console.error('[WebSocket] Remove task error:', error)
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      }
+    }
+  }, [sendRequest])
+
+  // Trigger task
+  const triggerTask = useCallback(async (id: string): Promise<{ success: boolean; id?: string; error?: string }> => {
+    try {
+      const payload: TaskTriggerPayload = { id }
+      const response = await sendRequest<TaskTriggerAckPayload>('task_trigger', payload)
+      return {
+        success: response.success,
+        id: response.id,
+        error: response.error,
+      }
+    } catch (error) {
+      console.error('[WebSocket] Trigger task error:', error)
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      }
+    }
+  }, [sendRequest])
+
+  // Fetch task status
+  const fetchTaskStatus = useCallback(async (id: string): Promise<TaskStatusAckPayload> => {
+    try {
+      const payload: TaskStatusPayload = { id }
+      const response = await sendRequest<TaskStatusAckPayload>('task_status', payload)
+      return response
+    } catch (error) {
+      console.error('[WebSocket] Fetch task status error:', error)
+      return {
+        success: false,
+        id,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      }
+    }
+  }, [sendRequest])
+
   useEffect(() => {
     connect()
 
@@ -334,5 +473,11 @@ export function useWebSocket(): UseWebSocketReturn {
     clearLogs,
     fetchSessionList,
     fetchSession,
+    fetchTaskList,
+    addTask,
+    updateTask,
+    removeTask,
+    triggerTask,
+    fetchTaskStatus,
   }
 }
