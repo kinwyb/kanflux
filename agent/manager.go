@@ -207,8 +207,20 @@ func (m *Manager) RegisterAgentsFromConfig(ctx context.Context, cfg *config.Conf
 			Streaming:      resolved.Streaming,
 			Tools:          resolved.Tools,
 			ToolsApproval:  resolved.ToolsApproval,
+			MCPConfigs:     convertMCPConfigs(resolved.MCPConfigs),
 			Memoria:        memInstance,
 			SessionManager: m.sessionMgr,
+			// Browser 工具配置
+			BrowserEnabled:    resolved.BrowserEnabled,
+			BrowserHeadless:   resolved.BrowserHeadless,
+			BrowserTimeout:    resolved.BrowserTimeout,
+			BrowserRelayURL:   resolved.BrowserRelayURL,
+			BrowserRelayMode:  resolved.BrowserRelayMode,
+			// Web 工具配置
+			WebEnabled:      resolved.WebEnabled,
+			WebSearchAPIKey: resolved.WebSearchAPIKey,
+			WebSearchEngine: resolved.WebSearchEngine,
+			WebTimeout:      resolved.WebTimeout,
 		}
 
 		// 创建 Agent
@@ -1131,4 +1143,26 @@ func (m *Manager) createMemoria(ctx context.Context, resolved *config.ResolvedAg
 
 	m.log(ctx, bus.LogLevelInfo, "manager", "[Memoria] Instance created successfully")
 	return mem, nil
+}
+
+// convertMCPConfigs 将 config.MCPConfig 转换为 tools.MCPConfig
+func convertMCPConfigs(configs []config.MCPConfig) []tools.MCPConfig {
+	if len(configs) == 0 {
+		return nil
+	}
+	result := make([]tools.MCPConfig, len(configs))
+	for i, cfg := range configs {
+		result[i] = tools.MCPConfig{
+			Name:        cfg.Name,
+			Type:        cfg.Type,
+			URL:         cfg.URL,
+			Command:     cfg.Command,
+			Args:        cfg.Args,
+			Env:         cfg.Env,
+			Tools:       cfg.Tools,
+			Enabled:     cfg.Enabled,
+			InitTimeout: cfg.InitTimeout,
+		}
+	}
+	return result
 }

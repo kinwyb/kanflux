@@ -66,46 +66,65 @@ type ContentConfig struct {
 
 // LogConfig 日志配置
 type LogConfig struct {
-	Level    string `json:"level"`     // 日志级别: debug, info, warn, error
-	File     string `json:"file"`      // 日志文件路径（可选），为空则输出到 stdout
-	MaxSize  int    `json:"max_size"`  // 单个日志文件最大大小（MB），默认 100
-	MaxBackups int   `json:"max_backups"` // 保留的旧日志文件数量，默认 3
-	MaxAge   int    `json:"max_age"`   // 保留旧日志文件的最大天数，默认 7
-	Compress bool   `json:"compress"`  // 是否压缩旧日志文件，默认 false
+	Level      string `json:"level"`       // 日志级别: debug, info, warn, error
+	File       string `json:"file"`        // 日志文件路径（可选），为空则输出到 stdout
+	MaxSize    int    `json:"max_size"`    // 单个日志文件最大大小（MB），默认 100
+	MaxBackups int    `json:"max_backups"` // 保留的旧日志文件数量，默认 3
+	MaxAge     int    `json:"max_age"`     // 保留旧日志文件的最大天数，默认 7
+	Compress   bool   `json:"compress"`    // 是否压缩旧日志文件，默认 false
 }
 
 // KnowledgeBaseConfig 公共知识库配置
 type KnowledgeBaseConfig struct {
-	Paths         []KnowledgePathConfig `json:"paths"`          // 知识库路径列表
-	Embedding     *EmbeddingConfig      `json:"embedding"`      // Embedding 配置
-	RAGConfig     *RAGConfigOptions     `json:"rag_config"`     // RAG 详细配置
+	Paths     []KnowledgePathConfig `json:"paths"`      // 知识库路径列表
+	Embedding *EmbeddingConfig      `json:"embedding"`  // Embedding 配置
+	RAGConfig *RAGConfigOptions     `json:"rag_config"` // RAG 详细配置
 }
 
 // EmbeddingConfig Embedding 配置
 type EmbeddingConfig struct {
-	Provider   string `json:"provider"`    // Provider 名称，为空时使用 default_provider
-	Model      string `json:"model"`       // Embedding 模型名称
-	APIKey     string `json:"api_key"`     // 可选，为空时使用 provider 的 api_key
-	APIBaseURL string `json:"api_base_url"`// 可选，为空时使用 provider 的 api_base_url
+	Provider   string `json:"provider"`     // Provider 名称，为空时使用 default_provider
+	Model      string `json:"model"`        // Embedding 模型名称
+	APIKey     string `json:"api_key"`      // 可选，为空时使用 provider 的 api_key
+	APIBaseURL string `json:"api_base_url"` // 可选，为空时使用 provider 的 api_base_url
 }
 
 // ToolsConfig 工具配置
 type ToolsConfig struct {
-	Approval []string `json:"approval"` // 需要审批的工具名称列表
-	MCP      []MCPConfig `json:"mcp"`    // MCP 工具配置列表
+	Approval []string       `json:"approval"` // 需要审批的工具名称列表
+	MCP      []MCPConfig    `json:"mcp"`      // MCP 工具配置列表
+	Browser  *BrowserConfig `json:"browser"`  // Browser 工具配置
+	Web      *WebConfig     `json:"web"`      // Web 工具配置
+}
+
+// BrowserConfig Browser 工具配置
+type BrowserConfig struct {
+	Enabled   bool   `json:"enabled"`    // 是否启用，默认 true
+	Headless  bool   `json:"headless"`   // 是否使用 headless 模式，默认 true
+	Timeout   int    `json:"timeout"`    // 操作超时时间（秒），默认 30
+	RelayURL  string `json:"relay_url"`  // Relay 服务 URL（可选）
+	RelayMode string `json:"relay_mode"` // 连接模式: auto, direct, relay，默认 auto
+}
+
+// WebConfig Web 工具配置
+type WebConfig struct {
+	Enabled      bool   `json:"enabled"`        // 是否启用，默认 true
+	SearchAPIKey string `json:"search_api_key"` // 搜索 API Key
+	SearchEngine string `json:"search_engine"`  // 搜索引擎: tavily, serper, google
+	Timeout      int    `json:"timeout"`        // 请求超时时间（秒），默认 10
 }
 
 // MCPConfig MCP 工具配置
 type MCPConfig struct {
-	Name     string            `json:"name"`      // MCP 服务名称（用于标识）
-	Type     string            `json:"type"`      // 连接类型: "sse" 或 "stdio"
-	URL      string            `json:"url"`       // SSE 连接地址（type=sse 时使用）
-	Command  string            `json:"command"`   // Stdio 命令（type=stdio 时使用）
-	Args     []string          `json:"args"`      // Stdio 命令参数
-	Env      map[string]string `json:"env"`       // Stdio 环境变量
-	Tools    []string          `json:"tools"`     // 要加载的工具列表（空表示全部）
-	Enabled  bool              `json:"enabled"`   // 是否启用，默认 true
-	InitTimeout int            `json:"init_timeout"` // 初始化超时（秒），默认 30
+	Name        string            `json:"name"`         // MCP 服务名称（用于标识）
+	Type        string            `json:"type"`         // 连接类型: "sse" 或 "stdio"
+	URL         string            `json:"url"`          // SSE 连接地址（type=sse 时使用）
+	Command     string            `json:"command"`      // Stdio 命令（type=stdio 时使用）
+	Args        []string          `json:"args"`         // Stdio 命令参数
+	Env         map[string]string `json:"env"`          // Stdio 环境变量
+	Tools       []string          `json:"tools"`        // 要加载的工具列表（空表示全部）
+	Enabled     bool              `json:"enabled"`      // 是否启用，默认 true
+	InitTimeout int               `json:"init_timeout"` // 初始化超时（秒），默认 30
 }
 
 // ProviderConfig 供应商配置
@@ -119,34 +138,34 @@ type ProviderConfig struct {
 type AgentType string
 
 const (
-	AgentTypeChatModel  AgentType = "chatmodel"  // 基础 ReAct 模式
-	AgentTypeDeep       AgentType = "deep"       // 预构建 agent（规划+文件系统+子agent）
+	AgentTypeChatModel   AgentType = "chatmodel"   // 基础 ReAct 模式
+	AgentTypeDeep        AgentType = "deep"        // 预构建 agent（规划+文件系统+子agent）
 	AgentTypePlanExecute AgentType = "planexecute" // Plan-Execute-Replan 模式
-	AgentTypeSupervisor AgentType = "supervisor" // 监督者模式
+	AgentTypeSupervisor  AgentType = "supervisor"  // 监督者模式
 )
 
 // AgentConfig agent 配置
 type AgentConfig struct {
-	Name           string              `json:"name"`
-	Type           AgentType           `json:"type"`           // Agent 类型，默认 deep
-	Description    string              `json:"description"`    // Agent 描述，未配置时使用默认描述
-	Workspace      string              `json:"workspace"`      // 必须指定
-	SubAgents      []string            `json:"sub_agents"`     // 子 agent 名称列表
-	Provider       string              `json:"provider"`       // 未指定使用 default_provider
-	Model          string              `json:"model"`          // 未指定使用供应商的 default_model
-	MaxIteration   int                 `json:"max_iteration"`  // 默认 10
-	Streaming      bool                `json:"streaming"`      // 默认 true
-	Tools          []string            `json:"tools"`          // 允许使用的工具列表，空表示所有工具可用
-	ToolsApproval  []string            `json:"tools_approval"` // 需要审批的工具列表，继承全局配置并追加
+	Name          string    `json:"name"`
+	Type          AgentType `json:"type"`           // Agent 类型，默认 deep
+	Description   string    `json:"description"`    // Agent 描述，未配置时使用默认描述
+	Workspace     string    `json:"workspace"`      // 必须指定
+	SubAgents     []string  `json:"sub_agents"`     // 子 agent 名称列表
+	Provider      string    `json:"provider"`       // 未指定使用 default_provider
+	Model         string    `json:"model"`          // 未指定使用供应商的 default_model
+	MaxIteration  int       `json:"max_iteration"`  // 默认 10
+	Streaming     bool      `json:"streaming"`      // 默认 true
+	Tools         []string  `json:"tools"`          // 允许使用的工具列表，空表示所有工具可用
+	ToolsApproval []string  `json:"tools_approval"` // 需要审批的工具列表，继承全局配置并追加
 	// RAG 配置
-	KnowledgePaths     []KnowledgePathConfig `json:"knowledge_paths"`     // 私有知识库路径配置
-	KnowledgeBaseRefs  []string              `json:"knowledge_base_refs"` // 引用公共知识库名称列表
-	Embedding          *EmbeddingConfig      `json:"embedding"`           // Embedding 配置（可独立于 agent provider）
-	RAGConfig          *RAGConfigOptions     `json:"rag_config"`          // RAG 详细配置
+	KnowledgePaths    []KnowledgePathConfig `json:"knowledge_paths"`     // 私有知识库路径配置
+	KnowledgeBaseRefs []string              `json:"knowledge_base_refs"` // 引用公共知识库名称列表
+	Embedding         *EmbeddingConfig      `json:"embedding"`           // Embedding 配置（可独立于 agent provider）
+	RAGConfig         *RAGConfigOptions     `json:"rag_config"`          // RAG 详细配置
 	// Memoria 记忆摘要配置
-	SummarizeModel     *EmbeddingConfig      `json:"summarize_model"`     // 记忆摘要模型配置（用于 Memoria）
+	SummarizeModel *EmbeddingConfig `json:"summarize_model"` // 记忆摘要模型配置（用于 Memoria）
 	// MemoriaEnabled 是否启用 Memoria 记忆系统（默认 true）
-	MemoriaEnabled     bool                  `json:"memoria_enabled"`     // 是否启用 Memoria，默认 true
+	MemoriaEnabled bool `json:"memoria_enabled"` // 是否启用 Memoria，默认 true
 }
 
 // KnowledgePathConfig 知识库路径配置
@@ -170,24 +189,24 @@ type RAGConfigOptions struct {
 
 // ResolvedAgentConfig 解析后的 agent 配置（包含最终确定的值）
 type ResolvedAgentConfig struct {
-	Name           string
-	Type           AgentType // Agent 类型
-	Description    string    // Agent 描述
-	Workspace      string
-	SubAgents      []string  // 子 agent 名称列表
-	Provider       string
-	Model          string
-	APIKey         string
-	APIBaseURL     string
-	MaxIteration   int
-	Streaming      bool
-	Tools          []string  // 允许使用的工具列表，空表示所有工具可用
-	ToolsApproval  []string  // 需要审批的工具列表
+	Name          string
+	Type          AgentType // Agent 类型
+	Description   string    // Agent 描述
+	Workspace     string
+	SubAgents     []string // 子 agent 名称列表
+	Provider      string
+	Model         string
+	APIKey        string
+	APIBaseURL    string
+	MaxIteration  int
+	Streaming     bool
+	Tools         []string // 允许使用的工具列表，空表示所有工具可用
+	ToolsApproval []string // 需要审批的工具列表
 	// MCP 工具配置
-	MCPConfigs      []MCPConfig // MCP 工具配置列表（从全局 Tools 配置继承）
+	MCPConfigs []MCPConfig // MCP 工具配置列表（从全局 Tools 配置继承）
 	// RAG 配置
-	KnowledgePaths      []KnowledgePathConfig // 知识库路径配置（私有 + 公共）
-	RAGConfig           *RAGConfigOptions     // RAG 详细配置
+	KnowledgePaths []KnowledgePathConfig // 知识库路径配置（私有 + 公共）
+	RAGConfig      *RAGConfigOptions     // RAG 详细配置
 	// Embedding 配置
 	EmbeddingProvider   string // Embedding provider 名称
 	EmbeddingModel      string // Embedding 模型名称
@@ -199,7 +218,18 @@ type ResolvedAgentConfig struct {
 	SummarizeAPIKey     string // 记忆摘要 API Key
 	SummarizeAPIBaseURL string // 记忆摘要 API Base URL
 	// MemoriaEnabled 是否启用 Memoria 记忆系统
-	MemoriaEnabled      bool   // 是否启用 Memoria，默认 true
+	MemoriaEnabled bool // 是否启用 Memoria，默认 true
+	// Browser 工具配置
+	BrowserEnabled   bool   // 是否启用 Browser 工具
+	BrowserHeadless  bool   // 是否使用 headless 模式
+	BrowserTimeout   int    // 操作超时时间（秒）
+	BrowserRelayURL  string // Relay 服务 URL
+	BrowserRelayMode string // 连接模式
+	// Web 工具配置
+	WebEnabled      bool   // 是否启用 Web 工具
+	WebSearchAPIKey string // 搜索 API Key
+	WebSearchEngine string // 搜索引擎
+	WebTimeout      int    // 请求超时时间（秒）
 }
 
 // Load 从指定路径加载配置文件
@@ -222,7 +252,7 @@ func Load(path string) (*Config, error) {
 func LoadDefault() (*Config, error) {
 	// 查找默认路径
 	paths := []string{
-		"kanflux.json",                   // 当前目录
+		"kanflux.json", // 当前目录
 		filepath.Join(homeDir(), ".kanflux", "config.json"), // 用户目录
 	}
 
@@ -359,6 +389,46 @@ func (c *Config) ResolveAgentConfig(name string) (*ResolvedAgentConfig, error) {
 		}
 	}
 
+	// 解析 Browser 工具配置（从全局 Tools 配置继承）
+	browserEnabled := false // 默认不启用
+	browserHeadless := true // 默认 headless
+	browserTimeout := 30    // 默认 30 秒
+	browserRelayURL := ""
+	browserRelayMode := "auto"
+	if c.Tools != nil && c.Tools.Browser != nil {
+		if c.Tools.Browser.Enabled == true {
+			browserEnabled = true
+		}
+		if c.Tools.Browser.Headless == false {
+			browserHeadless = false
+		}
+		if c.Tools.Browser.Timeout > 0 {
+			browserTimeout = c.Tools.Browser.Timeout
+		}
+		browserRelayURL = c.Tools.Browser.RelayURL
+		if c.Tools.Browser.RelayMode != "" {
+			browserRelayMode = c.Tools.Browser.RelayMode
+		}
+	}
+
+	// 解析 Web 工具配置（从全局 Tools 配置继承）
+	webEnabled := false // 默认不启用
+	webSearchAPIKey := ""
+	webSearchEngine := "tavily" // 默认使用 tavily
+	webTimeout := 10            // 默认 10 秒
+	if c.Tools != nil && c.Tools.Web != nil {
+		if c.Tools.Web.Enabled == true {
+			webEnabled = true
+		}
+		webSearchAPIKey = c.Tools.Web.SearchAPIKey
+		if c.Tools.Web.SearchEngine != "" {
+			webSearchEngine = c.Tools.Web.SearchEngine
+		}
+		if c.Tools.Web.Timeout > 0 {
+			webTimeout = c.Tools.Web.Timeout
+		}
+	}
+
 	return &ResolvedAgentConfig{
 		Name:                agent.Name,
 		Type:                agentType,
@@ -385,6 +455,15 @@ func (c *Config) ResolveAgentConfig(name string) (*ResolvedAgentConfig, error) {
 		SummarizeAPIKey:     summarizeAPIKey,
 		SummarizeAPIBaseURL: summarizeAPIBaseURL,
 		MemoriaEnabled:      memoriaEnabled,
+		BrowserEnabled:      browserEnabled,
+		BrowserHeadless:     browserHeadless,
+		BrowserTimeout:      browserTimeout,
+		BrowserRelayURL:     browserRelayURL,
+		BrowserRelayMode:    browserRelayMode,
+		WebEnabled:          webEnabled,
+		WebSearchAPIKey:     webSearchAPIKey,
+		WebSearchEngine:     webSearchEngine,
+		WebTimeout:          webTimeout,
 	}, nil
 }
 
@@ -601,12 +680,12 @@ func resolveRAGConfig(cfg *RAGConfigOptions) *RAGConfigOptions {
 
 // ChannelsConfig 通道配置
 type ChannelsConfig struct {
-	Telegram       *TelegramChannelConfig         `json:"telegram"`
-	WhatsApp       *WhatsAppChannelConfig         `json:"whatsapp"`
-	Feishu         *FeishuChannelConfig           `json:"feishu"`
-	CLI            *CLIChannelConfig              `json:"cli"`
-	WxCom          *WxComChannelConfig            `json:"wxcom"`
-	ThreadBindings []ThreadBindingConfig          `json:"thread_bindings"`
+	Telegram       *TelegramChannelConfig `json:"telegram"`
+	WhatsApp       *WhatsAppChannelConfig `json:"whatsapp"`
+	Feishu         *FeishuChannelConfig   `json:"feishu"`
+	CLI            *CLIChannelConfig      `json:"cli"`
+	WxCom          *WxComChannelConfig    `json:"wxcom"`
+	ThreadBindings []ThreadBindingConfig  `json:"thread_bindings"`
 }
 
 // WxComChannelConfig 企业微信通道配置
@@ -620,11 +699,11 @@ type WxComAccountConfig struct {
 	Enabled           bool     `json:"enabled"`
 	BotID             string   `json:"bot_id"`
 	Secret            string   `json:"secret"`
-	WSURL             string   `json:"ws_url,omitempty"`              // 可选，自定义 WebSocket 地址
-	HeartbeatInterval int      `json:"heartbeat_interval,omitempty"`  // 可选，心跳间隔(ms)
-	ReconnectInterval int      `json:"reconnect_interval,omitempty"`  // 可选，重连延迟(ms)
-	MaxReconnect      int      `json:"max_reconnect,omitempty"`       // 可选，最大重连次数
-	RequestTimeout    int      `json:"request_timeout,omitempty"`     // 可选，请求超时(ms)
+	WSURL             string   `json:"ws_url,omitempty"`             // 可选，自定义 WebSocket 地址
+	HeartbeatInterval int      `json:"heartbeat_interval,omitempty"` // 可选，心跳间隔(ms)
+	ReconnectInterval int      `json:"reconnect_interval,omitempty"` // 可选，重连延迟(ms)
+	MaxReconnect      int      `json:"max_reconnect,omitempty"`      // 可选，最大重连次数
+	RequestTimeout    int      `json:"request_timeout,omitempty"`    // 可选，请求超时(ms)
 	AllowedIDs        []string `json:"allowed_ids"`
 }
 
@@ -639,7 +718,7 @@ type BaseChannelConfig struct {
 // ChannelAccountConfig 通道账号配置（支持多账号）
 type ChannelAccountConfig struct {
 	Enabled    bool     `json:"enabled"`
-	Name       string   `json:"name"`       // 账号显示名称
+	Name       string   `json:"name"` // 账号显示名称
 	AllowedIDs []string `json:"allowed_ids"`
 	// Telegram 专用
 	Token string `json:"token"`
@@ -655,29 +734,29 @@ type ChannelAccountConfig struct {
 
 // TelegramChannelConfig Telegram 通道配置
 type TelegramChannelConfig struct {
-	Enabled    bool                          `json:"enabled"`
-	Token      string                        `json:"token"`
-	AllowedIDs []string                      `json:"allowed_ids"`
+	Enabled    bool                            `json:"enabled"`
+	Token      string                          `json:"token"`
+	AllowedIDs []string                        `json:"allowed_ids"`
 	Accounts   map[string]ChannelAccountConfig `json:"accounts"` // 多账号配置
 }
 
 // WhatsAppChannelConfig WhatsApp 通道配置
 type WhatsAppChannelConfig struct {
-	Enabled    bool                          `json:"enabled"`
-	BridgeURL  string                        `json:"bridge_url"`
-	AllowedIDs []string                      `json:"allowed_ids"`
+	Enabled    bool                            `json:"enabled"`
+	BridgeURL  string                          `json:"bridge_url"`
+	AllowedIDs []string                        `json:"allowed_ids"`
 	Accounts   map[string]ChannelAccountConfig `json:"accounts"` // 多账号配置
 }
 
 // FeishuChannelConfig 飞书通道配置
 type FeishuChannelConfig struct {
-	Enabled           bool                          `json:"enabled"`
-	AppID             string                        `json:"app_id"`
-	AppSecret         string                        `json:"app_secret"`
-	EncryptKey        string                        `json:"encrypt_key"`
-	VerificationToken string                        `json:"verification_token"`
-	WebhookPort       int                           `json:"webhook_port"`
-	AllowedIDs        []string                      `json:"allowed_ids"`
+	Enabled           bool                            `json:"enabled"`
+	AppID             string                          `json:"app_id"`
+	AppSecret         string                          `json:"app_secret"`
+	EncryptKey        string                          `json:"encrypt_key"`
+	VerificationToken string                          `json:"verification_token"`
+	WebhookPort       int                             `json:"webhook_port"`
+	AllowedIDs        []string                        `json:"allowed_ids"`
 	Accounts          map[string]ChannelAccountConfig `json:"accounts"` // 多账号配置
 }
 
@@ -689,7 +768,7 @@ type CLIChannelConfig struct {
 
 // ThreadBindingConfig 会话绑定配置
 type ThreadBindingConfig struct {
-	SessionKey   string `json:"session_key"`   // Channel:ChatID (如 "tui:chat123")
+	SessionKey    string `json:"session_key"`    // Channel:ChatID (如 "tui:chat123")
 	TargetChannel string `json:"target_channel"` // 目标通道名称 (如 "telegram")
 	TargetAgent   string `json:"target_agent"`   // 可选：指定 agent
 	Priority      int    `json:"priority"`       // 优先级
@@ -697,13 +776,13 @@ type ThreadBindingConfig struct {
 
 // WebSocketConfig WebSocket 服务配置
 type WebSocketConfig struct {
-	Enabled      bool   `json:"enabled"`        // 是否启用，默认 true
-	Port         int    `json:"port"`           // WebSocket 端口，默认 8765
-	Host         string `json:"host"`           // 主机地址，默认 localhost
-	Path         string `json:"path"`           // WebSocket 路径，默认 /ws
-	AuthToken    string `json:"auth_token"`     // 认证 token（可选）
-	ReadTimeout  int    `json:"read_timeout"`   // 读超时（秒），默认 60
-	WriteTimeout int    `json:"write_timeout"`  // 写超时（秒），默认 60
+	Enabled      bool   `json:"enabled"`       // 是否启用，默认 true
+	Port         int    `json:"port"`          // WebSocket 端口，默认 8765
+	Host         string `json:"host"`          // 主机地址，默认 localhost
+	Path         string `json:"path"`          // WebSocket 路径，默认 /ws
+	AuthToken    string `json:"auth_token"`    // 认证 token（可选）
+	ReadTimeout  int    `json:"read_timeout"`  // 读超时（秒），默认 60
+	WriteTimeout int    `json:"write_timeout"` // 写超时（秒），默认 60
 }
 
 // GetChannelConfig 获取通道配置

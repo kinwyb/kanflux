@@ -64,6 +64,17 @@ type Config struct {
 	ToolsApproval []string // 需要审批的工具列表
 	// MCP 工具配置
 	MCPConfigs []tools.MCPConfig // MCP 工具配置列表
+	// Browser 工具配置
+	BrowserEnabled    bool   // 是否启用 Browser 工具
+	BrowserHeadless   bool   // 是否使用 headless 模式
+	BrowserTimeout    int    // 操作超时时间（秒）
+	BrowserRelayURL   string // Relay 服务 URL
+	BrowserRelayMode  string // 连接模式
+	// Web 工具配置
+	WebEnabled      bool   // 是否启用 Web 工具
+	WebSearchAPIKey string // 搜索 API Key
+	WebSearchEngine string // 搜索引擎
+	WebTimeout      int    // 请求超时时间（秒）
 	// Memoria 统一记忆系统（替代 RAGManager）
 	Memoria *memoria.Memoria // 统一记忆系统：L1/L2/L3 三层架构
 	// Session 配置
@@ -82,6 +93,40 @@ func applyToolConfig(cfg *Config) {
 	// 设置需要审批的工具列表
 	if len(cfg.ToolsApproval) > 0 {
 		cfg.ToolRegister.SetToolsApproval(cfg.ToolsApproval)
+	}
+}
+
+// registerBuiltinTools 注册内置工具（Browser、Web）
+func registerBuiltinTools(cfg *Config) {
+	if cfg.ToolRegister == nil {
+		return
+	}
+
+	// 注册 Browser 工具
+	if cfg.BrowserEnabled {
+		browserTool := tools.NewBrowserCDPToolWithRelay(
+			cfg.BrowserHeadless,
+			cfg.BrowserTimeout,
+			cfg.BrowserRelayURL,
+			cfg.BrowserRelayMode,
+		)
+		for _, tool := range browserTool.GetCDPTools() {
+			if err := cfg.ToolRegister.Register(tool); err != nil {
+				slog.Warn("Failed to register browser tool", "error", err)
+			}
+		}
+		slog.Debug("Browser tools registered", "headless", cfg.BrowserHeadless, "timeout", cfg.BrowserTimeout)
+	}
+
+	// 注册 Web 工具
+	if cfg.WebEnabled {
+		webTool := tools.NewWebTool(cfg.WebSearchAPIKey, cfg.WebSearchEngine, cfg.WebTimeout)
+		for _, tool := range webTool.GetTools() {
+			if err := cfg.ToolRegister.Register(tool); err != nil {
+				slog.Warn("Failed to register web tool", "error", err)
+			}
+		}
+		slog.Debug("Web tools registered", "engine", cfg.WebSearchEngine, "timeout", cfg.WebTimeout)
 	}
 }
 
@@ -133,6 +178,9 @@ func NewChatModelAgent(ctx context.Context, cfg *Config) (*Agent, error) {
 	if err := loadMCPTools(ctx, cfg.ToolRegister, cfg.MCPConfigs); err != nil {
 		slog.Warn("Failed to load MCP tools", "error", err)
 	}
+
+	// 注册内置工具（Browser、Web）
+	registerBuiltinTools(cfg)
 
 	// 应用工具配置
 	applyToolConfig(cfg)
@@ -209,6 +257,9 @@ func NewDeepAgent(ctx context.Context, cfg *Config) (*Agent, error) {
 	if err := loadMCPTools(ctx, cfg.ToolRegister, cfg.MCPConfigs); err != nil {
 		slog.Warn("Failed to load MCP tools", "error", err)
 	}
+
+	// 注册内置工具（Browser、Web）
+	registerBuiltinTools(cfg)
 
 	// 应用工具配置
 	applyToolConfig(cfg)
@@ -316,6 +367,9 @@ func NewPlanExecuteAgent(ctx context.Context, cfg *Config) (*Agent, error) {
 		slog.Warn("Failed to load MCP tools", "error", err)
 	}
 
+	// 注册内置工具（Browser、Web）
+	registerBuiltinTools(cfg)
+
 	// 应用工具配置
 	applyToolConfig(cfg)
 
@@ -407,6 +461,9 @@ func NewSupervisorAgent(ctx context.Context, cfg *Config) (*Agent, error) {
 	if err := loadMCPTools(ctx, cfg.ToolRegister, cfg.MCPConfigs); err != nil {
 		slog.Warn("Failed to load MCP tools", "error", err)
 	}
+
+	// 注册内置工具（Browser、Web）
+	registerBuiltinTools(cfg)
 
 	// 应用工具配置
 	applyToolConfig(cfg)
