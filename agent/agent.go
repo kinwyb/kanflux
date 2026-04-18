@@ -17,6 +17,7 @@ import (
 	"github.com/kinwyb/kanflux/agent/tools"
 	"github.com/kinwyb/kanflux/config"
 	"github.com/kinwyb/kanflux/memoria"
+	"github.com/kinwyb/kanflux/scheduler"
 	"github.com/kinwyb/kanflux/session"
 
 	localbk "github.com/cloudwego/eino-ext/adk/backend/local"
@@ -75,6 +76,9 @@ type Config struct {
 	WebSearchAPIKey string // 搜索 API Key
 	WebSearchEngine string // 搜索引擎
 	WebTimeout      int    // 请求超时时间（秒）
+	// Scheduler 工具配置
+	SchedulerEnabled bool              // 是否启用 Scheduler 工具
+	Scheduler        scheduler.Accessor // Scheduler 访问接口
 	// Memoria 统一记忆系统（替代 RAGManager）
 	Memoria *memoria.Memoria // 统一记忆系统：L1/L2/L3 三层架构
 	// Session 配置
@@ -96,7 +100,7 @@ func applyToolConfig(cfg *Config) {
 	}
 }
 
-// registerBuiltinTools 注册内置工具（Browser、Web）
+// registerBuiltinTools 注册内置工具（Browser、Web、Scheduler）
 func registerBuiltinTools(cfg *Config) {
 	if cfg.ToolRegister == nil {
 		return
@@ -127,6 +131,16 @@ func registerBuiltinTools(cfg *Config) {
 			}
 		}
 		slog.Debug("Web tools registered", "engine", cfg.WebSearchEngine, "timeout", cfg.WebTimeout)
+	}
+
+	// 注册 Scheduler 工具
+	if cfg.SchedulerEnabled && cfg.Scheduler != nil {
+		schedulerTool := tools.NewSchedulerTool(cfg.Scheduler)
+		if err := cfg.ToolRegister.Register(schedulerTool); err != nil {
+			slog.Warn("Failed to register scheduler tool", "error", err)
+		} else {
+			slog.Debug("Scheduler tool registered", "tasks", cfg.Scheduler.GetTaskCount())
+		}
 	}
 }
 

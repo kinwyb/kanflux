@@ -85,14 +85,24 @@ func (g *Gateway) Start(ctx context.Context) error {
 	g.sessionMgr = sessionMgr
 	slog.Info("会话管理器创建完成")
 
-	// 5. 创建 AgentManager 并注册 Agents
+	// 5. 创建定时任务调度器（先创建但不启动，以便传递给 Agent）
+	if g.cfg.Scheduler != nil && g.cfg.Scheduler.Enabled {
+		g.taskScheduler = scheduler.NewScheduler(g.cfg.Scheduler, g.msgBus, g.workspace)
+		slog.Info("定时任务调度器创建完成", "tasks", g.taskScheduler.GetTaskCount())
+	}
+
+	// 6. 创建 AgentManager 并注册 Agents
 	g.agentMgr = agent.NewManager(g.msgBus, g.sessionMgr)
+	// 设置 Scheduler（如果存在）
+	if g.taskScheduler != nil {
+		g.agentMgr.SetScheduler(g.taskScheduler)
+	}
 	if err := g.agentMgr.RegisterAgentsFromConfig(ctx, g.cfg, nil); err != nil {
 		return fmt.Errorf("注册 Agents 失败: %w", err)
 	}
 	slog.Info("Agents 注册完成", "count", len(g.agentMgr.ListAgents()))
 
-	// 6. 创建 ChannelManager 并初始化 Channels
+	// 7. 创建 ChannelManager 并初始化 Channels
 	g.channelMgr = channel.NewManager(g.msgBus)
 	if g.cfg.Channels != nil {
 		if err := g.channelMgr.InitializeFromConfig(ctx, g.cfg.Channels); err != nil {
@@ -101,13 +111,13 @@ func (g *Gateway) Start(ctx context.Context) error {
 	}
 	slog.Info("Channels 初始化完成", "count", g.channelMgr.ChannelCount())
 
-	// 7. 启动 AgentManager
+	// 8. 启动 AgentManager
 	if err := g.agentMgr.Start(ctx); err != nil {
 		return fmt.Errorf("启动 AgentManager 失败: %w", err)
 	}
 	slog.Info("AgentManager 启动完成")
 
-	// 8. 启动 ChannelManager
+	// 9. 启动 ChannelManager
 	if err := g.channelMgr.StartAll(ctx); err != nil {
 		g.cancel()
 		g.agentMgr.Stop()
@@ -115,17 +125,16 @@ func (g *Gateway) Start(ctx context.Context) error {
 	}
 	slog.Info("ChannelManager 启动完成")
 
-	// 9. 创建并启动定时任务调度器
-	if g.cfg.Scheduler != nil && g.cfg.Scheduler.Enabled {
-		g.taskScheduler = scheduler.NewScheduler(g.cfg.Scheduler, g.msgBus, g.workspace)
+	// 10. 启动定时任务调度器
+	if g.taskScheduler != nil {
 		if err := g.taskScheduler.Start(ctx); err != nil {
 			slog.Warn("启动定时任务调度器失败", "error", err)
 		} else {
-			slog.Info("定时任务调度器启动完成", "tasks", g.taskScheduler.GetTaskCount())
+			slog.Info("定时任务调度器启动完成")
 		}
 	}
 
-	// 10. 创建 WebSocket 服务器
+	// 11. 创建 WebSocket 服务器
 	g.wsServer = ws.NewServer(g.msgBus, g.wsConfig, g.sessionMgr)
 	g.wsServer.SetShutdownCallback(func() {
 		slog.Info("收到远程关闭请求")

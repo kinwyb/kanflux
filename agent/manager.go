@@ -15,6 +15,7 @@ import (
 	"github.com/kinwyb/kanflux/config"
 	"github.com/kinwyb/kanflux/memoria"
 	"github.com/kinwyb/kanflux/providers"
+	"github.com/kinwyb/kanflux/scheduler"
 	"github.com/kinwyb/kanflux/session"
 
 	"github.com/cloudwego/eino/adk"
@@ -39,6 +40,7 @@ type Manager struct {
 	defaultAgent     *Agent            // 默认 Agent
 	bus              *bus.MessageBus
 	sessionMgr       *session.Manager
+	scheduler        scheduler.Accessor // 定时任务调度器
 	mu               sync.RWMutex
 	resumeConverters map[reflect.Type]ResumeParamConverter // 按恢复参数类型注册转换器
 	converterMu      sync.RWMutex
@@ -221,6 +223,9 @@ func (m *Manager) RegisterAgentsFromConfig(ctx context.Context, cfg *config.Conf
 			WebSearchAPIKey: resolved.WebSearchAPIKey,
 			WebSearchEngine: resolved.WebSearchEngine,
 			WebTimeout:      resolved.WebTimeout,
+			// Scheduler 工具配置
+			SchedulerEnabled: m.scheduler != nil,
+			Scheduler:        m.scheduler,
 		}
 
 		// 创建 Agent
@@ -313,6 +318,20 @@ func (m *Manager) GetDefaultAgent() *Agent {
 // GetSessionManager 获取会话管理器
 func (m *Manager) GetSessionManager() *session.Manager {
 	return m.sessionMgr
+}
+
+// SetScheduler 设置定时任务调度器
+func (m *Manager) SetScheduler(s scheduler.Accessor) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.scheduler = s
+}
+
+// GetScheduler 获取定时任务调度器
+func (m *Manager) GetScheduler() scheduler.Accessor {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.scheduler
 }
 
 // RegisterResumeConverter 注册恢复参数转换器
