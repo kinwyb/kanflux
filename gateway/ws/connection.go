@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
@@ -48,26 +49,46 @@ func (c *Connection) Handle(ctx context.Context) {
 	c.readLoop(ctx)
 }
 
-// readLoop 读循环
+// readLoop 读循环（使用定期超时检查 ctx）
 func (c *Connection) readLoop(ctx context.Context) {
 	defer c.Close()
 
+	// 设置初始读超时（用于定期检查 ctx）
+	readCheckInterval := 1 * time.Second
+
 	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-			_, message, err := c.wsConn.ReadMessage()
-			if err != nil {
-				if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-					c.logger.Debug("Read error", "error", err)
+		// 设置读超时，允许定期检查 ctx 是否被取消
+		c.wsConn.SetReadDeadline(time.Now().Add(readCheckInterval))
+
+		_, message, err := c.wsConn.ReadMessage()
+		if err != nil {
+			// 检查是否是超时错误
+			if netErr, ok := err.(interface{ Timeout() bool }); ok && netErr.Timeout() {
+				// 检查 ctx 是否被取消
+				select {
+				case <-ctx.Done():
+					c.logger.Debug("Context cancelled, closing connection")
+					// 发送 Close 帧通知客户端
+					c.sendCloseFrame()
+					return
+				default:
+					// 继续等待下一次读取
+					continue
 				}
-				return
 			}
 
-			// 处理消息
-			c.handleMessage(ctx, message)
+			// 其他错误（如客户端关闭连接）
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+				c.logger.Debug("Read error", "error", err)
+			}
+			return
 		}
+
+		// 清除读超时（处理消息期间）
+		c.wsConn.SetReadDeadline(time.Time{})
+
+		// 处理消息
+		c.handleMessage(ctx, message)
 	}
 }
 
@@ -78,6 +99,8 @@ func (c *Connection) sendLoop(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			// 发送 Close 帧通知客户端
+			c.sendCloseFrame()
 			return
 		case msg, ok := <-c.sendChan:
 			if !ok {
@@ -93,6 +116,26 @@ func (c *Connection) sendLoop(ctx context.Context) {
 				return
 			}
 		}
+	}
+}
+
+// sendCloseFrame 发送 WebSocket Close 帧
+func (c *Connection) sendCloseFrame() {
+	c.closeMu.Lock()
+	if c.closed {
+		c.closeMu.Unlock()
+		return
+	}
+	c.closeMu.Unlock()
+
+	c.mu.Lock()
+	// 发送 Close 帧（状态码 1001 = Going Away）
+	err := c.wsConn.WriteMessage(websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.CloseGoingAway, "server shutdown"))
+	c.mu.Unlock()
+
+	if err != nil {
+		c.logger.Debug("Failed to send close frame", "error", err)
 	}
 }
 
