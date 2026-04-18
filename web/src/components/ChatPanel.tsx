@@ -1,12 +1,12 @@
 import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Send, Bot, User, Sparkles, Loader2, Wrench, CheckCircle2, XCircle, ChevronDown, ChevronRight } from 'lucide-react'
-import { useWebSocket } from '../hooks/useWebSocket'
+import { useWebSocketContext } from '../contexts/WebSocketContext'
 import type { ChatMessage, InboundMessage, ToolCallDisplay } from '../types'
 import { format } from 'date-fns'
 
 export default function ChatPanel() {
-  const { connectionState, messages, events, sendMessage } = useWebSocket()
+  const { connectionState, messages, events, sendMessage } = useWebSocketContext()
   const [inputValue, setInputValue] = useState('')
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
   const [isAgentThinking, setIsAgentThinking] = useState(false)

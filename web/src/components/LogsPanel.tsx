@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Terminal, Filter, Trash2, Pause, Play, Download, Clock } from 'lucide-react'
 import { format } from 'date-fns'
-import { useWebSocket } from '../hooks/useWebSocket'
+import { useWebSocketContext } from '../contexts/WebSocketContext'
 import type { LogEvent } from '../types'
 
 // Log level colors and labels
@@ -14,7 +14,7 @@ const logLevelConfig = {
 }
 
 export default function LogsPanel() {
-  const { logs, clearLogs } = useWebSocket()
+  const { logs, clearLogs } = useWebSocketContext()
   const [displayLogs, setDisplayLogs] = useState<LogEvent[]>([])
   const [isPaused, setIsPaused] = useState(false)
   const [levelFilter, setLevelFilter] = useState<string>('all')

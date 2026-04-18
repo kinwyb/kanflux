@@ -15,7 +15,7 @@ import {
   Edit3,
 } from 'lucide-react'
 import { format } from 'date-fns'
-import { useWebSocket } from '../hooks/useWebSocket'
+import { useWebSocketContext } from '../contexts/WebSocketContext'
 import type { TaskDetail, TaskConfig } from '../types'
 
 export default function TasksPanel() {
@@ -26,7 +26,7 @@ export default function TasksPanel() {
     updateTask,
     removeTask,
     triggerTask,
-  } = useWebSocket()
+  } = useWebSocketContext()
   const [tasks, setTasks] = useState<TaskDetail[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [showAddModal, setShowAddModal] = useState(false)

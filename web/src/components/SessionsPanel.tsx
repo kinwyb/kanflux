@@ -2,11 +2,11 @@ import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Calendar, ChevronRight, ChevronDown, FileText, User, Bot, Search, X, RefreshCw, Wifi, WifiOff, Wrench } from 'lucide-react'
 import { format, parseISO, startOfDay, endOfDay, isWithinInterval } from 'date-fns'
-import { useWebSocket } from '../hooks/useWebSocket'
+import { useWebSocketContext } from '../contexts/WebSocketContext'
 import type { Session, SessionMetaPayload, SessionMessage } from '../types'
 
 export default function SessionsPanel() {
-  const { connectionState, fetchSessionList, fetchSession } = useWebSocket()
+  const { connectionState, fetchSessionList, fetchSession } = useWebSocketContext()
   const [sessionMetas, setSessionMetas] = useState<SessionMetaPayload[]>([])
   const [sessions, setSessions] = useState<Map<string, Session>>(new Map())
   const [selectedSession, setSelectedSession] = useState<Session | null>(null)
