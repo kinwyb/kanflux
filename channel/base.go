@@ -36,6 +36,10 @@ type Channel interface {
 
 	// IsAllowed 检查发送者是否允许
 	IsAllowed(senderID string) bool
+
+	// HandleRequest 处理请求消息（如 send_file）
+	// 返回响应消息，nil 表示不处理该请求类型
+	HandleRequest(ctx context.Context, request *bus.OutboundMessage) (*bus.OutboundMessage, error)
 }
 
 // BaseChannelConfig 通道基础配置
@@ -171,4 +175,10 @@ func (c *ChannelBase) HandleChatEvent(ctx context.Context, event *bus.ChatEvent)
 func (c *ChannelBase) Send(ctx context.Context, msg *bus.OutboundMessage) error {
 	// 默认实现不做任何处理，由具体 channel 实现
 	return nil
+}
+
+// HandleRequest 处理请求消息 (默认不处理)
+func (c *ChannelBase) HandleRequest(ctx context.Context, request *bus.OutboundMessage) (*bus.OutboundMessage, error) {
+	// 默认实现不处理任何请求，由具体 channel 根据请求类型实现
+	return nil, nil
 }

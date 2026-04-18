@@ -15,6 +15,7 @@ import (
 	"github.com/cloudwego/eino/schema"
 	jsonschema "github.com/eino-contrib/jsonschema"
 	"github.com/kinwyb/kanflux/agent/tools"
+	"github.com/kinwyb/kanflux/bus"
 	"github.com/kinwyb/kanflux/config"
 	"github.com/kinwyb/kanflux/memoria"
 	"github.com/kinwyb/kanflux/scheduler"
@@ -83,6 +84,9 @@ type Config struct {
 	Memoria *memoria.Memoria // 统一记忆系统：L1/L2/L3 三层架构
 	// Session 配置
 	SessionManager *session.Manager // Session 管理器
+	// Bus 配置（用于 SendFileTool 等需要 bus 的工具）
+	Bus       interface{} // *bus.MessageBus（避免循环导入）
+	ResponseMgr interface{} // *bus.RequestResponseManager
 }
 
 // applyToolConfig 应用工具配置到 Registry
@@ -140,6 +144,26 @@ func registerBuiltinTools(cfg *Config) {
 			slog.Warn("Failed to register scheduler tool", "error", err)
 		} else {
 			slog.Debug("Scheduler tool registered", "tasks", cfg.Scheduler.GetTaskCount())
+		}
+	}
+
+	// 注册 SendFile 工具
+	if cfg.Bus != nil && cfg.ResponseMgr != nil {
+		msgBus, ok := cfg.Bus.(*bus.MessageBus)
+		if !ok {
+			slog.Warn("Bus is not a MessageBus, skipping SendFileTool registration")
+			return
+		}
+		responseMgr, ok := cfg.ResponseMgr.(*bus.RequestResponseManager)
+		if !ok {
+			slog.Warn("ResponseMgr is not a RequestResponseManager, skipping SendFileTool registration")
+			return
+		}
+		sendFileTool := tools.NewSendFileTool(msgBus, responseMgr)
+		if err := cfg.ToolRegister.Register(sendFileTool, true); err != nil { // 默认需要审批
+			slog.Warn("Failed to register send_file tool", "error", err)
+		} else {
+			slog.Debug("SendFile tool registered")
 		}
 	}
 }

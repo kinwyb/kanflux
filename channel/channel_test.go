@@ -228,3 +228,6 @@ func (m *MockChannel) SendStream(ctx context.Context, msg *bus.OutboundMessage) 
 }
 func (m *MockChannel) HandleChatEvent(ctx context.Context, event *bus.ChatEvent) error { return nil }
 func (m *MockChannel) IsAllowed(senderID string) bool { return true }
+func (m *MockChannel) HandleRequest(ctx context.Context, request *bus.OutboundMessage) (*bus.OutboundMessage, error) {
+	return nil, nil
+}

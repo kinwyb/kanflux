@@ -23,6 +23,11 @@ const (
 	StreamingModeAccumulate = "accumulate" // 累积模式：Content 返回累积后的完整内容
 )
 
+// RequestType 常量定义（请求类型）
+const (
+	RequestTypeSendFile = "send_file" // 发送文件请求
+)
+
 // InboundMessage 入站消息
 type InboundMessage struct {
 	ID            string                 `json:"id"`
@@ -67,6 +72,14 @@ type OutboundMessage struct {
 	Error            string                 `json:"error,omitempty"`   // 错误信息
 	Metadata         map[string]interface{} `json:"metadata"`          // 元数据
 	Timestamp        time.Time              `json:"timestamp"`
+
+	// 请求-响应模式
+	RequestID   string `json:"request_id,omitempty"`   // 请求ID
+	ResponseID  string `json:"response_id,omitempty"`  // 响应ID（指向请求）
+	IsRequest   bool   `json:"is_request"`             // 是否为请求
+	IsResponse  bool   `json:"is_response"`            // 是否为响应
+	RequestType string `json:"request_type,omitempty"` // 请求类型
+	Result      string `json:"result,omitempty"`       // 处理结果描述
 }
 
 // SystemMessage 系统消息（用于子代理结果通知）

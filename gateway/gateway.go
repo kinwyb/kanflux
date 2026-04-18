@@ -104,12 +104,21 @@ func (g *Gateway) Start(ctx context.Context) error {
 
 	// 7. 创建 ChannelManager 并初始化 Channels
 	g.channelMgr = channel.NewManager(g.msgBus)
+	// 注册响应处理器（响应消息不广播，直接交给请求方）
+	g.msgBus.SetResponseHandler(g.channelMgr.GetResponseMgr().HandleResponse)
 	if g.cfg.Channels != nil {
 		if err := g.channelMgr.InitializeFromConfig(ctx, g.cfg.Channels); err != nil {
 			slog.Warn("初始化部分 Channel 失败", "error", err)
 		}
 	}
 	slog.Info("Channels 初始化完成", "count", g.channelMgr.ChannelCount())
+
+	// 8. 为所有 Agent 注册 SendFile 工具（需要 responseMgr）
+	if err := g.agentMgr.RegisterSendFileTool(g.channelMgr.GetResponseMgr()); err != nil {
+		slog.Warn("注册 SendFile 工具失败", "error", err)
+	} else {
+		slog.Info("SendFile 工具已注册到所有 Agent")
+	}
 
 	// 8. 启动 AgentManager
 	if err := g.agentMgr.Start(ctx); err != nil {

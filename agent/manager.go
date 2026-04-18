@@ -41,6 +41,7 @@ type Manager struct {
 	bus              *bus.MessageBus
 	sessionMgr       *session.Manager
 	scheduler        scheduler.Accessor // 定时任务调度器
+	responseMgr      *bus.RequestResponseManager // 请求响应管理器（用于 SendFileTool）
 	mu               sync.RWMutex
 	resumeConverters map[reflect.Type]ResumeParamConverter // 按恢复参数类型注册转换器
 	converterMu      sync.RWMutex
@@ -332,6 +333,34 @@ func (m *Manager) GetScheduler() scheduler.Accessor {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.scheduler
+}
+
+// SetBusAndResponseMgr 设置消息总线 and 请求响应管理器（用于 SendFileTool 等工具）
+func (m *Manager) SetBusAndResponseMgr(msgBus *bus.MessageBus, responseMgr *bus.RequestResponseManager) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.bus = msgBus
+	// 存储 responseMgr 以便后续注册工具
+	m.responseMgr = responseMgr
+}
+
+// RegisterSendFileTool 为所有已注册的 Agent 注册 SendFile 工具
+func (m *Manager) RegisterSendFileTool(responseMgr *bus.RequestResponseManager) error {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	for name, agent := range m.agents {
+		if agent.cfg.ToolRegister == nil {
+			continue
+		}
+		sendFileTool := tools.NewSendFileTool(m.bus, responseMgr)
+		if err := agent.cfg.ToolRegister.Register(sendFileTool, true); err != nil {
+			m.log(context.Background(), bus.LogLevelWarn, "manager", fmt.Sprintf("Failed to register send_file tool for agent '%s': %v", name, err))
+		} else {
+			m.log(context.Background(), bus.LogLevelInfo, "manager", fmt.Sprintf("SendFile tool registered for agent '%s'", name))
+		}
+	}
+	return nil
 }
 
 // RegisterResumeConverter 注册恢复参数转换器
@@ -666,6 +695,11 @@ func (m *Manager) RouteInbound(ctx context.Context, msg *bus.InboundMessage) err
 
 // handleInboundMessage 处理入站消息
 func (m *Manager) handleInboundMessage(ctx context.Context, msg *bus.InboundMessage, agent *Agent) error {
+	// 设置 context values，工具可通过 ctx.Value() 获取
+	ctx = context.WithValue(ctx, "channel", msg.Channel)
+	ctx = context.WithValue(ctx, "chat_id", msg.ChatID)
+	ctx = context.WithValue(ctx, "account_id", msg.AccountID)
+
 	// 获取 agent 名称
 	agentName := agent.cfg.Name
 

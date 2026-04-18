@@ -9,21 +9,25 @@ import (
 	"github.com/google/uuid"
 )
 
+// ResponseHandler 响应消息处理器
+type ResponseHandler func(msg *OutboundMessage) bool
+
 // MessageBus 消息总线
 type MessageBus struct {
-	inbound       chan *InboundMessage
-	outbound      chan *OutboundMessage
-	chatEvents    chan *ChatEvent
-	logEvents     chan *LogEvent
-	outSubs       map[string]*outboundSubscriber
-	chatSubs      map[string]*chatEventSubscriber
-	logSubs       map[string]chan *LogEvent
-	outSubsMu     sync.RWMutex
-	chatSubsMu    sync.RWMutex
-	logSubsMu     sync.RWMutex
-	mu            sync.RWMutex
-	closed        bool
-	fanoutStopped bool
+	inbound        chan *InboundMessage
+	outbound       chan *OutboundMessage
+	chatEvents     chan *ChatEvent
+	logEvents      chan *LogEvent
+	outSubs        map[string]*outboundSubscriber
+	chatSubs       map[string]*chatEventSubscriber
+	logSubs        map[string]chan *LogEvent
+	outSubsMu      sync.RWMutex
+	chatSubsMu     sync.RWMutex
+	logSubsMu      sync.RWMutex
+	mu             sync.RWMutex
+	closed         bool
+	fanoutStopped  bool
+	responseHandler ResponseHandler // 响应消息处理器
 }
 
 // outboundSubscriber 出站消息订阅者
@@ -210,6 +214,14 @@ func (b *MessageBus) IsClosed() bool {
 	return b.closed
 }
 
+// SetResponseHandler 设置响应消息处理器
+// 响应消息会先交给处理器处理，如果处理器返回 true，则跳过广播
+func (b *MessageBus) SetResponseHandler(handler ResponseHandler) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.responseHandler = handler
+}
+
 // InboundCount 获取入站消息数量
 func (b *MessageBus) InboundCount() int {
 	return len(b.inbound)
@@ -280,6 +292,16 @@ func (b *MessageBus) UnsubscribeOutbound(subID string) {
 // 这是唯一从 outbound channel 读取的地方
 func (b *MessageBus) fanoutMessages() {
 	for msg := range b.outbound {
+		// 先处理响应消息
+		b.mu.RLock()
+		handler := b.responseHandler
+		b.mu.RUnlock()
+
+		if handler != nil && msg.IsResponse && handler(msg) {
+			// 响应消息已处理，跳过广播
+			continue
+		}
+
 		b.outSubsMu.RLock()
 		subCount := len(b.outSubs)
 		b.outSubsMu.RUnlock()

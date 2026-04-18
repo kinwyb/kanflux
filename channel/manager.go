@@ -4,16 +4,21 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/kinwyb/kanflux/bus"
 	"github.com/kinwyb/kanflux/config"
 )
 
+// DefaultRequestTimeout 默认请求超时时间
+const DefaultRequestTimeout = 30 * time.Second
+
 // Manager 通道管理器
 type Manager struct {
-	channels map[string]Channel // name -> Channel
-	bindings *ThreadBindingService
-	bus      *bus.MessageBus
+	channels   map[string]Channel // name -> Channel
+	bindings   *ThreadBindingService
+	bus        *bus.MessageBus
+	responseMgr *bus.RequestResponseManager // 请求响应管理器
 
 	// 订阅
 	outSub  *bus.OutboundSubscription
@@ -25,14 +30,15 @@ type Manager struct {
 }
 
 // NewManager 创建通道管理器
-func NewManager(bus *bus.MessageBus) *Manager {
+func NewManager(msgBus *bus.MessageBus) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Manager{
-		channels: make(map[string]Channel),
-		bindings: NewThreadBindingService(),
-		bus:      bus,
-		ctx:      ctx,
-		cancel:   cancel,
+		channels:    make(map[string]Channel),
+		bindings:    NewThreadBindingService(),
+		bus:         msgBus,
+		responseMgr: bus.NewRequestResponseManager(DefaultRequestTimeout),
+		ctx:         ctx,
+		cancel:      cancel,
 	}
 }
 
@@ -173,6 +179,17 @@ func (m *Manager) dispatchOutbound(ctx context.Context) {
 				return
 			}
 
+			// 跳过响应消息（由 RequestResponseManager 处理）
+			if msg.IsResponse {
+				continue
+			}
+
+			// 处理请求消息
+			if msg.IsRequest {
+				m.handleRequest(ctx, msg)
+				continue
+			}
+
 			// 使用 ThreadBinding 解析目标通道
 			targetChan := m.bindings.ResolveChannel(msg)
 
@@ -199,6 +216,46 @@ func (m *Manager) dispatchOutbound(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// handleRequest 处理请求消息
+func (m *Manager) handleRequest(ctx context.Context, request *bus.OutboundMessage) {
+	// 获取对应通道
+	ch, ok := m.Get(request.Channel)
+	if !ok {
+		// 通道不存在，发送错误响应
+		m.sendErrorResponse(ctx, request, fmt.Sprintf("channel %s not found", request.Channel))
+		return
+	}
+
+	// 调用 Channel 的 HandleRequest
+	response, err := ch.HandleRequest(ctx, request)
+	if err != nil {
+		m.sendErrorResponse(ctx, request, err.Error())
+		return
+	}
+
+	// 如果 Channel 返回了响应，发布到 bus
+	if response != nil {
+		response.ResponseID = request.RequestID
+		response.IsResponse = true
+		response.Channel = request.Channel
+		response.ChatID = request.ChatID
+		_ = m.bus.PublishOutbound(ctx, response)
+	}
+}
+
+// sendErrorResponse 发送错误响应
+func (m *Manager) sendErrorResponse(ctx context.Context, request *bus.OutboundMessage, errMsg string) {
+	response := &bus.OutboundMessage{
+		ResponseID:  request.RequestID,
+		IsResponse:  true,
+		Channel:     request.Channel,
+		ChatID:      request.ChatID,
+		Error:       errMsg,
+		Result:      fmt.Sprintf("Error: %s", errMsg),
+	}
+	_ = m.bus.PublishOutbound(ctx, response)
 }
 
 // dispatchChatEvents 分发聊天事件（仅状态通知）
@@ -246,6 +303,11 @@ func (m *Manager) UnbindSession(sessionKey string) error {
 // GetBus 获取消息总线
 func (m *Manager) GetBus() *bus.MessageBus {
 	return m.bus
+}
+
+// GetResponseMgr 获取请求响应管理器
+func (m *Manager) GetResponseMgr() *bus.RequestResponseManager {
+	return m.responseMgr
 }
 
 // ChannelCount 获取通道数量

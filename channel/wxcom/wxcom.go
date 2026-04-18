@@ -502,3 +502,50 @@ func (c *WxComChannel) SendTemplateCard(ctx context.Context, chatID string, card
 	_, err := c.wsManager.SendReply(ctx, reqID, body, WsCmdSendMsg)
 	return err
 }
+
+// HandleRequest 处理请求消息（如 send_file）
+func (c *WxComChannel) HandleRequest(ctx context.Context, request *bus.OutboundMessage) (*bus.OutboundMessage, error) {
+	// 根据请求类型处理
+	switch request.RequestType {
+	case bus.RequestTypeSendFile:
+		return c.handleSendFileRequest(ctx, request)
+	default:
+		// 不支持的请求类型，返回 nil 表示不处理
+		return nil, nil
+	}
+}
+
+// handleSendFileRequest 处理发送文件请求
+func (c *WxComChannel) handleSendFileRequest(ctx context.Context, request *bus.OutboundMessage) (*bus.OutboundMessage, error) {
+	if !c.IsRunning() {
+		return &bus.OutboundMessage{
+			Error:  ErrNotConnected.Error(),
+			Result: "发送失败：通道未连接",
+		}, nil
+	}
+
+	// 从 request.Media 获取文件路径
+	if len(request.Media) == 0 {
+		return &bus.OutboundMessage{
+			Error:  "no file provided",
+			Result: "发送失败：未提供文件",
+		}, nil
+	}
+
+	filePath := request.Media[0].URL
+	caption := ""
+	if request.Media[0].Metadata != nil {
+		if cap, ok := request.Media[0].Metadata["caption"].(string); ok {
+			caption = cap
+		}
+	}
+
+	// TODO: 实现企业微信发送文件 API
+	// 当前返回模拟响应，后续需要实现微信发送文件逻辑
+	c.logger.Info("Send file request received", "file_path", filePath, "chat_id", request.ChatID, "caption", caption)
+
+	return &bus.OutboundMessage{
+		Content: "✅ 文件发送请求已接收",
+		Result:  fmt.Sprintf("文件发送成功（模拟）：%s", filePath),
+	}, nil
+}
