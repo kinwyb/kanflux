@@ -55,29 +55,29 @@ func (c *ServerConfig) URL() string {
 
 // Server WebSocket 服务器
 type Server struct {
-	config     *ServerConfig
-	bus        *bus.MessageBus
-	sessionMgr *session.Manager
+	config        *ServerConfig
+	bus           *bus.MessageBus
+	sessionMgr    *session.Manager
 	taskScheduler *scheduler.Scheduler // 定时任务调度器
-	logger     *slog.Logger
+	logger        *slog.Logger
 
-	upgrader   websocket.Upgrader
+	upgrader    websocket.Upgrader
 	connections map[string]*Connection
-	connMu     sync.RWMutex
+	connMu      sync.RWMutex
 
 	// 订阅管理
 	subscriptions map[string]*SubscriptionInfo
 	subMu         sync.RWMutex
 
 	// bus 订阅
-	outSub   *bus.OutboundSubscription
-	chatSub  *bus.ChatEventSubscription
-	logSub   *bus.LogEventSubscription
+	outSub  *bus.OutboundSubscription
+	chatSub *bus.ChatEventSubscription
+	logSub  *bus.LogEventSubscription
 
-	httpServer  *http.Server
+	httpServer *http.Server
 
-	ctx         context.Context
-	cancel      context.CancelFunc
+	ctx    context.Context
+	cancel context.CancelFunc
 
 	// shutdown callback
 	shutdownCallback func()
@@ -103,8 +103,8 @@ func NewServer(bus *bus.MessageBus, cfg *ServerConfig, sessionMgr *session.Manag
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &Server{
-		config: cfg,
-		bus:    bus,
+		config:     cfg,
+		bus:        bus,
 		sessionMgr: sessionMgr,
 		upgrader: websocket.Upgrader{
 			ReadBufferSize:  1024,
@@ -114,12 +114,12 @@ func NewServer(bus *bus.MessageBus, cfg *ServerConfig, sessionMgr *session.Manag
 				return true
 			},
 		},
-		connections:    make(map[string]*Connection),
-		subscriptions:  make(map[string]*SubscriptionInfo),
+		connections:     make(map[string]*Connection),
+		subscriptions:   make(map[string]*SubscriptionInfo),
 		commandHandlers: make(map[string]handler.Handler),
-		logger:         slog.Default().With("component", "ws-server"),
-		ctx:            ctx,
-		cancel:         cancel,
+		logger:          slog.Default().With("component", "ws-server"),
+		ctx:             ctx,
+		cancel:          cancel,
 	}
 }
 
@@ -177,13 +177,19 @@ func (s *Server) Stop() error {
 		s.logSub.Unsubscribe()
 	}
 
-	// 关闭所有连接
+	// 获取连接列表副本，避免在持有锁时调用 Close 导致死锁
 	s.connMu.Lock()
+	conns := make([]*Connection, 0, len(s.connections))
 	for _, conn := range s.connections {
-		conn.Close()
+		conns = append(conns, conn)
 	}
 	s.connections = make(map[string]*Connection)
 	s.connMu.Unlock()
+
+	// 释放锁后再关闭连接
+	for _, conn := range conns {
+		conn.Close()
+	}
 
 	// 关闭 HTTP 服务器
 	if s.httpServer != nil {
@@ -229,7 +235,7 @@ func (s *Server) TriggerShutdown() {
 // GetStatus 获取服务状态
 func (s *Server) GetStatus() map[string]interface{} {
 	return map[string]interface{}{
-		"running":         s.IsRunning(),
+		"running":          s.IsRunning(),
 		"connection_count": s.ConnectionCount(),
 		"url":              s.config.URL(),
 	}
@@ -621,13 +627,13 @@ func (s *Server) HandleTaskAdd(connID string, msgID string, payload *TaskAddPayl
 		Description: payload.Description,
 		Enabled:     payload.Enabled,
 		Schedule:    config.ScheduleConfig{Cron: payload.Schedule.Cron},
-		Target:      config.TargetConfig{
+		Target: config.TargetConfig{
 			Channel:   payload.Target.Channel,
 			AccountID: payload.Target.AccountID,
 			ChatID:    payload.Target.ChatID,
 			AgentName: payload.Target.AgentName,
 		},
-		Content:     config.ContentConfig{Prompt: payload.Content.Prompt},
+		Content: config.ContentConfig{Prompt: payload.Content.Prompt},
 	}
 
 	if err := s.taskScheduler.AddTask(taskConfig); err != nil {
@@ -839,16 +845,16 @@ func convertTaskDetailToPayload(detail scheduler.TaskDetail) *TaskDetailPayload 
 		Description: detail.Config.Description,
 		Enabled:     detail.Config.Enabled,
 		Schedule:    SchedulePayload{Cron: detail.Config.Schedule.Cron},
-		Target:      TargetPayload{
+		Target: TargetPayload{
 			Channel:   detail.Config.Target.Channel,
 			AccountID: detail.Config.Target.AccountID,
 			ChatID:    detail.Config.Target.ChatID,
 			AgentName: detail.Config.Target.AgentName,
 		},
-		Content:     ContentPayload{Prompt: detail.Config.Content.Prompt},
-		NextRun:     detail.NextRun.UnixMilli(),
-		LastRun:     detail.LastRun.UnixMilli(),
-		IsRunning:   detail.IsRunning,
+		Content:   ContentPayload{Prompt: detail.Config.Content.Prompt},
+		NextRun:   detail.NextRun.UnixMilli(),
+		LastRun:   detail.LastRun.UnixMilli(),
+		IsRunning: detail.IsRunning,
 	}
 
 	if detail.State != nil {

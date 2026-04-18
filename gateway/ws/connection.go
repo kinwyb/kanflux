@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"log/slog"
 	"sync"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
@@ -15,9 +14,9 @@ import (
 
 // Connection WebSocket 连接
 type Connection struct {
-	connID    string
-	wsConn    *websocket.Conn
-	server    *Server
+	connID string
+	wsConn *websocket.Conn
+	server *Server
 
 	sendChan chan []byte // 发送队列
 	mu       sync.Mutex  // 写锁
@@ -43,105 +42,53 @@ func NewConnection(wsConn *websocket.Conn, server *Server) *Connection {
 // Handle 处理连接（启动读/写循环）
 func (c *Connection) Handle(ctx context.Context) {
 	// 启动发送协程
-	go c.sendLoop(ctx)
+	go c.sendLoop()
 
 	// 读循环
-	c.readLoop(ctx)
+	c.readLoop()
 }
 
-// readLoop 读循环（使用定期超时检查 ctx）
-func (c *Connection) readLoop(ctx context.Context) {
+// readLoop 读循环
+func (c *Connection) readLoop() {
 	defer c.Close()
 
-	// 设置初始读超时（用于定期检查 ctx）
-	readCheckInterval := 1 * time.Second
-
 	for {
-		// 设置读超时，允许定期检查 ctx 是否被取消
-		c.wsConn.SetReadDeadline(time.Now().Add(readCheckInterval))
-
 		_, message, err := c.wsConn.ReadMessage()
 		if err != nil {
-			// 检查是否是超时错误
-			if netErr, ok := err.(interface{ Timeout() bool }); ok && netErr.Timeout() {
-				// 检查 ctx 是否被取消
-				select {
-				case <-ctx.Done():
-					c.logger.Debug("Context cancelled, closing connection")
-					// 发送 Close 帧通知客户端
-					c.sendCloseFrame()
-					return
-				default:
-					// 继续等待下一次读取
-					continue
-				}
-			}
-
-			// 其他错误（如客户端关闭连接）
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 				c.logger.Debug("Read error", "error", err)
 			}
 			return
 		}
 
-		// 清除读超时（处理消息期间）
-		c.wsConn.SetReadDeadline(time.Time{})
-
 		// 处理消息
-		c.handleMessage(ctx, message)
+		c.handleMessage(message)
 	}
 }
 
 // sendLoop 发送循环
-func (c *Connection) sendLoop(ctx context.Context) {
-	defer c.Close()
-
+func (c *Connection) sendLoop() {
 	for {
-		select {
-		case <-ctx.Done():
-			// 发送 Close 帧通知客户端
-			c.sendCloseFrame()
+		msg, ok := <-c.sendChan
+		if !ok {
+			// sendChan 关闭，退出
 			return
-		case msg, ok := <-c.sendChan:
-			if !ok {
-				return
-			}
+		}
 
-			c.mu.Lock()
-			err := c.wsConn.WriteMessage(websocket.TextMessage, msg)
-			c.mu.Unlock()
+		c.mu.Lock()
+		err := c.wsConn.WriteMessage(websocket.TextMessage, msg)
+		c.mu.Unlock()
 
-			if err != nil {
-				c.logger.Debug("Write error", "error", err)
-				return
-			}
+		if err != nil {
+			c.logger.Debug("Write error", "error", err)
+			c.Close()
+			return
 		}
 	}
 }
 
-// sendCloseFrame 发送 WebSocket Close 帧
-func (c *Connection) sendCloseFrame() {
-	c.closeMu.Lock()
-	if c.closed {
-		c.closeMu.Unlock()
-		return
-	}
-	c.closeMu.Unlock()
-
-	c.mu.Lock()
-	// 发送 Close 帧（状态码 1001 = Going Away）
-	err := c.wsConn.WriteMessage(websocket.CloseMessage,
-		websocket.FormatCloseMessage(websocket.CloseGoingAway, "server shutdown"))
-	c.mu.Unlock()
-
-	if err != nil {
-		c.logger.Debug("Failed to send close frame", "error", err)
-	}
-}
-
 // handleMessage 处理接收的消息
-// 将消息分发到 handler 包处理
-func (c *Connection) handleMessage(ctx context.Context, rawMsg []byte) {
+func (c *Connection) handleMessage(rawMsg []byte) {
 	wsMsg, err := types.ParseWSMessage(rawMsg)
 	if err != nil {
 		c.logger.Error("Parse message error", "error", err)
@@ -150,8 +97,7 @@ func (c *Connection) handleMessage(ctx context.Context, rawMsg []byte) {
 	}
 
 	// 使用 handler registry 处理消息
-	if err := handler.Handle(ctx, c, wsMsg); err != nil {
-		// 如果是未知消息类型，发送错误响应
+	if err := handler.Handle(c.server.ctx, c, wsMsg); err != nil {
 		if _, ok := err.(handler.ErrNoHandler); ok {
 			handler.SendError(c, "Unknown message type: "+string(wsMsg.Type))
 		}
@@ -170,7 +116,6 @@ func (c *Connection) Send(msg []byte) {
 	select {
 	case c.sendChan <- msg:
 	default:
-		// channel 满，丢弃消息
 		c.logger.Warn("Send channel full, message dropped")
 	}
 }
