@@ -40,7 +40,7 @@ type Manager struct {
 	defaultAgent     *Agent            // 默认 Agent
 	bus              *bus.MessageBus
 	sessionMgr       *session.Manager
-	scheduler        scheduler.Accessor // 定时任务调度器
+	scheduler        scheduler.Accessor          // 定时任务调度器
 	responseMgr      *bus.RequestResponseManager // 请求响应管理器（用于 SendFileTool）
 	mu               sync.RWMutex
 	resumeConverters map[reflect.Type]ResumeParamConverter // 按恢复参数类型注册转换器
@@ -214,11 +214,11 @@ func (m *Manager) RegisterAgentsFromConfig(ctx context.Context, cfg *config.Conf
 			Memoria:        memInstance,
 			SessionManager: m.sessionMgr,
 			// Browser 工具配置
-			BrowserEnabled:    resolved.BrowserEnabled,
-			BrowserHeadless:   resolved.BrowserHeadless,
-			BrowserTimeout:    resolved.BrowserTimeout,
-			BrowserRelayURL:   resolved.BrowserRelayURL,
-			BrowserRelayMode:  resolved.BrowserRelayMode,
+			BrowserEnabled:   resolved.BrowserEnabled,
+			BrowserHeadless:  resolved.BrowserHeadless,
+			BrowserTimeout:   resolved.BrowserTimeout,
+			BrowserRelayURL:  resolved.BrowserRelayURL,
+			BrowserRelayMode: resolved.BrowserRelayMode,
 			// Web 工具配置
 			WebEnabled:      resolved.WebEnabled,
 			WebSearchAPIKey: resolved.WebSearchAPIKey,
@@ -629,7 +629,7 @@ func (m *Manager) RouteInbound(ctx context.Context, msg *bus.InboundMessage) err
 
 			// 如果有错误，发布错误事件
 			if result.Error != nil {
-				m.publishChatEvent(ctx, msg.Channel, msg.ChatID, "command", bus.ChatEventStateError, 0, nil, msg.Metadata)
+				m.publishChatEvent(ctx, msg.Channel, msg.ChatID, "command", bus.ChatEventStateError, 0, msg.ID, nil, msg.Metadata)
 			}
 
 			// 如果需要回复，发布到 outbound
@@ -797,7 +797,7 @@ func (m *Manager) handleInboundMessage(ctx context.Context, msg *bus.InboundMess
 		}
 
 		// 发布错误事件（状态通知）
-		m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateError, eventSeq, nil, msg.Metadata)
+		m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateError, eventSeq, msg.ID, nil, msg.Metadata)
 		// 同时发布 OutboundMessage，确保调用方能收到响应不会卡住
 		outbound := &bus.OutboundMessage{
 			Channel:   msg.Channel,
@@ -875,7 +875,7 @@ func (m *Manager) handleAgentEvent(ctx context.Context, msg *bus.InboundMessage,
 	switch event.Type {
 	case EventMessageStart:
 		// 发布 start 事件（状态通知）
-		m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateStart, seq, nil, msg.Metadata)
+		m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateStart, seq, msg.ID, nil, msg.Metadata)
 
 	case EventMessageUpdate:
 		if event.Message != nil {
@@ -889,7 +889,7 @@ func (m *Manager) handleAgentEvent(ctx context.Context, msg *bus.InboundMessage,
 			m.publishFinalOutbound(ctx, msg, agentName, event, seq)
 		}
 		// 发布 complete 事件（状态通知）
-		m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateComplete, seq, nil, msg.Metadata)
+		m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateComplete, seq, msg.ID, nil, msg.Metadata)
 
 	case EventToolStart:
 		if event.Message != nil && len(event.Message.ToolCalls) > 0 {
@@ -900,7 +900,7 @@ func (m *Manager) handleAgentEvent(ctx context.Context, msg *bus.InboundMessage,
 				Arguments: event.Message.ToolCalls[0].Function.Arguments,
 				IsStart:   true,
 			}
-			m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateTool, seq, toolInfo, msg.Metadata)
+			m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateTool, seq, msg.ID, toolInfo, msg.Metadata)
 		}
 
 	case EventToolEnd:
@@ -910,7 +910,7 @@ func (m *Manager) handleAgentEvent(ctx context.Context, msg *bus.InboundMessage,
 				Result:  event.Message.Content,
 				IsStart: false,
 			}
-			m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateTool, seq, toolInfo, msg.Metadata)
+			m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateTool, seq, msg.ID, toolInfo, msg.Metadata)
 		}
 
 	case EventInterrupt:
@@ -930,12 +930,12 @@ func (m *Manager) handleAgentEvent(ctx context.Context, msg *bus.InboundMessage,
 		if event.Message != nil && event.Message.Content != "" {
 			mergedMeta["interrupt_content"] = event.Message.Content
 		}
-		m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateInterrupt, seq, nil, mergedMeta)
+		m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateInterrupt, seq, msg.ID, nil, mergedMeta)
 	}
 }
 
 // publishChatEvent 发布聊天事件到总线
-func (m *Manager) publishChatEvent(ctx context.Context, channel, chatID, agentName, state string, seq int, toolInfo *bus.ToolEventInfo, metadata ...interface{}) {
+func (m *Manager) publishChatEvent(ctx context.Context, channel, chatID, agentName, state string, seq int, replyTo string, toolInfo *bus.ToolEventInfo, metadata ...interface{}) {
 	var meta interface{}
 	if len(metadata) > 0 {
 		meta = metadata[0]
@@ -943,6 +943,7 @@ func (m *Manager) publishChatEvent(ctx context.Context, channel, chatID, agentNa
 	event := &bus.ChatEvent{
 		Channel:   channel,
 		ChatID:    chatID,
+		ReplyTo:   replyTo,
 		AgentName: agentName,
 		State:     state,
 		Seq:       seq,

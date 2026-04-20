@@ -286,10 +286,11 @@ body {
 
 /* Message Bubble Styles */
 .message-bubble {
-  max-width: 80%;
   padding: 12px 16px;
   border-radius: 16px;
   animation: slide-up 0.3s ease-out;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
 }
 
 .message-user {

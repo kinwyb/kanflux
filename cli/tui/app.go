@@ -393,7 +393,7 @@ func convertPayloadToChatEvent(p *ws.ChatEventPayload) *bus.ChatEvent {
 		ID:        p.ID,
 		Channel:   p.Channel,
 		ChatID:    p.ChatID,
-		RunID:     p.RunID,
+		ReplyTo:   p.ReplyTo,
 		Seq:       p.Seq,
 		AgentName: p.AgentName,
 		State:     p.State,

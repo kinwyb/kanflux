@@ -10,11 +10,15 @@ export default function ChatPanel() {
   const [inputValue, setInputValue] = useState('')
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
   const [isAgentThinking, setIsAgentThinking] = useState(false)
-  const [_currentStreamingId, setCurrentStreamingId] = useState<string | null>(null)
   const [runningToolCalls, setRunningToolCalls] = useState<Map<string, ToolCallDisplay>>(new Map())
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set())
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+
+  // Track processed events to avoid re-processing
+  const processedEventIds = useRef<Set<string>>(new Set())
+  // Track current active reply_to (set by 'start' event, equals inbound message ID)
+  const currentReplyTo = useRef<string | null>(null)
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -22,22 +26,24 @@ export default function ChatPanel() {
 
   useEffect(() => {
     scrollToBottom()
-  }, [chatMessages, messages])
+  }, [chatMessages])
 
   // Process WebSocket messages into chat messages
   useEffect(() => {
-    // Group messages by chat_id and process streaming content
-    const chatId = 'web-chat' // Our chat ID
+    const chatId = 'web-chat'
 
-    const relevantMessages = messages.filter(m => m.chat_id === chatId)
-    const relevantEvents = events.filter(e => e.chat_id === chatId)
+    // Process events (only new ones)
+    for (const event of events) {
+      if (event.chat_id !== chatId) continue
+      if (processedEventIds.current.has(event.id)) continue
+      processedEventIds.current.add(event.id)
 
-    // Handle events
-    for (const event of relevantEvents) {
       if (event.state === 'start') {
+        // New conversation started - reply_to is the inbound message ID
         setIsAgentThinking(true)
+        currentReplyTo.current = event.reply_to
         const newMsg: ChatMessage = {
-          id: event.run_id,
+          id: event.reply_to, // use reply_to as message ID
           role: 'assistant',
           content: '',
           timestamp: new Date(),
@@ -45,13 +51,11 @@ export default function ChatPanel() {
           toolCallDisplays: [],
         }
         setChatMessages(prev => [...prev, newMsg])
-        setCurrentStreamingId(event.run_id)
       } else if (event.state === 'tool' && event.tool_info) {
         const toolId = event.tool_info.id
         const toolName = event.tool_info.name
 
         if (event.tool_info.is_start) {
-          // Tool call started
           const newTool: ToolCallDisplay = {
             id: toolId,
             name: toolName,
@@ -61,70 +65,59 @@ export default function ChatPanel() {
           }
           setRunningToolCalls(prev => new Map(prev).set(toolId, newTool))
         } else {
-          // Tool call completed
-          const completedTool = runningToolCalls.get(toolId)
-          if (completedTool) {
-            const updatedTool: ToolCallDisplay = {
-              ...completedTool,
-              result: event.tool_info.result || '',
-              status: event.tool_info.result && !event.tool_info.result.startsWith('Error') ? 'completed' : 'error',
-              endTime: new Date(),
-            }
+          const completedTool: ToolCallDisplay = {
+            id: toolId,
+            name: toolName,
+            arguments: event.tool_info.arguments || '',
+            result: event.tool_info.result || '',
+            status: event.tool_info.result && !event.tool_info.result.startsWith('Error') ? 'completed' : 'error',
+            startTime: new Date(),
+            endTime: new Date(),
+          }
 
-            // Remove from running and add to message's tool displays
-            setRunningToolCalls(prev => {
-              const newMap = new Map(prev)
-              newMap.delete(toolId)
-              return newMap
-            })
+          setRunningToolCalls(prev => {
+            const newMap = new Map(prev)
+            newMap.delete(toolId)
+            return newMap
+          })
 
-            // Add to the current streaming message
-            setChatMessages(prev => prev.map(msg => {
-              if (msg.isStreaming) {
-                const displays = msg.toolCallDisplays || []
-                return { ...msg, toolCallDisplays: [...displays, updatedTool] }
-              }
-              return msg
-            }))
+          // Add tool result to the message with reply_to (same as inbound message ID)
+          const replyTo = currentReplyTo.current
+          if (replyTo) {
+            setChatMessages(prev => prev.map(msg =>
+              msg.id === replyTo
+                ? { ...msg, toolCallDisplays: [...(msg.toolCallDisplays || []), completedTool] }
+                : msg
+            ))
           }
         }
       } else if (event.state === 'complete' || event.state === 'error') {
         setIsAgentThinking(false)
-        setCurrentStreamingId(null)
-        // Mark message as complete
+        const replyTo = event.reply_to
+        currentReplyTo.current = null
+
         setChatMessages(prev => prev.map(msg =>
-          msg.id === event.run_id
+          msg.id === replyTo
             ? { ...msg, isStreaming: false }
             : msg
         ))
-        // Clear running tool calls
         setRunningToolCalls(new Map())
       }
     }
 
-    // Handle content messages
-    for (const msg of relevantMessages) {
-      if (msg.is_streaming && !msg.is_final) {
-        // Update streaming content
-        setChatMessages(prev => prev.map(chatMsg => {
-          if (chatMsg.isStreaming) {
-            return {
-              ...chatMsg,
-              content: msg.content, // For accumulate mode, this is the full content
-              reasoning: msg.reasoning_content || chatMsg.reasoning,
-            }
-          }
-          return chatMsg
-        }))
-      } else if (msg.is_final) {
-        // Final message
+    // Process outbound messages - use reply_to to match with the correct message
+    // reply_to equals the inbound message ID, which is the same as the message ID from start event
+    for (const msg of messages) {
+      if (msg.chat_id !== chatId) continue
+      if (!msg.reply_to) continue // Skip messages without reply_to
+
+      // Update the message that matches reply_to (which is the inbound message ID)
+      if (msg.is_streaming) {
         setChatMessages(prev => prev.map(chatMsg =>
-          chatMsg.isStreaming
-            ? { ...chatMsg, content: msg.content, isStreaming: false }
+          chatMsg.id === msg.reply_to && chatMsg.isStreaming
+            ? { ...chatMsg, content: msg.content, reasoning: msg.reasoning_content || chatMsg.reasoning }
             : chatMsg
         ))
-        setIsAgentThinking(false)
-        setCurrentStreamingId(null)
       }
     }
   }, [messages, events])
@@ -380,7 +373,7 @@ export default function ChatPanel() {
                 {/* Message Bubble */}
                 {msg.content && (
                   <div className={`message-bubble ${msg.role === 'user' ? 'message-user' : 'message-agent'}`}>
-                    <p className="font-body whitespace-pre-wrap">{msg.content}</p>
+                    <p className="font-body break-words">{msg.content}</p>
                   </div>
                 )}
 

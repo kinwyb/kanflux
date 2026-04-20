@@ -409,7 +409,7 @@ func (s *Server) broadcastChatEvent(event *bus.ChatEvent) {
 		ID:        event.ID,
 		Channel:   event.Channel,
 		ChatID:    event.ChatID,
-		RunID:     event.RunID,
+		ReplyTo:   event.ReplyTo,
 		Seq:       event.Seq,
 		AgentName: event.AgentName,
 		State:     event.State,
@@ -508,15 +508,16 @@ func (s *Server) matchSubscription(connID, channel, chatID string) bool {
 func (s *Server) PublishInbound(ctx context.Context, msg *InboundMessage) error {
 	// 转换为 bus.InboundMessage
 	busMsg := &bus.InboundMessage{
-		ID:        msg.ID,
-		Channel:   msg.Channel,
-		AccountID: msg.AccountID,
-		SenderID:  msg.SenderID,
-		ChatID:    msg.ChatID,
-		Content:   msg.Content,
-		Media:     convertPayloadToBusMedia(msg.Media),
-		Metadata:  msg.Metadata,
-		Timestamp: msg.Timestamp,
+		ID:            msg.ID,
+		Channel:       msg.Channel,
+		AccountID:     msg.AccountID,
+		SenderID:      msg.SenderID,
+		ChatID:        msg.ChatID,
+		Content:       msg.Content,
+		StreamingMode: msg.StreamingMode,
+		Media:         convertPayloadToBusMedia(msg.Media),
+		Metadata:      msg.Metadata,
+		Timestamp:     msg.Timestamp,
 	}
 	return s.bus.PublishInbound(ctx, busMsg)
 }

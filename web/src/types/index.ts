@@ -22,6 +22,7 @@ export interface OutboundMessage {
   is_thinking: boolean
   is_final: boolean
   chunk_index: number
+  reply_to?: string // 关联的入站消息ID，与 ChatEvent.run_id 一致
   error?: string
   metadata?: Record<string, unknown>
   timestamp: Date
@@ -31,7 +32,7 @@ export interface ChatEvent {
   id: string
   channel: string
   chat_id: string
-  run_id: string
+  reply_to: string // 关联的入站消息ID，与 OutboundMessage.reply_to 一致
   seq: number
   agent_name: string
   state: 'start' | 'tool' | 'complete' | 'error' | 'interrupt'

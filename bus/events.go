@@ -100,7 +100,7 @@ type ChatEvent struct {
 	ID          string          `json:"id"`
 	Channel     string          `json:"channel"`
 	ChatID      string          `json:"chat_id"`
-	RunID       string          `json:"run_id"`
+	ReplyTo     string          `json:"reply_to"`    // 关联的入站消息ID，与 OutboundMessage.ReplyTo 一致
 	Seq         int             `json:"seq"`
 	AgentName   string          `json:"agent_name"` // Agent 名称
 	State       string          `json:"state"`      // 状态类型：start/tool/complete/error/interrupt

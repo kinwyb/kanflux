@@ -53,14 +53,15 @@ type WSMessage struct {
 
 // InboundPayload 入站消息 payload
 type InboundPayload struct {
-	ID        string                 `json:"id"`
-	Channel   string                 `json:"channel"`
-	AccountID string                 `json:"account_id"`
-	SenderID  string                 `json:"sender_id"`
-	ChatID    string                 `json:"chat_id"`
-	Content   string                 `json:"content"`
-	Media     []MediaPayload         `json:"media,omitempty"`
-	Metadata  map[string]interface{} `json:"metadata,omitempty"`
+	ID            string                 `json:"id"`
+	Channel       string                 `json:"channel"`
+	AccountID     string                 `json:"account_id"`
+	SenderID      string                 `json:"sender_id"`
+	ChatID        string                 `json:"chat_id"`
+	Content       string                 `json:"content"`
+	StreamingMode string                 `json:"streaming_mode,omitempty"` // 流式输出模式：delta/accumulate
+	Media         []MediaPayload         `json:"media,omitempty"`
+	Metadata      map[string]interface{} `json:"metadata,omitempty"`
 }
 
 // OutboundPayload 出站消息 payload
@@ -85,7 +86,7 @@ type ChatEventPayload struct {
 	ID        string                 `json:"id"`
 	Channel   string                 `json:"channel"`
 	ChatID    string                 `json:"chat_id"`
-	RunID     string                 `json:"run_id,omitempty"`
+	ReplyTo   string                 `json:"reply_to,omitempty"` // 关联的入站消息ID，与 OutboundMessage.ReplyTo 一致
 	Seq       int                    `json:"seq"`
 	AgentName string                 `json:"agent_name"`
 	State     string                 `json:"state"` // start, tool, complete, error, interrupt
@@ -390,15 +391,16 @@ func ParseWSMessage(data []byte) (*WSMessage, error) {
 
 // InboundMessage 入站消息（本地定义，避免循环导入 bus）
 type InboundMessage struct {
-	ID        string
-	Channel   string
-	AccountID string
-	SenderID  string
-	ChatID    string
-	Content   string
-	Media     []Media
-	Metadata  map[string]interface{}
-	Timestamp time.Time
+	ID            string
+	Channel       string
+	AccountID     string
+	SenderID      string
+	ChatID        string
+	Content       string
+	StreamingMode string // 流式输出模式：delta/accumulate
+	Media         []Media
+	Metadata      map[string]interface{}
+	Timestamp     time.Time
 }
 
 // OutboundMessage 出站消息（本地定义，避免循环导入 bus）
@@ -424,7 +426,7 @@ type ChatEvent struct {
 	ID        string
 	Channel   string
 	ChatID    string
-	RunID     string
+	ReplyTo   string // 关联的入站消息ID，与 OutboundMessage.ReplyTo 一致
 	Seq       int
 	AgentName string
 	State     string
@@ -464,14 +466,15 @@ type Media struct {
 // ConvertInboundToPayload 将 InboundMessage 转换为 InboundPayload
 func ConvertInboundToPayload(msg *InboundMessage) *InboundPayload {
 	return &InboundPayload{
-		ID:        msg.ID,
-		Channel:   msg.Channel,
-		AccountID: msg.AccountID,
-		SenderID:  msg.SenderID,
-		ChatID:    msg.ChatID,
-		Content:   msg.Content,
-		Media:     convertMediaToPayload(msg.Media),
-		Metadata:  msg.Metadata,
+		ID:            msg.ID,
+		Channel:       msg.Channel,
+		AccountID:     msg.AccountID,
+		SenderID:      msg.SenderID,
+		ChatID:        msg.ChatID,
+		Content:       msg.Content,
+		StreamingMode: msg.StreamingMode,
+		Media:         convertMediaToPayload(msg.Media),
+		Metadata:      msg.Metadata,
 	}
 }
 
@@ -507,7 +510,7 @@ func ConvertChatEventToPayload(event *ChatEvent) *ChatEventPayload {
 		ID:        event.ID,
 		Channel:   event.Channel,
 		ChatID:    event.ChatID,
-		RunID:     event.RunID,
+		ReplyTo:   event.ReplyTo,
 		Seq:       event.Seq,
 		AgentName: event.AgentName,
 		State:     event.State,
@@ -545,15 +548,16 @@ func ConvertLogEventToPayload(event *LogEvent) *LogEventPayload {
 // ConvertPayloadToInbound 将 InboundPayload 转换为 InboundMessage
 func ConvertPayloadToInbound(p *InboundPayload) *InboundMessage {
 	return &InboundMessage{
-		ID:        p.ID,
-		Channel:   p.Channel,
-		AccountID: p.AccountID,
-		SenderID:  p.SenderID,
-		ChatID:    p.ChatID,
-		Content:   p.Content,
-		Media:     convertPayloadToMedia(p.Media),
-		Metadata:  p.Metadata,
-		Timestamp: time.Now(),
+		ID:            p.ID,
+		Channel:       p.Channel,
+		AccountID:     p.AccountID,
+		SenderID:      p.SenderID,
+		ChatID:        p.ChatID,
+		Content:       p.Content,
+		StreamingMode: p.StreamingMode,
+		Media:         convertPayloadToMedia(p.Media),
+		Metadata:      p.Metadata,
+		Timestamp:     time.Now(),
 	}
 }
 
@@ -583,7 +587,7 @@ func ConvertPayloadToChatEvent(p *ChatEventPayload) *ChatEvent {
 		ID:        p.ID,
 		Channel:   p.Channel,
 		ChatID:    p.ChatID,
-		RunID:     p.RunID,
+		ReplyTo:   p.ReplyTo,
 		Seq:       p.Seq,
 		AgentName: p.AgentName,
 		State:     p.State,
