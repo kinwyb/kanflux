@@ -91,18 +91,7 @@ func (g *Gateway) Start(ctx context.Context) error {
 		slog.Info("定时任务调度器创建完成", "tasks", g.taskScheduler.GetTaskCount())
 	}
 
-	// 6. 创建 AgentManager 并注册 Agents
-	g.agentMgr = agent.NewManager(g.msgBus, g.sessionMgr)
-	// 设置 Scheduler（如果存在）
-	if g.taskScheduler != nil {
-		g.agentMgr.SetScheduler(g.taskScheduler)
-	}
-	if err := g.agentMgr.RegisterAgentsFromConfig(ctx, g.cfg, nil); err != nil {
-		return fmt.Errorf("注册 Agents 失败: %w", err)
-	}
-	slog.Info("Agents 注册完成", "count", len(g.agentMgr.ListAgents()))
-
-	// 7. 创建 ChannelManager 并初始化 Channels
+	// 6. 创建 ChannelManager 并初始化 Channels（先创建以获取 ResponseMgr）
 	g.channelMgr = channel.NewManager(g.msgBus)
 	// 注册响应处理器（响应消息不广播，直接交给请求方）
 	g.msgBus.SetResponseHandler(g.channelMgr.GetResponseMgr().HandleResponse)
@@ -113,12 +102,18 @@ func (g *Gateway) Start(ctx context.Context) error {
 	}
 	slog.Info("Channels 初始化完成", "count", g.channelMgr.ChannelCount())
 
-	// 8. 为所有 Agent 注册 SendFile 工具（需要 responseMgr）
-	if err := g.agentMgr.RegisterSendFileTool(g.channelMgr.GetResponseMgr()); err != nil {
-		slog.Warn("注册 SendFile 工具失败", "error", err)
-	} else {
-		slog.Info("SendFile 工具已注册到所有 Agent")
+	// 7. 创建 AgentManager 并注册 Agents
+	g.agentMgr = agent.NewManager(g.msgBus, g.sessionMgr)
+	// 设置 Scheduler（如果存在）
+	if g.taskScheduler != nil {
+		g.agentMgr.SetScheduler(g.taskScheduler)
 	}
+	// 设置 Bus 和 ResponseMgr（用于 SendFile 工具）
+	g.agentMgr.SetBusAndResponseMgr(g.msgBus, g.channelMgr.GetResponseMgr())
+	if err := g.agentMgr.RegisterAgentsFromConfig(ctx, g.cfg, nil); err != nil {
+		return fmt.Errorf("注册 Agents 失败: %w", err)
+	}
+	slog.Info("Agents 注册完成", "count", len(g.agentMgr.ListAgents()))
 
 	// 8. 启动 AgentManager
 	if err := g.agentMgr.Start(ctx); err != nil {

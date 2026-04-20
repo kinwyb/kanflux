@@ -227,6 +227,9 @@ func (m *Manager) RegisterAgentsFromConfig(ctx context.Context, cfg *config.Conf
 			// Scheduler 工具配置
 			SchedulerEnabled: m.scheduler != nil,
 			Scheduler:        m.scheduler,
+			// Bus 配置（用于 SendFileTool 等需要 bus 的工具）
+			Bus:         m.bus,
+			ResponseMgr: m.responseMgr,
 		}
 
 		// 创建 Agent
@@ -342,25 +345,6 @@ func (m *Manager) SetBusAndResponseMgr(msgBus *bus.MessageBus, responseMgr *bus.
 	m.bus = msgBus
 	// 存储 responseMgr 以便后续注册工具
 	m.responseMgr = responseMgr
-}
-
-// RegisterSendFileTool 为所有已注册的 Agent 注册 SendFile 工具
-func (m *Manager) RegisterSendFileTool(responseMgr *bus.RequestResponseManager) error {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	for name, agent := range m.agents {
-		if agent.cfg.ToolRegister == nil {
-			continue
-		}
-		sendFileTool := tools.NewSendFileTool(m.bus, responseMgr)
-		if err := agent.cfg.ToolRegister.Register(sendFileTool, true); err != nil {
-			m.log(context.Background(), bus.LogLevelWarn, "manager", fmt.Sprintf("Failed to register send_file tool for agent '%s': %v", name, err))
-		} else {
-			m.log(context.Background(), bus.LogLevelInfo, "manager", fmt.Sprintf("SendFile tool registered for agent '%s'", name))
-		}
-	}
-	return nil
 }
 
 // RegisterResumeConverter 注册恢复参数转换器
