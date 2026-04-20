@@ -305,6 +305,84 @@ body {
   color: var(--ocean-deep);
 }
 
+/* Markdown Content Styles */
+.markdown-content {
+  line-height: 1.6;
+}
+
+.markdown-content p {
+  margin: 0 0 0.5em 0;
+}
+
+.markdown-content p:last-child {
+  margin-bottom: 0;
+}
+
+.markdown-content code {
+  font-family: 'JetBrains Mono', monospace;
+  background: rgba(0, 206, 209, 0.1);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.9em;
+}
+
+.markdown-content pre {
+  font-family: 'JetBrains Mono', monospace;
+  background: rgba(26, 58, 92, 0.08);
+  padding: 12px;
+  border-radius: 8px;
+  overflow-x: auto;
+  margin: 0.5em 0;
+}
+
+.markdown-content pre code {
+  background: transparent;
+  padding: 0;
+}
+
+.markdown-content ul, .markdown-content ol {
+  margin: 0.5em 0;
+  padding-left: 1.5em;
+}
+
+.markdown-content li {
+  margin: 0.25em 0;
+}
+
+.markdown-content strong {
+  font-weight: 600;
+}
+
+.markdown-content a {
+  color: var(--cyan-electric);
+  text-decoration: underline;
+}
+
+.markdown-content blockquote {
+  border-left: 3px solid var(--cyan-electric);
+  padding-left: 1em;
+  margin: 0.5em 0;
+  color: rgba(26, 58, 92, 0.7);
+}
+
+.markdown-content h1, .markdown-content h2, .markdown-content h3 {
+  font-family: 'Syne', sans-serif;
+  margin: 0.5em 0 0.25em 0;
+}
+
+/* User message markdown styles (lighter colors for white text) */
+.message-user .markdown-content code {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.message-user .markdown-content pre {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.message-user .markdown-content a {
+  color: white;
+}
+
 /* Navigation Tab */
 .nav-tab {
   padding: 10px 16px;

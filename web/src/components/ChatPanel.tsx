@@ -4,6 +4,8 @@ import { Send, Bot, User, Sparkles, Loader2, Wrench, CheckCircle2, XCircle, Chev
 import { useWebSocketContext } from '../contexts/WebSocketContext'
 import type { ChatMessage, InboundMessage, ToolCallDisplay } from '../types'
 import { format } from 'date-fns'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 
 export default function ChatPanel() {
   const { connectionState, messages, events, sendMessage } = useWebSocketContext()
@@ -371,11 +373,22 @@ export default function ChatPanel() {
                 )}
 
                 {/* Message Bubble */}
-                {msg.content && (
+                {msg.content ? (
                   <div className={`message-bubble ${msg.role === 'user' ? 'message-user' : 'message-agent'}`}>
-                    <p className="font-body break-words">{msg.content}</p>
+                    <div className="markdown-content font-body">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                        {msg.content}
+                      </ReactMarkdown>
+                    </div>
                   </div>
-                )}
+                ) : msg.role === 'assistant' && msg.isStreaming ? (
+                  <div className="message-bubble message-agent">
+                    <div className="flex items-center gap-2">
+                      <Loader2 size={14} className="text-cyan-electric animate-spin" />
+                      <span className="text-sm text-ocean-depth/60">正在处理...</span>
+                    </div>
+                  </div>
+                ) : null}
 
                 {/* Timestamp */}
                 <span className={`text-xs text-ocean-depth/40 font-body ${msg.role === 'user' ? 'text-right' : ''}`}>
