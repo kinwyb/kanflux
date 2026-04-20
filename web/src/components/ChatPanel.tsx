@@ -2,13 +2,27 @@ import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Send, Bot, User, Sparkles, Loader2, Wrench, CheckCircle2, XCircle, ChevronDown, ChevronRight } from 'lucide-react'
 import { useWebSocketContext } from '../contexts/WebSocketContext'
-import type { ChatMessage, InboundMessage, ToolCallDisplay } from '../types'
+import type { ChatMessage, InboundMessage, ToolCallDisplay, SessionMessage } from '../types'
 import { format } from 'date-fns'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
+// Session key for web chat
+const WEB_CHAT_SESSION_KEY = 'web::web-chat'
+
+// Convert SessionMessage to ChatMessage
+function sessionToChatMessage(msg: SessionMessage, idx: number): ChatMessage {
+  return {
+    id: `history-${idx}`,
+    role: msg.role === 'tool' || msg.role === 'system' ? 'assistant' : msg.role,
+    content: msg.content,
+    timestamp: msg.timestamp || new Date(),
+    toolCalls: msg.tool_calls,
+  }
+}
+
 export default function ChatPanel() {
-  const { connectionState, messages, events, sendMessage } = useWebSocketContext()
+  const { connectionState, messages, events, sendMessage, fetchSession } = useWebSocketContext()
   const [inputValue, setInputValue] = useState('')
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
   const [isAgentThinking, setIsAgentThinking] = useState(false)
@@ -21,6 +35,8 @@ export default function ChatPanel() {
   const processedEventIds = useRef<Set<string>>(new Set())
   // Track current active reply_to (set by 'start' event, equals inbound message ID)
   const currentReplyTo = useRef<string | null>(null)
+  // Track if history was loaded
+  const historyLoadedRef = useRef(false)
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -29,6 +45,21 @@ export default function ChatPanel() {
   useEffect(() => {
     scrollToBottom()
   }, [chatMessages])
+
+  // Load history session when connected
+  useEffect(() => {
+    if (connectionState === 'connected' && !historyLoadedRef.current) {
+      historyLoadedRef.current = true
+      fetchSession(WEB_CHAT_SESSION_KEY).then(session => {
+        if (session && session.messages.length > 0) {
+          const historyMessages = session.messages
+            .filter(msg => msg.role === 'user' || msg.role === 'assistant')
+            .map((msg, idx) => sessionToChatMessage(msg, idx))
+          setChatMessages(historyMessages)
+        }
+      })
+    }
+  }, [connectionState, fetchSession])
 
   // Process WebSocket messages into chat messages
   useEffect(() => {
