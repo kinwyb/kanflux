@@ -45,7 +45,7 @@ func NewAgentCmd() *cobra.Command {
 			ctx := context.Background()
 
 			// 加载配置文件
-			cfg, err := loadConfig(configPath)
+			cfg, _, err := loadConfig(configPath)
 			if err != nil {
 				return fmt.Errorf("加载配置失败: %w", err)
 			}

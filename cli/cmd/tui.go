@@ -2,8 +2,10 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/kinwyb/kanflux/cli/tui"
 	"github.com/kinwyb/kanflux/config"
@@ -35,7 +37,7 @@ func NewTUICmd() *cobra.Command {
 			var cfg *tui.Config
 
 			// 尝试从配置文件加载
-			loadedConfig, err := loadConfig(configPath)
+			loadedConfig, _, err := loadConfig(configPath)
 			if err == nil && loadedConfig != nil && len(loadedConfig.Agents) > 0 {
 				// 有配置文件，使用多 agent 模式
 				cfg = &tui.Config{
@@ -112,9 +114,33 @@ func NewTUICmd() *cobra.Command {
 }
 
 // loadConfig 加载配置文件
-func loadConfig(configPath string) (*config.Config, error) {
+func loadConfig(configPath string) (*config.Config, string, error) {
 	if configPath != "" {
-		return config.Load(configPath)
+		cfg, err := config.Load(configPath)
+		return cfg, configPath, err
 	}
-	return config.LoadDefault()
+	// 尝试默认路径
+	paths := []string{
+		"kanflux.json",
+		filepath.Join(homeDir(), ".kanflux", "config.json"),
+	}
+	for _, path := range paths {
+		if _, err := os.Stat(path); err == nil {
+			cfg, err := config.Load(path)
+			return cfg, path, err
+		}
+	}
+	return nil, "", errors.New("no config file found in default paths")
+}
+
+// homeDir 获取用户主目录
+func homeDir() string {
+	if home := os.Getenv("HOME"); home != "" {
+		return home
+	}
+	// Windows
+	if home := os.Getenv("USERPROFILE"); home != "" {
+		return home
+	}
+	return ""
 }

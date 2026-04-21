@@ -53,7 +53,7 @@ func NewGatewayStartCmd() *cobra.Command {
 - 支持 SIGINT/SIGTERM 信号优雅关闭`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// 1. 加载配置
-			cfg, err := loadConfig(configPath)
+			cfg, actualConfigPath, err := loadConfig(configPath)
 			if err != nil {
 				return fmt.Errorf("加载配置失败: %w", err)
 			}
@@ -77,7 +77,7 @@ func NewGatewayStartCmd() *cobra.Command {
 			}
 
 			// 4. 创建 Gateway 实例
-			gw, err := gateway.New(cfg, configPath, workspace)
+			gw, err := gateway.New(cfg, actualConfigPath, workspace)
 			if err != nil {
 				return err
 			}
@@ -123,7 +123,7 @@ func NewGatewayStopCmd() *cobra.Command {
 		Long:  `通过 WebSocket 发送关闭命令，停止运行中的 Gateway 服务`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// 加载配置获取 WebSocket 地址
-			cfg, err := loadConfig(configPath)
+			cfg, _, err := loadConfig(configPath)
 			if err != nil {
 				slog.Warn("加载配置失败，使用默认 WebSocket 地址", "error", err)
 			}
@@ -205,7 +205,7 @@ func NewGatewayStatusCmd() *cobra.Command {
 		Long:  `检查当前系统是否有 Gateway 服务在运行`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// 加载配置获取 WebSocket 地址
-			cfg, err := loadConfig(configPath)
+			cfg, _, err := loadConfig(configPath)
 			if err != nil {
 				slog.Warn("加载配置失败，使用默认 WebSocket 地址", "error", err)
 			}

@@ -54,7 +54,7 @@ func NewMemoryProcessCmd() *cobra.Command {
 			filePath := args[0]
 
 			// 加载配置
-			cfg, err := loadConfig(configPath)
+			cfg, _, err := loadConfig(configPath)
 			if err != nil {
 				return fmt.Errorf("加载配置失败: %w", err)
 			}
@@ -196,7 +196,7 @@ func NewMemoryShowCmd() *cobra.Command {
 		Long:  `显示已存储的记忆内容。`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// 加载配置
-			cfg, err := loadConfig(configPath)
+			cfg, _, err := loadConfig(configPath)
 			if err != nil {
 				return fmt.Errorf("加载配置失败: %w", err)
 			}
@@ -303,7 +303,7 @@ func NewMemoryServeCmd() *cobra.Command {
 			defer cancel()
 
 			// 加载配置
-			cfg, err := loadConfig(configPath)
+			cfg, _, err := loadConfig(configPath)
 			if err != nil {
 				return fmt.Errorf("加载配置失败: %w", err)
 			}
@@ -514,7 +514,7 @@ func NewMemoryInitCmd() *cobra.Command {
 			ctx := context.Background()
 
 			// 加载配置
-			cfg, err := loadConfig(configPath)
+			cfg, _, err := loadConfig(configPath)
 			if err != nil {
 				return fmt.Errorf("加载配置失败: %w", err)
 			}
@@ -642,7 +642,7 @@ func NewMemorySearchCmd() *cobra.Command {
 			query := args[0]
 
 			// 加载配置
-			cfg, err := loadConfig(configPath)
+			cfg, _, err := loadConfig(configPath)
 			if err != nil {
 				return fmt.Errorf("加载配置失败: %w", err)
 			}
