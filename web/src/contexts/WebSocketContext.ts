@@ -25,6 +25,7 @@ interface WebSocketContextValue {
   // Session methods
   fetchSessionList: (dateStart?: string, dateEnd?: string) => Promise<SessionMetaPayload[]>
   fetchSession: (key: string) => Promise<Session | null>
+  deleteSession: (key: string) => Promise<{ success: boolean; error?: string }>
   // Task methods
   fetchTaskList: () => Promise<TaskDetail[]>
   addTask: (config: TaskConfig) => Promise<{ success: boolean; id?: string; error?: string }>

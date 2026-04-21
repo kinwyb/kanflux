@@ -1,28 +1,23 @@
 import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Send, Bot, User, Sparkles, Loader2, Wrench, CheckCircle2, XCircle, ChevronDown, ChevronRight } from 'lucide-react'
+import { Send, Bot, User, Sparkles, Loader2, Wrench, CheckCircle2, XCircle, ChevronDown, ChevronRight, MessageSquare, Plus } from 'lucide-react'
 import { useWebSocketContext } from '../contexts/WebSocketContext'
-import type { ChatMessage, InboundMessage, ToolCallDisplay, SessionMessage } from '../types'
+import { useConversationContext, sessionToChatMessage, WEB_CHANNEL, WEB_ACCOUNT_ID } from '../contexts/ConversationContext'
+import type { ChatMessage, InboundMessage, ToolCallDisplay } from '../types'
 import { format } from 'date-fns'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
-// Session key for web chat
-const WEB_CHAT_SESSION_KEY = 'web::web-chat'
-
-// Convert SessionMessage to ChatMessage
-function sessionToChatMessage(msg: SessionMessage, idx: number): ChatMessage {
-  return {
-    id: `history-${idx}`,
-    role: msg.role === 'tool' || msg.role === 'system' ? 'assistant' : msg.role,
-    content: msg.content,
-    timestamp: msg.timestamp || new Date(),
-    toolCalls: msg.tool_calls,
-  }
-}
-
 export default function ChatPanel() {
-  const { connectionState, messages, events, sendMessage, fetchSession } = useWebSocketContext()
+  const { connectionState, messages, events, sendMessage } = useWebSocketContext()
+  const {
+    activeConversationId,
+    getActiveSessionKey,
+    createConversation,
+    loadHistory,
+    historyLoadedKeys,
+    markHistoryLoaded
+  } = useConversationContext()
   const [inputValue, setInputValue] = useState('')
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
   const [isAgentThinking, setIsAgentThinking] = useState(false)
@@ -35,8 +30,8 @@ export default function ChatPanel() {
   const processedEventIds = useRef<Set<string>>(new Set())
   // Track current active reply_to (set by 'start' event, equals inbound message ID)
   const currentReplyTo = useRef<string | null>(null)
-  // Track if history was loaded
-  const historyLoadedRef = useRef(false)
+  // Track last loaded conversation ID to detect switches
+  const lastLoadedConversationId = useRef<string | null>(null)
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -46,11 +41,25 @@ export default function ChatPanel() {
     scrollToBottom()
   }, [chatMessages])
 
-  // Load history session when connected
+  // Load history session when conversation changes or when connected
   useEffect(() => {
-    if (connectionState === 'connected' && !historyLoadedRef.current) {
-      historyLoadedRef.current = true
-      fetchSession(WEB_CHAT_SESSION_KEY).then(session => {
+    const sessionKey = getActiveSessionKey()
+
+    // Check if conversation switched - reset state
+    if (activeConversationId !== lastLoadedConversationId.current) {
+      // Conversation switched - clear messages and reset state
+      setChatMessages([])
+      setRunningToolCalls(new Map())
+      setIsAgentThinking(false)
+      processedEventIds.current.clear()
+      currentReplyTo.current = null
+      lastLoadedConversationId.current = activeConversationId
+    }
+
+    // Load history if connected and not already loaded
+    if (connectionState === 'connected' && sessionKey && !historyLoadedKeys.has(sessionKey)) {
+      markHistoryLoaded(sessionKey)
+      loadHistory(sessionKey).then(session => {
         if (session && session.messages.length > 0) {
           const historyMessages = session.messages
             .filter(msg => msg.role === 'user' || msg.role === 'assistant')
@@ -59,11 +68,12 @@ export default function ChatPanel() {
         }
       })
     }
-  }, [connectionState, fetchSession])
+  }, [connectionState, activeConversationId, getActiveSessionKey, loadHistory, historyLoadedKeys, markHistoryLoaded])
 
   // Process WebSocket messages into chat messages
   useEffect(() => {
-    const chatId = 'web-chat'
+    const chatId = activeConversationId
+    if (!chatId) return // Skip if no active conversation
 
     // Process events (only new ones)
     for (const event of events) {
@@ -153,10 +163,11 @@ export default function ChatPanel() {
         ))
       }
     }
-  }, [messages, events])
+  }, [messages, events, activeConversationId])
 
   const handleSendMessage = () => {
     if (!inputValue.trim() || connectionState !== 'connected') return
+    if (!activeConversationId) return // Need an active conversation
 
     const userMessage: ChatMessage = {
       id: `user-${Date.now()}`,
@@ -170,10 +181,10 @@ export default function ChatPanel() {
     // Send to WebSocket
     const inbound: InboundMessage = {
       id: `msg-${Date.now()}`,
-      channel: 'web',
-      account_id: '',
+      channel: WEB_CHANNEL,
+      account_id: WEB_ACCOUNT_ID,
       sender_id: 'web-user',
-      chat_id: 'web-chat',
+      chat_id: activeConversationId, // Use dynamic chat_id
       content: inputValue.trim(),
       streaming_mode: 'accumulate',
       timestamp: new Date(),
@@ -339,8 +350,39 @@ export default function ChatPanel() {
         </AnimatePresence>
       </div>
 
-      {/* Messages Area */}
-      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
+      {/* No Active Conversation State */}
+      {!activeConversationId && (
+        <div className="flex-1 flex flex-col items-center justify-center px-4">
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="flex flex-col items-center justify-center text-center"
+          >
+            <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-cyan-electric/20 to-cyan-glow/20 flex items-center justify-center mb-4 shadow-md">
+              <MessageSquare size={32} className="text-cyan-electric" />
+            </div>
+            <h3 className="font-display font-semibold text-ocean-deep text-lg mb-2">
+              No Conversation Selected
+            </h3>
+            <p className="text-sm text-ocean-depth/50 font-body max-w-xs mb-4">
+              Select a conversation from the sidebar or create a new one to start chatting.
+            </p>
+            <motion.button
+              onClick={() => createConversation()}
+              className="btn-primary flex items-center gap-2"
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
+            >
+              <Plus size={16} />
+              <span className="font-body">Start New Chat</span>
+            </motion.button>
+          </motion.div>
+        </div>
+      )}
+
+      {/* Messages Area - Only show when there's an active conversation */}
+      {activeConversationId && (
+        <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
         {chatMessages.length === 0 && (
           <motion.div
             initial={{ opacity: 0, y: 20 }}
@@ -398,8 +440,8 @@ export default function ChatPanel() {
 
                 {/* Reasoning */}
                 {msg.reasoning && (
-                  <div className="px-3 py-2 rounded-lg bg-ocean-depth/10 border border-cyan-electric/10 mb-1">
-                    <p className="text-xs text-ocean-depth/60 font-body italic">{msg.reasoning}</p>
+                  <div className="inline-block px-3 py-2 rounded-lg bg-ocean-depth/10 border border-cyan-electric/10 mb-1 max-w-full">
+                    <p className="text-xs text-ocean-depth/60 font-body italic whitespace-pre-wrap break-words">{msg.reasoning}</p>
                   </div>
                 )}
 
@@ -432,8 +474,10 @@ export default function ChatPanel() {
 
         <div ref={messagesEndRef} />
       </div>
+      )}
 
-      {/* Input Area */}
+      {/* Input Area - Only show when there's an active conversation */}
+      {activeConversationId && (
       <div className="px-4 py-3 border-t border-cyan-electric/15">
         <div className="flex items-center gap-3">
           <input
@@ -443,12 +487,12 @@ export default function ChatPanel() {
             onChange={(e) => setInputValue(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={connectionState === 'connected' ? 'Type your message...' : 'Waiting for connection...'}
-            disabled={connectionState !== 'connected'}
+            disabled={connectionState !== 'connected' || !activeConversationId}
             className="input-glass flex-1"
           />
           <motion.button
             onClick={handleSendMessage}
-            disabled={!inputValue.trim() || connectionState !== 'connected'}
+            disabled={!inputValue.trim() || connectionState !== 'connected' || !activeConversationId}
             className="btn-primary px-4 py-2.5 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.98 }}
@@ -458,6 +502,7 @@ export default function ChatPanel() {
           </motion.button>
         </div>
       </div>
+      )}
     </div>
   )
 }

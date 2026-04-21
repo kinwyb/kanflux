@@ -1,6 +1,7 @@
 package bus
 
 import (
+	"fmt"
 	"time"
 )
 
@@ -53,7 +54,12 @@ type Media struct {
 
 // SessionKey 返回会话键
 func (m *InboundMessage) SessionKey() string {
-	return m.Channel + ":" + m.ChatID
+	sessionKey := fmt.Sprintf("%s_%s_%s", m.Channel, m.AccountID, m.ChatID)
+	if m.ChatID == "default" || m.ChatID == "" {
+		// 使用日期格式，同一天共用一个 session
+		sessionKey = fmt.Sprintf("%s_%s_%s", m.Channel, m.AccountID, m.Timestamp.Format("2006-01-02"))
+	}
+	return sessionKey
 }
 
 // OutboundMessage 出站消息
@@ -97,17 +103,17 @@ func (m *InboundMessage) IsSystemMessage() bool {
 
 // ChatEvent 聊天事件（用于状态通知）
 type ChatEvent struct {
-	ID          string          `json:"id"`
-	Channel     string          `json:"channel"`
-	ChatID      string          `json:"chat_id"`
-	ReplyTo     string          `json:"reply_to"`    // 关联的入站消息ID，与 OutboundMessage.ReplyTo 一致
-	Seq         int             `json:"seq"`
-	AgentName   string          `json:"agent_name"` // Agent 名称
-	State       string          `json:"state"`      // 状态类型：start/tool/complete/error/interrupt
-	Error       string          `json:"error,omitempty"`
-	ToolInfo    *ToolEventInfo  `json:"tool_info,omitempty"`    // 工具信息（tool 状态）
-	Timestamp   time.Time       `json:"timestamp"`
-	Metadata    interface{}     `json:"metadata,omitempty"`
+	ID        string         `json:"id"`
+	Channel   string         `json:"channel"`
+	ChatID    string         `json:"chat_id"`
+	ReplyTo   string         `json:"reply_to"` // 关联的入站消息ID，与 OutboundMessage.ReplyTo 一致
+	Seq       int            `json:"seq"`
+	AgentName string         `json:"agent_name"` // Agent 名称
+	State     string         `json:"state"`      // 状态类型：start/tool/complete/error/interrupt
+	Error     string         `json:"error,omitempty"`
+	ToolInfo  *ToolEventInfo `json:"tool_info,omitempty"` // 工具信息（tool 状态）
+	Timestamp time.Time      `json:"timestamp"`
+	Metadata  interface{}    `json:"metadata,omitempty"`
 }
 
 // ChatEvent states（简化为状态通知）
@@ -121,11 +127,11 @@ const (
 
 // ToolEventInfo 工具事件信息
 type ToolEventInfo struct {
-	Name      string `json:"name"`               // 工具名称
-	ID        string `json:"id"`                 // 工具调用ID
+	Name      string `json:"name"`                // 工具名称
+	ID        string `json:"id"`                  // 工具调用ID
 	Arguments string `json:"arguments,omitempty"` // 工具参数（开始时）
 	Result    string `json:"result,omitempty"`    // 工具结果（结束时）
-	IsStart   bool   `json:"is_start"`           // true=开始, false=结束
+	IsStart   bool   `json:"is_start"`            // true=开始, false=结束
 }
 
 // LogEvent 日志事件（用于系统日志输出）

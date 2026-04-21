@@ -17,6 +17,7 @@ const (
 	MsgTypeControl     MessageType = "control"     // 控制消息（如 shutdown）
 	MsgTypeSessionList MessageType = "session_list" // 获取 session 列表
 	MsgTypeSessionGet  MessageType = "session_get"  // 获取 session 内容
+	MsgTypeSessionDelete MessageType = "session_delete" // 删除 session
 	// 定时任务管理
 	MsgTypeTaskList    MessageType = "task_list"    // 获取任务列表
 	MsgTypeTaskAdd     MessageType = "task_add"     // 添加任务
@@ -37,6 +38,7 @@ const (
 	MsgTypeError           MessageType = "error"           // 错误消息
 	MsgTypeSessionListAck  MessageType = "session_list_ack" // session 列表响应
 	MsgTypeSessionGetAck   MessageType = "session_get_ack"  // session 内容响应
+	MsgTypeSessionDeleteAck MessageType = "session_delete_ack" // session 删除响应
 	// 定时任务响应
 	MsgTypeTaskListAck    MessageType = "task_list_ack"    // 任务列表响应
 	MsgTypeTaskAddAck     MessageType = "task_add_ack"     // 添加任务响应
@@ -231,6 +233,18 @@ type SessionGetAckPayload struct {
 	Metadata     map[string]interface{} `json:"metadata,omitempty"`
 	Messages     []*MessagePayload    `json:"messages,omitempty"`
 	Instructions []*InstructionPayload `json:"instructions,omitempty"`
+}
+
+// SessionDeletePayload session 删除请求 payload
+type SessionDeletePayload struct {
+	Key string `json:"key"` // session key
+}
+
+// SessionDeleteAckPayload session 删除响应 payload
+type SessionDeleteAckPayload struct {
+	Success bool   `json:"success"`
+	Error   string `json:"error,omitempty"`
+	Key     string `json:"key,omitempty"`
 }
 
 // ========== 定时任务相关 Payload ==========

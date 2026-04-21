@@ -187,4 +187,54 @@ func (h *SessionGetHandler) sendError(conn Conn, msgID string, errMsg string) er
 func init() {
 	Register(types.MsgTypeSessionList, NewSessionListHandler())
 	Register(types.MsgTypeSessionGet, NewSessionGetHandler())
+	Register(types.MsgTypeSessionDelete, NewSessionDeleteHandler())
+}
+
+// SessionDeleteHandler 处理 session 删除请求
+type SessionDeleteHandler struct{}
+
+// NewSessionDeleteHandler 创建 session 删除处理器
+func NewSessionDeleteHandler() *SessionDeleteHandler {
+	return &SessionDeleteHandler{}
+}
+
+// Handle 处理 session 删除请求
+func (h *SessionDeleteHandler) Handle(ctx context.Context, conn Conn, msg *types.WSMessage) error {
+	// 解析请求
+	var payload types.SessionDeletePayload
+	if err := msg.ParsePayload(&payload); err != nil {
+		return h.sendError(conn, msg.ID, "解析请求失败: "+err.Error())
+	}
+
+	if payload.Key == "" {
+		return h.sendError(conn, msg.ID, "session key 不能为空")
+	}
+
+	// 获取 SessionManager
+	sessionMgr := conn.GetServer().GetSessionManager()
+	if sessionMgr == nil {
+		return h.sendError(conn, msg.ID, "SessionManager 未初始化")
+	}
+
+	// 删除 session
+	err := sessionMgr.Delete(payload.Key)
+	if err != nil {
+		return h.sendError(conn, msg.ID, "删除 session 失败: "+err.Error())
+	}
+
+	// 发送成功响应
+	ack := &types.SessionDeleteAckPayload{
+		Success: true,
+		Key:     payload.Key,
+	}
+	return conn.SendMessage(types.MsgTypeSessionDeleteAck, msg.ID, ack)
+}
+
+// sendError 发送错误响应
+func (h *SessionDeleteHandler) sendError(conn Conn, msgID string, errMsg string) error {
+	ack := &types.SessionDeleteAckPayload{
+		Success: false,
+		Error:   errMsg,
+	}
+	return conn.SendMessage(types.MsgTypeSessionDeleteAck, msgID, ack)
 }

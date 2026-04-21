@@ -1,5 +1,14 @@
 // WebSocket Message Types (matching Go backend bus/events.go)
 
+// Conversation 类型 - 用于多对话管理
+export interface Conversation {
+  id: string           // chat_id (UUID)
+  title: string        // 对话标题
+  createdAt: Date
+  updatedAt: Date
+  messageCount: number
+}
+
 export interface InboundMessage {
   id: string
   channel: string
@@ -135,6 +144,7 @@ export type MessageType =
   | 'control'
   | 'session_list'
   | 'session_get'
+  | 'session_delete'
   | 'task_list'
   | 'task_add'
   | 'task_update'
@@ -151,6 +161,7 @@ export type MessageType =
   | 'error'
   | 'session_list_ack'
   | 'session_get_ack'
+  | 'session_delete_ack'
   | 'task_list_ack'
   | 'task_add_ack'
   | 'task_update_ack'
@@ -392,4 +403,18 @@ export interface ConfigUpdateAckPayload {
   success: boolean
   error?: string
   message?: string
+}
+
+// ========== Session Delete Types ==========
+
+// Session Delete Request
+export interface SessionDeletePayload {
+  key: string
+}
+
+// Session Delete Response
+export interface SessionDeleteAckPayload {
+  success: boolean
+  error?: string
+  key?: string
 }

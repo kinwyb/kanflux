@@ -7,7 +7,9 @@ import SessionsPanel from './components/SessionsPanel'
 import LogsPanel from './components/LogsPanel'
 import TasksPanel from './components/TasksPanel'
 import SettingsPanel from './components/SettingsPanel'
+import ConversationList from './components/ConversationList'
 import { WebSocketContext } from './contexts/WebSocketContext'
+import { ConversationProvider } from './contexts/ConversationContext'
 import { useWebSocket } from './hooks/useWebSocket'
 import './index.css'
 
@@ -36,6 +38,7 @@ function App() {
 
   return (
     <WebSocketContext.Provider value={ws}>
+      <ConversationProvider>
       <div className="min-h-screen relative flex">
         {/* Fluid Background */}
         <div className="fluid-background">
@@ -59,7 +62,7 @@ function App() {
             </div>
 
             {/* Navigation */}
-            <nav className="flex-1 px-3 py-4 space-y-2">
+            <nav className="px-3 py-4 space-y-2">
               {tabs.map((tab) => (
                 <motion.button
                   key={tab.id}
@@ -73,6 +76,13 @@ function App() {
                 </motion.button>
               ))}
             </nav>
+
+            {/* Conversations List - Only show on Chat tab */}
+            {activeTab === 'chat' && (
+              <div className="flex-1 overflow-hidden">
+                <ConversationList />
+              </div>
+            )}
 
             {/* Bottom Section */}
             <div className="px-3 py-4 border-t border-cyan-electric/10 space-y-3">
@@ -158,6 +168,7 @@ function App() {
         {/* Settings Modal */}
         <SettingsPanel isOpen={showSettings} onClose={() => setShowSettings(false)} />
       </div>
+      </ConversationProvider>
     </WebSocketContext.Provider>
   )
 }

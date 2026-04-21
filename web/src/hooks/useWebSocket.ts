@@ -31,6 +31,8 @@ import type {
   ConfigGetAckPayload,
   ConfigUpdatePayload,
   ConfigUpdateAckPayload,
+  SessionDeletePayload,
+  SessionDeleteAckPayload,
 } from '../types'
 
 const WS_URL = 'ws://localhost:8765/ws'
@@ -46,6 +48,7 @@ interface UseWebSocketReturn {
   // Session methods
   fetchSessionList: (dateStart?: string, dateEnd?: string) => Promise<SessionMetaPayload[]>
   fetchSession: (key: string) => Promise<Session | null>
+  deleteSession: (key: string) => Promise<{ success: boolean; error?: string }>
   // Task methods
   fetchTaskList: () => Promise<TaskDetail[]>
   addTask: (config: TaskConfig) => Promise<{ success: boolean; id?: string; error?: string }>
@@ -333,6 +336,24 @@ export function useWebSocket(): UseWebSocketReturn {
     }
   }, [sendRequest])
 
+  // Delete session
+  const deleteSession = useCallback(async (key: string): Promise<{ success: boolean; error?: string }> => {
+    try {
+      const payload: SessionDeletePayload = { key }
+      const response = await sendRequest<SessionDeleteAckPayload>('session_delete', payload)
+      return {
+        success: response.success,
+        error: response.error,
+      }
+    } catch (error) {
+      console.error('[WebSocket] Delete session error:', error)
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      }
+    }
+  }, [sendRequest])
+
   // ========== Task Methods ==========
 
   // Fetch task list
@@ -510,6 +531,7 @@ export function useWebSocket(): UseWebSocketReturn {
     clearLogs,
     fetchSessionList,
     fetchSession,
+    deleteSession,
     fetchTaskList,
     addTask,
     updateTask,
