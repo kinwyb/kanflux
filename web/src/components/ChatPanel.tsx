@@ -14,9 +14,7 @@ export default function ChatPanel() {
     activeConversationId,
     getActiveSessionKey,
     createConversation,
-    loadHistory,
-    historyLoadedKeys,
-    markHistoryLoaded
+    loadHistory
   } = useConversationContext()
   const [inputValue, setInputValue] = useState('')
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
@@ -30,8 +28,8 @@ export default function ChatPanel() {
   const processedEventIds = useRef<Set<string>>(new Set())
   // Track current active reply_to (set by 'start' event, equals inbound message ID)
   const currentReplyTo = useRef<string | null>(null)
-  // Track last loaded conversation ID to detect switches
-  const lastLoadedConversationId = useRef<string | null>(null)
+  // Track last loaded session key to avoid duplicate loads
+  const lastLoadedSessionKey = useRef<string | null>(null)
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -41,24 +39,22 @@ export default function ChatPanel() {
     scrollToBottom()
   }, [chatMessages])
 
-  // Load history session when conversation changes or when connected
+  // Load history when active conversation changes
   useEffect(() => {
     const sessionKey = getActiveSessionKey()
 
-    // Check if conversation switched - reset state
-    if (activeConversationId !== lastLoadedConversationId.current) {
-      // Conversation switched - clear messages and reset state
+    // Only load if sessionKey changed
+    if (sessionKey && sessionKey !== lastLoadedSessionKey.current && connectionState === 'connected') {
+      lastLoadedSessionKey.current = sessionKey
+
+      // Reset state
       setChatMessages([])
       setRunningToolCalls(new Map())
       setIsAgentThinking(false)
       processedEventIds.current.clear()
       currentReplyTo.current = null
-      lastLoadedConversationId.current = activeConversationId
-    }
 
-    // Load history if connected and not already loaded
-    if (connectionState === 'connected' && sessionKey && !historyLoadedKeys.has(sessionKey)) {
-      markHistoryLoaded(sessionKey)
+      // Load history from backend
       loadHistory(sessionKey).then(session => {
         if (session && session.messages.length > 0) {
           const historyMessages = session.messages
@@ -68,7 +64,7 @@ export default function ChatPanel() {
         }
       })
     }
-  }, [connectionState, activeConversationId, getActiveSessionKey, loadHistory, historyLoadedKeys, markHistoryLoaded])
+  }, [connectionState, activeConversationId, getActiveSessionKey, loadHistory])
 
   // Process WebSocket messages into chat messages
   useEffect(() => {
