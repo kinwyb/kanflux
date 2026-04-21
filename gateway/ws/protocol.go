@@ -38,6 +38,11 @@ type TaskUpdateAckPayload = types.TaskUpdateAckPayload
 type TaskRemoveAckPayload = types.TaskRemoveAckPayload
 type TaskTriggerAckPayload = types.TaskTriggerAckPayload
 type TaskStatusAckPayload = types.TaskStatusAckPayload
+// 配置管理相关
+type ConfigGetPayload = types.ConfigGetPayload
+type ConfigUpdatePayload = types.ConfigUpdatePayload
+type ConfigGetAckPayload = types.ConfigGetAckPayload
+type ConfigUpdateAckPayload = types.ConfigUpdateAckPayload
 
 // InboundMessage = types.InboundMessage
 type InboundMessage = types.InboundMessage
@@ -62,6 +67,9 @@ const (
 	MsgTypeTaskRemove   = types.MsgTypeTaskRemove
 	MsgTypeTaskTrigger  = types.MsgTypeTaskTrigger
 	MsgTypeTaskStatus   = types.MsgTypeTaskStatus
+	// 配置管理
+	MsgTypeConfigGet    = types.MsgTypeConfigGet
+	MsgTypeConfigUpdate = types.MsgTypeConfigUpdate
 	// 响应
 	MsgTypeOutbound        = types.MsgTypeOutbound
 	MsgTypeChatEvent       = types.MsgTypeChatEvent
@@ -78,6 +86,9 @@ const (
 	MsgTypeTaskRemoveAck  = types.MsgTypeTaskRemoveAck
 	MsgTypeTaskTriggerAck = types.MsgTypeTaskTriggerAck
 	MsgTypeTaskStatusAck  = types.MsgTypeTaskStatusAck
+	// 配置管理响应
+	MsgTypeConfigGetAck    = types.MsgTypeConfigGetAck
+	MsgTypeConfigUpdateAck = types.MsgTypeConfigUpdateAck
 	ControlActionShutdown = types.ControlActionShutdown
 	ControlActionStatus   = types.ControlActionStatus
 )

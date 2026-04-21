@@ -10,6 +10,8 @@ import type {
   TaskDetail,
   TaskConfig,
   TaskStatusAckPayload,
+  ConfigGetAckPayload,
+  ConfigUpdateAckPayload,
 } from '../types'
 
 interface WebSocketContextValue {
@@ -30,6 +32,9 @@ interface WebSocketContextValue {
   removeTask: (id: string) => Promise<{ success: boolean; id?: string; error?: string }>
   triggerTask: (id: string) => Promise<{ success: boolean; id?: string; error?: string }>
   fetchTaskStatus: (id: string) => Promise<TaskStatusAckPayload>
+  // Config methods
+  fetchConfig: () => Promise<ConfigGetAckPayload>
+  updateConfig: (config: Record<string, unknown>) => Promise<ConfigUpdateAckPayload>
 }
 
 export const WebSocketContext = createContext<WebSocketContextValue | null>(null)

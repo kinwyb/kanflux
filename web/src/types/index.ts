@@ -141,6 +141,8 @@ export type MessageType =
   | 'task_remove'
   | 'task_trigger'
   | 'task_status'
+  | 'config_get'
+  | 'config_update'
   | 'outbound'
   | 'chat_event'
   | 'log_event'
@@ -155,6 +157,8 @@ export type MessageType =
   | 'task_remove_ack'
   | 'task_trigger_ack'
   | 'task_status_ack'
+  | 'config_get_ack'
+  | 'config_update_ack'
 
 // Session List Request/Response
 export interface SessionListPayload {
@@ -364,4 +368,28 @@ export interface TaskStatusAckPayload {
   error?: string
   id?: string
   state?: TaskState
+}
+
+// ========== Config Management Types ==========
+
+// Config Get Request (empty payload)
+export interface ConfigGetPayload {}
+
+// Config Get Response
+export interface ConfigGetAckPayload {
+  success: boolean
+  error?: string
+  config?: Record<string, unknown>
+}
+
+// Config Update Request
+export interface ConfigUpdatePayload {
+  config: Record<string, unknown>
+}
+
+// Config Update Response
+export interface ConfigUpdateAckPayload {
+  success: boolean
+  error?: string
+  message?: string
 }

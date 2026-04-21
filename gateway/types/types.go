@@ -24,6 +24,9 @@ const (
 	MsgTypeTaskRemove  MessageType = "task_remove"  // 删除任务
 	MsgTypeTaskTrigger MessageType = "task_trigger" // 触发任务
 	MsgTypeTaskStatus  MessageType = "task_status"  // 获取任务状态
+	// 配置管理
+	MsgTypeConfigGet    MessageType = "config_get"    // 获取配置
+	MsgTypeConfigUpdate MessageType = "config_update" // 更新配置
 
 	// 服务端 -> 客户端
 	MsgTypeOutbound        MessageType = "outbound"        // 出站消息
@@ -41,6 +44,9 @@ const (
 	MsgTypeTaskRemoveAck  MessageType = "task_remove_ack"  // 删除任务响应
 	MsgTypeTaskTriggerAck MessageType = "task_trigger_ack" // 触发任务响应
 	MsgTypeTaskStatusAck  MessageType = "task_status_ack"  // 任务状态响应
+	// 配置管理响应
+	MsgTypeConfigGetAck    MessageType = "config_get_ack"    // 获取配置响应
+	MsgTypeConfigUpdateAck MessageType = "config_update_ack" // 更新配置响应
 )
 
 // WSMessage WebSocket 消息封装
@@ -353,6 +359,30 @@ type TaskStatusAckPayload struct {
 	Error   string            `json:"error,omitempty"`
 	ID      string            `json:"id,omitempty"`
 	State   *TaskStatePayload `json:"state,omitempty"`
+}
+
+// ========== 配置管理相关 Payload ==========
+
+// ConfigGetPayload 获取配置请求 payload（空）
+type ConfigGetPayload struct{}
+
+// ConfigUpdatePayload 更新配置请求 payload
+type ConfigUpdatePayload struct {
+	Config json.RawMessage `json:"config"` // 原始配置 JSON
+}
+
+// ConfigGetAckPayload 获取配置响应 payload
+type ConfigGetAckPayload struct {
+	Success bool            `json:"success"`
+	Error   string          `json:"error,omitempty"`
+	Config  json.RawMessage `json:"config,omitempty"` // 返回完整配置 JSON
+}
+
+// ConfigUpdateAckPayload 更新配置响应 payload
+type ConfigUpdateAckPayload struct {
+	Success bool   `json:"success"`
+	Error   string `json:"error,omitempty"`
+	Message string `json:"message,omitempty"` // 成功/失败消息
 }
 
 // NewWSMessage 创建 WebSocket 消息

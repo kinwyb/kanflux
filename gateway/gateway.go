@@ -24,6 +24,7 @@ import (
 // Gateway 后台服务
 type Gateway struct {
 	cfg          *config.Config
+	configPath   string              // 配置文件路径
 	workspace    string
 	msgBus       *bus.MessageBus
 	sessionMgr   *session.Manager
@@ -32,6 +33,7 @@ type Gateway struct {
 	wsServer     *ws.Server
 	wsConfig     *ws.ServerConfig
 	taskScheduler *scheduler.Scheduler // 定时任务调度器
+	configMgr    *config.Manager       // 配置管理器
 
 	ctx          context.Context
 	cancel       context.CancelFunc
@@ -41,7 +43,7 @@ type Gateway struct {
 }
 
 // New 创建 Gateway 实例
-func New(cfg *config.Config, workspace string) (*Gateway, error) {
+func New(cfg *config.Config, configPath string, workspace string) (*Gateway, error) {
 	// 验证配置中有 Agent
 	if len(cfg.Agents) == 0 {
 		return nil, fmt.Errorf("配置文件中没有定义 Agent")
@@ -50,11 +52,12 @@ func New(cfg *config.Config, workspace string) (*Gateway, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &Gateway{
-		cfg:       cfg,
-		workspace: workspace,
-		ctx:       ctx,
-		cancel:    cancel,
-		wsConfig:  resolveWsConfig(cfg),
+		cfg:        cfg,
+		configPath: configPath,
+		workspace:  workspace,
+		ctx:        ctx,
+		cancel:     cancel,
+		wsConfig:   resolveWsConfig(cfg),
 	}, nil
 }
 
@@ -145,6 +148,19 @@ func (g *Gateway) Start(ctx context.Context) error {
 		p, _ := os.FindProcess(os.Getpid())
 		p.Signal(syscall.SIGTERM)
 	})
+	// 创建配置管理器
+	if g.configPath != "" {
+		configMgr, err := config.NewManager(g.configPath)
+		if err != nil {
+			slog.Warn("创建配置管理器失败", "error", err)
+		} else {
+			g.configMgr = configMgr
+			g.wsServer.SetConfigManager(configMgr)
+			// 注册配置处理器
+			handler.RegisterConfigHandlers()
+			slog.Info("配置管理器创建完成")
+		}
+	}
 	// 设置定时任务调度器（如果启用）
 	if g.taskScheduler != nil {
 		g.wsServer.SetTaskScheduler(g.taskScheduler)

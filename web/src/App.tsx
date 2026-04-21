@@ -6,6 +6,7 @@ import ChatPanel from './components/ChatPanel'
 import SessionsPanel from './components/SessionsPanel'
 import LogsPanel from './components/LogsPanel'
 import TasksPanel from './components/TasksPanel'
+import SettingsPanel from './components/SettingsPanel'
 import { WebSocketContext } from './contexts/WebSocketContext'
 import { useWebSocket } from './hooks/useWebSocket'
 import './index.css'
@@ -20,6 +21,7 @@ interface Tab {
 
 function App() {
   const [activeTab, setActiveTab] = useState<TabType>('chat')
+  const [showSettings, setShowSettings] = useState(false)
 
   // 单一 WebSocket 连接在 App 层级管理
   const ws = useWebSocket()
@@ -85,6 +87,7 @@ function App() {
               {/* Settings Button */}
               <motion.button
                 className="sidebar-nav-tab w-full"
+                onClick={() => setShowSettings(true)}
                 whileHover={{ scale: 1.02 }}
                 whileTap={{ scale: 0.98 }}
               >
@@ -151,6 +154,9 @@ function App() {
             )}
           </AnimatePresence>
         </main>
+
+        {/* Settings Modal */}
+        <SettingsPanel isOpen={showSettings} onClose={() => setShowSettings(false)} />
       </div>
     </WebSocketContext.Provider>
   )

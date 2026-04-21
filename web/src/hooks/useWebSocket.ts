@@ -28,6 +28,9 @@ import type {
   TaskStatusPayload,
   TaskStatusAckPayload,
   TaskConfig,
+  ConfigGetAckPayload,
+  ConfigUpdatePayload,
+  ConfigUpdateAckPayload,
 } from '../types'
 
 const WS_URL = 'ws://localhost:8765/ws'
@@ -50,6 +53,9 @@ interface UseWebSocketReturn {
   removeTask: (id: string) => Promise<{ success: boolean; id?: string; error?: string }>
   triggerTask: (id: string) => Promise<{ success: boolean; id?: string; error?: string }>
   fetchTaskStatus: (id: string) => Promise<TaskStatusAckPayload>
+  // Config methods
+  fetchConfig: () => Promise<ConfigGetAckPayload>
+  updateConfig: (config: Record<string, unknown>) => Promise<ConfigUpdateAckPayload>
 }
 
 // Generate unique message ID
@@ -446,6 +452,37 @@ export function useWebSocket(): UseWebSocketReturn {
     }
   }, [sendRequest])
 
+  // ========== Config Methods ==========
+
+  // Fetch config
+  const fetchConfig = useCallback(async (): Promise<ConfigGetAckPayload> => {
+    try {
+      const response = await sendRequest<ConfigGetAckPayload>('config_get', {})
+      return response
+    } catch (error) {
+      console.error('[WebSocket] Fetch config error:', error)
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      }
+    }
+  }, [sendRequest])
+
+  // Update config
+  const updateConfig = useCallback(async (config: Record<string, unknown>): Promise<ConfigUpdateAckPayload> => {
+    try {
+      const payload: ConfigUpdatePayload = { config }
+      const response = await sendRequest<ConfigUpdateAckPayload>('config_update', payload)
+      return response
+    } catch (error) {
+      console.error('[WebSocket] Update config error:', error)
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      }
+    }
+  }, [sendRequest])
+
   useEffect(() => {
     connect()
 
@@ -479,5 +516,7 @@ export function useWebSocket(): UseWebSocketReturn {
     removeTask,
     triggerTask,
     fetchTaskStatus,
+    fetchConfig,
+    updateConfig,
   }
 }

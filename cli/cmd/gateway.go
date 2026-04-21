@@ -77,7 +77,7 @@ func NewGatewayStartCmd() *cobra.Command {
 			}
 
 			// 4. 创建 Gateway 实例
-			gw, err := gateway.New(cfg, workspace)
+			gw, err := gateway.New(cfg, configPath, workspace)
 			if err != nil {
 				return err
 			}

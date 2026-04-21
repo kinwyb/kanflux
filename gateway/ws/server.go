@@ -59,6 +59,7 @@ type Server struct {
 	bus           *bus.MessageBus
 	sessionMgr    *session.Manager
 	taskScheduler *scheduler.Scheduler // 定时任务调度器
+	configMgr     *config.Manager      // 配置管理器
 	logger        *slog.Logger
 
 	upgrader    websocket.Upgrader
@@ -596,6 +597,16 @@ func (s *Server) GetTaskScheduler() *scheduler.Scheduler {
 	return s.taskScheduler
 }
 
+// SetConfigManager 设置配置管理器
+func (s *Server) SetConfigManager(cm *config.Manager) {
+	s.configMgr = cm
+}
+
+// GetConfigManager 获取配置管理器
+func (s *Server) GetConfigManager() *config.Manager {
+	return s.configMgr
+}
+
 // HandleTaskList 处理任务列表请求
 func (s *Server) HandleTaskList(connID string, msgID string) error {
 	if s.taskScheduler == nil {
@@ -876,5 +887,80 @@ func convertTaskStateToPayload(state *scheduler.TaskState) *TaskStatePayload {
 		SuccessCount: state.SuccessCount,
 		FailCount:    state.FailCount,
 		NextRun:      state.NextRun.UnixMilli(),
+	}
+}
+
+// ========== 配置管理相关方法 ==========
+
+// HandleConfigGet 处理获取配置请求
+func (s *Server) HandleConfigGet(connID string, msgID string) error {
+	if s.configMgr == nil {
+		return s.sendConfigError(connID, msgID, MsgTypeConfigGetAck, "config manager not available")
+	}
+
+	configJSON, err := s.configMgr.GetConfigJSON()
+	if err != nil {
+		return s.sendConfigError(connID, msgID, MsgTypeConfigGetAck, err.Error())
+	}
+
+	ack := &ConfigGetAckPayload{
+		Success: true,
+		Config:  configJSON,
+	}
+
+	return s.sendConfigResponse(connID, msgID, MsgTypeConfigGetAck, ack)
+}
+
+// HandleConfigUpdate 处理更新配置请求
+func (s *Server) HandleConfigUpdate(connID string, msgID string, payload *ConfigUpdatePayload) error {
+	if s.configMgr == nil {
+		return s.sendConfigError(connID, msgID, MsgTypeConfigUpdateAck, "config manager not available")
+	}
+
+	if err := s.configMgr.UpdateConfig(payload.Config); err != nil {
+		return s.sendConfigError(connID, msgID, MsgTypeConfigUpdateAck, err.Error())
+	}
+
+	ack := &ConfigUpdateAckPayload{
+		Success: true,
+		Message: "Configuration updated successfully",
+	}
+
+	return s.sendConfigResponse(connID, msgID, MsgTypeConfigUpdateAck, ack)
+}
+
+// sendConfigResponse 发送配置响应
+func (s *Server) sendConfigResponse(connID string, msgID string, msgType MessageType, payload interface{}) error {
+	s.connMu.RLock()
+	conn, ok := s.connections[connID]
+	s.connMu.RUnlock()
+
+	if !ok {
+		return fmt.Errorf("connection %s not found", connID)
+	}
+
+	wsMsg, err := NewWSMessage(msgType, msgID, payload)
+	if err != nil {
+		return err
+	}
+
+	msgBytes, err := wsMsg.Marshal()
+	if err != nil {
+		return err
+	}
+
+	conn.Send(msgBytes)
+	return nil
+}
+
+// sendConfigError 发送配置错误响应
+func (s *Server) sendConfigError(connID string, msgID string, msgType MessageType, errMsg string) error {
+	switch msgType {
+	case MsgTypeConfigGetAck:
+		return s.sendConfigResponse(connID, msgID, msgType, &ConfigGetAckPayload{Success: false, Error: errMsg})
+	case MsgTypeConfigUpdateAck:
+		return s.sendConfigResponse(connID, msgID, msgType, &ConfigUpdateAckPayload{Success: false, Error: errMsg})
+	default:
+		return s.sendConfigResponse(connID, msgID, MsgTypeError, &ErrorPayload{Message: errMsg})
 	}
 }
