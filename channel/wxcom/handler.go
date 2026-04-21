@@ -126,6 +126,7 @@ func (h *MessageHandler) ParseEvent(frame *WsFrame) (*WsEvent, error) {
 // ConvertToInbound 将WsMessage转换为bus.InboundMessage
 func (h *MessageHandler) ConvertToInbound(msg *WsMessage, channelName, accountID string) *bus.InboundMessage {
 	inbound := &bus.InboundMessage{
+		ID:            msg.Frame.Headers["req_id"],
 		Channel:       channelName,
 		AccountID:     accountID,
 		SenderID:      msg.UserID,
@@ -142,7 +143,7 @@ func (h *MessageHandler) ConvertToInbound(msg *WsMessage, channelName, accountID
 	// 处理媒体
 	if msg.MediaURL != "" {
 		media := bus.Media{
-			URL:    msg.MediaURL,
+			URL:      msg.MediaURL,
 			Metadata: make(map[string]interface{}),
 		}
 		if msg.MediaKey != "" {

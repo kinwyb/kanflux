@@ -182,11 +182,12 @@ func (c *WxComChannel) handleEvent(frame *WsFrame) {
 		// 发送欢迎语 (可选)
 		// 需要在5秒内回复，这里不自动回复，由Agent处理
 		inbound := &bus.InboundMessage{
+			ID:            frame.Headers["req_id"],
 			Channel:       c.Name(),
 			AccountID:     c.config.BotID,
 			SenderID:      event.UserID,
 			ChatID:        event.UserID,
-			Content:       "", // 空内容表示进入会话事件
+			Content:       "你好", // 空内容表示进入会话事件
 			StreamingMode: bus.StreamingModeAccumulate,
 			Timestamp:     event.EventTime,
 			Metadata: map[string]interface{}{
@@ -200,6 +201,7 @@ func (c *WxComChannel) handleEvent(frame *WsFrame) {
 	// 处理模板卡片事件
 	if event.EventType == EventTypeTemplateCardEvent {
 		inbound := &bus.InboundMessage{
+			ID:            frame.Headers["req_id"],
 			Channel:       c.Name(),
 			AccountID:     c.config.BotID,
 			SenderID:      event.UserID,
@@ -220,6 +222,7 @@ func (c *WxComChannel) handleEvent(frame *WsFrame) {
 	// 处理反馈事件
 	if event.EventType == EventTypeFeedbackEvent {
 		inbound := &bus.InboundMessage{
+			ID:            frame.Headers["req_id"],
 			Channel:       c.Name(),
 			AccountID:     c.config.BotID,
 			SenderID:      event.UserID,
@@ -273,7 +276,7 @@ func (c *WxComChannel) Send(ctx context.Context, msg *bus.OutboundMessage) error
 	}
 
 	// 从metadata获取req_id，同时用作streamID
-	reqID := ""
+	reqID := msg.ReplyTo
 	if msg.Metadata != nil {
 		if id, ok := msg.Metadata["req_id"].(string); ok && id != "" {
 			reqID = id
@@ -313,7 +316,7 @@ func (c *WxComChannel) SendStream(ctx context.Context, msg *bus.OutboundMessage)
 	}
 
 	// 从metadata获取req_id，同时用作streamID
-	reqID := ""
+	reqID := msg.ReplyTo
 	if msg.Metadata != nil {
 		if id, ok := msg.Metadata["req_id"].(string); ok && id != "" {
 			reqID = id
