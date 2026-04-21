@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -688,11 +689,7 @@ func (m *Manager) handleInboundMessage(ctx context.Context, msg *bus.InboundMess
 	agentName := agent.cfg.Name
 
 	// 生成会话键
-	sessionKey := fmt.Sprintf("%s:%s:%s", msg.Channel, msg.AccountID, msg.ChatID)
-	if msg.ChatID == "default" || msg.ChatID == "" {
-		// 使用日期格式，同一天共用一个 session
-		sessionKey = fmt.Sprintf("%s:%s:%s", msg.Channel, msg.AccountID, msg.Timestamp.Format("2006-01-02"))
-	}
+	sessionKey := msg.SessionKey()
 
 	sess, err := m.sessionMgr.GetOrCreate(sessionKey)
 	if err != nil {
@@ -972,6 +969,7 @@ func (m *Manager) publishStreamOutbound(ctx context.Context, msg *bus.InboundMes
 
 	var content, reasoning string
 	if event.Message.ReasoningContent != "" {
+		event.Message.ReasoningContent = cleanModelOutput(event.Message.ReasoningContent)
 		acc.thinking += event.Message.ReasoningContent
 		if accumulateMode {
 			reasoning = acc.thinking
@@ -1043,6 +1041,22 @@ func (m *Manager) publishFinalOutbound(ctx context.Context, msg *bus.InboundMess
 		Metadata:         outboundMeta,
 	}
 	_ = m.bus.PublishOutbound(ctx, outbound)
+}
+
+func cleanModelOutput(raw string) string {
+	// 如果字符串不是以双引号开头，说明可能不是转义 JSON，直接返回
+	if !strings.HasPrefix(raw, "\"") {
+		return raw
+	}
+
+	var decoded string
+	// 尝试将原始字符串解析为标准的 Go string
+	err := json.Unmarshal([]byte(raw), &decoded)
+	if err != nil {
+		// 如果解析失败（说明不是标准 JSON 格式），返回原始内容
+		return raw
+	}
+	return decoded
 }
 
 // generateID 生成唯一ID

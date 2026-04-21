@@ -231,15 +231,12 @@ func (p *ChatProcessor) ScanSessions(ctx context.Context, since time.Time) ([]ty
 }
 
 func parseSessionKey(sessionKey string) *types.DefaultUserIdentity {
-	parts := strings.Split(sessionKey, ":")
+	parts := strings.Split(sessionKey, "_")
 	if len(parts) < 3 {
-		parts = strings.Split(sessionKey, "_")
-		if len(parts) < 3 {
-			return &types.DefaultUserIdentity{UserID: sessionKey}
-		}
+		return &types.DefaultUserIdentity{UserID: sessionKey}
 	}
 	return &types.DefaultUserIdentity{
-		UserID:    parts[0] + ":" + parts[1] + ":" + parts[2],
+		UserID:    parts[0] + "_" + parts[1] + "_" + parts[2],
 		Channel:   parts[0],
 		AccountID: parts[1],
 		ChatID:    parts[2],
