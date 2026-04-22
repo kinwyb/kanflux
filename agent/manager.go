@@ -698,12 +698,13 @@ func (m *Manager) handleInboundMessage(ctx context.Context, msg *bus.InboundMess
 
 	// 注册回调，通过闭包携带 msg 和 agentName 信息
 	eventSeq := 0
+	firstStart := true // 标记是否是第一次 start 事件
 	cbID := agent.RegisterCallback(func(event *Event) {
 		if event == nil {
 			return
 		}
 		eventSeq++
-		m.handleAgentEvent(ctx, msg, agentName, event, eventSeq)
+		m.handleAgentEvent(ctx, msg, agentName, event, eventSeq, &firstStart)
 	})
 
 	// 注销回调
@@ -852,11 +853,16 @@ func (m *Manager) handleInboundMessage(ctx context.Context, msg *bus.InboundMess
 }
 
 // handleAgentEvent 处理 Agent 事件，转发到消息总线
-func (m *Manager) handleAgentEvent(ctx context.Context, msg *bus.InboundMessage, agentName string, event *Event, seq int) {
+// 使用 firstStart 标记确保每个请求只发送一次 start 状态
+func (m *Manager) handleAgentEvent(ctx context.Context, msg *bus.InboundMessage, agentName string, event *Event, seq int, firstStart *bool) {
 	switch event.Type {
 	case EventMessageStart:
-		// 发布 start 事件（状态通知）
-		m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateStart, seq, msg.ID, nil, msg.Metadata)
+		// 只在整个处理开始时发送一次 start 状态
+		if *firstStart {
+			*firstStart = false
+			// 发布 start 事件（状态通知）
+			m.publishChatEvent(ctx, msg.Channel, msg.ChatID, agentName, bus.ChatEventStateStart, seq, msg.ID, nil, msg.Metadata)
+		}
 
 	case EventMessageUpdate:
 		if event.Message != nil {
