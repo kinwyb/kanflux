@@ -894,6 +894,8 @@ func (m *Manager) handleAgentEvent(ctx context.Context, msg *bus.InboundMessage,
 		if event.Message != nil {
 			// 工具调用结束通知（纯状态事件）
 			toolInfo := &bus.ToolEventInfo{
+				ID:      event.Message.ToolCallID, // Tool 消息有 ToolCallID
+				Name:    event.Message.Name,       // Tool 消息有 Name（工具名称）
 				Result:  event.Message.Content,
 				IsStart: false,
 			}

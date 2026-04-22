@@ -13,6 +13,7 @@ interface InterruptInfo {
   chatId: string
   content: string
   interruptType: string
+  replyTo: string // 原始消息ID，恢复时作为新消息的ID发送
 }
 
 export default function ChatPanel() {
@@ -90,15 +91,29 @@ export default function ChatPanel() {
         // New conversation started - reply_to is the inbound message ID
         setIsAgentThinking(true)
         currentReplyTo.current = event.reply_to
-        const newMsg: ChatMessage = {
-          id: event.reply_to, // use reply_to as message ID
-          role: 'assistant',
-          content: '',
-          timestamp: new Date(),
-          isStreaming: true,
-          toolCallDisplays: [],
-        }
-        setChatMessages(prev => [...prev, newMsg])
+
+        // 检查是否已存在相同 reply_to 的消息（中断恢复的情况）
+        setChatMessages(prev => {
+          const existing = prev.find(msg => msg.id === event.reply_to)
+          if (existing) {
+            // 已存在，更新该消息（中断恢复）
+            return prev.map(msg =>
+              msg.id === event.reply_to
+                ? { ...msg, isStreaming: true, content: '', toolCallDisplays: [] }
+                : msg
+            )
+          }
+          // 不存在，创建新消息
+          const newMsg: ChatMessage = {
+            id: event.reply_to, // use reply_to as message ID
+            role: 'assistant',
+            content: '',
+            timestamp: new Date(),
+            isStreaming: true,
+            toolCallDisplays: [],
+          }
+          return [...prev, newMsg]
+        })
       } else if (event.state === 'tool' && event.tool_info) {
         const toolId = event.tool_info.id
         const toolName = event.tool_info.name
@@ -113,31 +128,35 @@ export default function ChatPanel() {
           }
           setRunningToolCalls(prev => new Map(prev).set(toolId, newTool))
         } else {
-          const completedTool: ToolCallDisplay = {
-            id: toolId,
-            name: toolName,
-            arguments: event.tool_info.arguments || '',
-            result: event.tool_info.result || '',
-            status: event.tool_info.result && !event.tool_info.result.startsWith('Error') ? 'completed' : 'error',
-            startTime: new Date(),
-            endTime: new Date(),
-          }
-
+          // tool_end: 先删除 runningToolCalls，在回调中获取之前保存的 arguments
           setRunningToolCalls(prev => {
+            const runningTool = prev.get(toolId)
+            const completedTool: ToolCallDisplay = {
+              id: toolId,
+              name: toolName,
+              arguments: runningTool?.arguments || '',
+              result: event.tool_info?.result || '',
+              status: event.tool_info?.result && !event.tool_info.result.startsWith('Error') ? 'completed' : 'error',
+              startTime: runningTool?.startTime || new Date(),
+              endTime: new Date(),
+            }
+
+            // Add tool result to the message with reply_to
+            const replyTo = currentReplyTo.current
+            if (replyTo) {
+              setChatMessages(msgs =>
+                msgs.map(msg =>
+                  msg.id === replyTo
+                    ? { ...msg, toolCallDisplays: [...(msg.toolCallDisplays || []), completedTool] }
+                    : msg
+                )
+              )
+            }
+
             const newMap = new Map(prev)
             newMap.delete(toolId)
             return newMap
           })
-
-          // Add tool result to the message with reply_to (same as inbound message ID)
-          const replyTo = currentReplyTo.current
-          if (replyTo) {
-            setChatMessages(prev => prev.map(msg =>
-              msg.id === replyTo
-                ? { ...msg, toolCallDisplays: [...(msg.toolCallDisplays || []), completedTool] }
-                : msg
-            ))
-          }
         }
       } else if (event.state === 'complete' || event.state === 'error') {
         setIsAgentThinking(false)
@@ -162,6 +181,7 @@ export default function ChatPanel() {
             chatId: event.chat_id,
             content: interruptContent,
             interruptType: interruptType,
+            replyTo: event.reply_to, // 保存原始消息ID，恢复时作为新消息的ID
           })
         }
       }
@@ -220,7 +240,7 @@ export default function ChatPanel() {
 
     const response = approved ? 'y' : 'n'
     const inbound: InboundMessage = {
-      id: `msg-${Date.now()}`,
+      id: interruptInfo.replyTo, // 使用原始消息ID，确保恢复后的事件reply_to一致
       channel: WEB_CHANNEL,
       account_id: WEB_ACCOUNT_ID,
       sender_id: 'web-user',
@@ -278,9 +298,6 @@ export default function ChatPanel() {
           className="flex items-center gap-2 px-3 py-2 rounded-lg bg-ocean-depth/10 cursor-pointer hover:bg-ocean-depth/15"
           onClick={() => toggleToolExpand(tool.id)}
         >
-          {/* Tool Icon */}
-          <Wrench size={14} className="text-cyan-mist" />
-
           {/* Status Icon */}
           {isRunning ? (
             <Loader2 size={12} className="text-cyan-electric animate-spin" />
@@ -291,12 +308,9 @@ export default function ChatPanel() {
           )}
 
           {/* Tool Name */}
-          <div className="flex items-center gap-1">
-            <Wrench size={10} className="text-cyan-electric" />
-            <span className="text-xs font-mono text-cyan-electric font-medium">
-              {tool.name}
-            </span>
-          </div>
+          <span className="text-xs font-mono text-cyan-electric font-medium">
+            {tool.name}
+          </span>
 
           {/* Expand Icon */}
           {isExpanded ? (
