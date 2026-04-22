@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { Send, Bot, User, Sparkles, Loader2, Wrench, CheckCircle2, XCircle, ChevronDown, ChevronRight, MessageSquare, Plus, AlertCircle } from 'lucide-react'
 import { useWebSocketContext } from '../contexts/WebSocketContext'
 import { useConversationContext, sessionToChatMessage, WEB_CHANNEL, WEB_ACCOUNT_ID } from '../contexts/ConversationContext'
-import type { ChatMessage, InboundMessage, ToolCallDisplay } from '../types'
+import type { ChatMessage, InboundMessage, MessageBlock } from '../types'
 import { format } from 'date-fns'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -13,7 +13,7 @@ interface InterruptInfo {
   chatId: string
   content: string
   interruptType: string
-  replyTo: string // 原始消息ID，恢复时作为新消息的ID发送
+  replyTo: string
 }
 
 export default function ChatPanel() {
@@ -28,15 +28,13 @@ export default function ChatPanel() {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
   const [isAgentThinking, setIsAgentThinking] = useState(false)
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set())
-  // Interrupt confirmation state
   const [interruptInfo, setInterruptInfo] = useState<InterruptInfo | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
-  // Track processed events to avoid re-processing
   const processedEventIds = useRef<Set<string>>(new Set())
-  // Track last loaded session key to avoid duplicate loads
   const lastLoadedSessionKey = useRef<string | null>(null)
+  const messageSendCounts = useRef<Map<string, number>>(new Map())
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -46,20 +44,16 @@ export default function ChatPanel() {
     scrollToBottom()
   }, [chatMessages])
 
-  // Load history when active conversation changes
   useEffect(() => {
     const sessionKey = getActiveSessionKey()
 
-    // Only load if sessionKey changed
     if (sessionKey && sessionKey !== lastLoadedSessionKey.current && connectionState === 'connected') {
       lastLoadedSessionKey.current = sessionKey
 
-      // Reset state
       setChatMessages([])
       setIsAgentThinking(false)
       processedEventIds.current.clear()
 
-      // Load history from backend
       loadHistory(sessionKey).then(session => {
         if (session && session.messages.length > 0) {
           const historyMessages = session.messages
@@ -71,95 +65,166 @@ export default function ChatPanel() {
     }
   }, [connectionState, activeConversationId, getActiveSessionKey, loadHistory])
 
-  // Process WebSocket messages into chat messages
+  const extractOriginalId = (id: string): string => {
+    const match = id.match(/^(.+)_(\d+)$/)
+    return match ? match[1] : id
+  }
+
+  const generateMessageId = (originalId: string): string => {
+    // 检查是否已经有序号了
+    if (originalId.match(/_\d+$/)) {
+      // 已经有序号，说明是中断恢复后再次恢复，需要再+1
+      const baseId = extractOriginalId(originalId)
+      const count = (messageSendCounts.current.get(baseId) || 0) + 1
+      messageSendCounts.current.set(baseId, count)
+      return `${baseId}_${count}`
+    }
+    // 第一次发送（无序号）
+    const count = messageSendCounts.current.get(originalId) || 0
+    messageSendCounts.current.set(originalId, count + 1)
+    // count=0 时是第一次，返回原始ID；count>=1 时返回 _1, _2...
+    if (count === 0) {
+      return originalId
+    }
+    return `${originalId}_${count}`
+  }
+
   useEffect(() => {
     const chatId = activeConversationId
-    if (!chatId) return // Skip if no active conversation
+    if (!chatId) return
 
-    // Process events (only new ones)
     for (const event of events) {
       if (event.chat_id !== chatId) continue
       if (processedEventIds.current.has(event.id)) continue
       processedEventIds.current.add(event.id)
 
+      // 提取原始ID用于分组，完整的reply_to用于匹配
+      const originalReplyTo = extractOriginalId(event.reply_to)
+      const replyTo = event.reply_to
+
       if (event.state === 'start') {
-        // New conversation started - reply_to is the inbound message ID
         setIsAgentThinking(true)
 
-        // 检查是否已存在相同 reply_to 的消息（中断恢复的情况）
-        setChatMessages(prev => {
-          const existing = prev.find(msg => msg.id === event.reply_to)
-          if (existing) {
-            // 已存在，更新该消息（中断恢复）- 保留已有的工具调用记录
-            return prev.map(msg =>
-              msg.id === event.reply_to
-                ? { ...msg, isStreaming: true, content: '' }
-                : msg
-            )
+        // 用原始ID找到消息组
+        const existingMsg = chatMessages.find(m => extractOriginalId(m.id) === originalReplyTo)
+
+        if (existingMsg) {
+          // 已有消息组，添加新的消息块
+          const newBlock: MessageBlock = {
+            id: `block-${Date.now()}-start`,
+            type: 'start',
+            timestamp: new Date()
           }
-          // 不存在，创建新消息
+          setChatMessages(prev => prev.map(msg => {
+            if (extractOriginalId(msg.id) === originalReplyTo) {
+              return {
+                ...msg,
+                id: replyTo, // 更新为带序号的ID
+                isStreaming: true,
+                messageBlocks: [...(msg.messageBlocks || []), newBlock]
+              }
+            }
+            return msg
+          }))
+        } else {
+          // 没有消息组，创建新消息
           const newMsg: ChatMessage = {
-            id: event.reply_to, // use reply_to as message ID
+            id: replyTo,
             role: 'assistant',
             content: '',
             timestamp: new Date(),
             isStreaming: true,
-            toolCallDisplays: [],
+            messageBlocks: [
+              {
+                id: `block-${Date.now()}-start`,
+                type: 'start',
+                timestamp: new Date()
+              }
+            ]
           }
-          return [...prev, newMsg]
-        })
+          setChatMessages(prev => [...prev, newMsg])
+        }
+
       } else if (event.state === 'tool' && event.tool_info) {
         const toolId = event.tool_info.id
         const toolName = event.tool_info.name
-        const replyTo = event.reply_to // 直接使用 event.reply_to
+        const replyTo = event.reply_to
+
+        // 用原始ID找到消息组
+        const existingMsg = chatMessages.find(m => extractOriginalId(m.id) === originalReplyTo)
+
+        if (!existingMsg) return
 
         if (event.tool_info.is_start) {
-          // tool_start: 直接添加到消息的 toolCallDisplays，状态为 running
-          const newTool: ToolCallDisplay = {
-            id: toolId,
-            name: toolName,
-            arguments: event.tool_info.arguments || '',
-            status: 'running',
-            startTime: new Date(),
+          const newTool: MessageBlock = {
+            id: `block-${toolId}`,
+            type: 'tool_call',
+            toolInfo: {
+              id: toolId,
+              name: toolName,
+              arguments: event.tool_info.arguments || '',
+              status: 'running',
+              startTime: new Date(),
+            },
+            timestamp: new Date()
           }
 
-          // 添加到消息的 toolCallDisplays
-          setChatMessages(prev => prev.map(msg =>
-            msg.id === replyTo
-              ? { ...msg, toolCallDisplays: [...(msg.toolCallDisplays || []), newTool] }
-              : msg
-          ))
+          // 用原始ID找到消息组，添加新块
+          setChatMessages(prev => prev.map(msg => {
+            if (extractOriginalId(msg.id) === originalReplyTo) {
+              return {
+                ...msg,
+                id: replyTo, // 更新为带序号的ID
+                messageBlocks: [...(msg.messageBlocks || []), newTool]
+              }
+            }
+            return msg
+          }))
+
         } else {
-          // tool_end: 更新消息里的工具状态为 completed，添加结果
-          setChatMessages(prev => prev.map(msg =>
-            msg.id === replyTo
-              ? {
-                  ...msg,
-                  toolCallDisplays: (msg.toolCallDisplays || []).map(tool =>
-                    tool.id === toolId
-                      ? {
-                          ...tool,
-                          result: event.tool_info?.result || '',
-                          status: event.tool_info?.result && !event.tool_info.result.startsWith('Error') ? 'completed' : 'error',
-                          endTime: new Date(),
-                        }
-                      : tool
-                  ),
-                }
-              : msg
-          ))
+          // 用原始ID找到消息组
+          setChatMessages(prev => prev.map(msg => {
+            if (extractOriginalId(msg.id) === originalReplyTo) {
+              return {
+                ...msg,
+                id: replyTo, // 更新为带序号的ID
+                messageBlocks: (msg.messageBlocks || []).map(block => {
+                  if (block.type === 'tool_call' && block.toolInfo?.id === toolId) {
+                    return {
+                      ...block,
+                      toolInfo: {
+                        ...block.toolInfo,
+                        result: event.tool_info?.result || '',
+                        status: event.tool_info?.result && !event.tool_info.result.startsWith('Error') ? 'completed' : 'error',
+                        endTime: new Date(),
+                      }
+                    }
+                  }
+                  return block
+                })
+              }
+            }
+            return msg
+          }))
         }
+
       } else if (event.state === 'complete' || event.state === 'error') {
         setIsAgentThinking(false)
         const replyTo = event.reply_to
 
-        setChatMessages(prev => prev.map(msg =>
-          msg.id === replyTo
-            ? { ...msg, isStreaming: false }
-            : msg
-        ))
+        // 用原始ID找到消息组
+        setChatMessages(prev => prev.map(msg => {
+          if (extractOriginalId(msg.id) === originalReplyTo) {
+            return {
+              ...msg,
+              id: replyTo, // 更新为带序号的ID
+              isStreaming: false
+            }
+          }
+          return msg
+        }))
+
       } else if (event.state === 'interrupt') {
-        // Handle interrupt - show confirmation dialog for yes_no type
         setIsAgentThinking(false)
         const metadata = event.metadata as Record<string, unknown> | undefined
         const interruptType = metadata?.interrupt_type as string | undefined
@@ -170,32 +235,79 @@ export default function ChatPanel() {
             chatId: event.chat_id,
             content: interruptContent,
             interruptType: interruptType,
-            replyTo: event.reply_to, // 保存原始消息ID，恢复时作为新消息的ID
+            replyTo: event.reply_to,
           })
         }
       }
     }
 
-    // Process outbound messages - use reply_to to match with the correct message
-    // reply_to equals the inbound message ID, which is the same as the message ID from start event
     for (const msg of messages) {
       if (msg.chat_id !== chatId) continue
-      if (!msg.reply_to) continue // Skip messages without reply_to
+      if (!msg.reply_to) continue
 
-      // Update the message that matches reply_to (which is the inbound message ID)
+      // 用原始ID找到消息组
+      const originalReplyTo = extractOriginalId(msg.reply_to)
+      const replyTo = msg.reply_to
+
       if (msg.is_streaming) {
-        setChatMessages(prev => prev.map(chatMsg =>
-          chatMsg.id === msg.reply_to && chatMsg.isStreaming
-            ? { ...chatMsg, content: msg.content, reasoning: msg.reasoning_content || chatMsg.reasoning }
-            : chatMsg
-        ))
+        const isThinking = msg.is_thinking && msg.reasoning_content
+        const hasContent = msg.content
+
+        if (!isThinking && !hasContent) continue
+
+        setChatMessages(prev => {
+          // 用原始ID找到消息组
+          const targetMsg = prev.find(m => extractOriginalId(m.id) === originalReplyTo)
+          if (!targetMsg) return prev
+
+          const blockType = isThinking ? 'thinking' : 'output'
+          const content = isThinking ? msg.reasoning_content : msg.content
+
+          // 找到同类型的块，直接覆盖更新（不用累积）
+          const existingBlocks = targetMsg.messageBlocks || []
+          const existingBlockIdx = existingBlocks.findIndex(b => b.type === blockType)
+
+          let newBlocks: MessageBlock[]
+          if (existingBlockIdx >= 0) {
+            // 同类型块已存在，直接覆盖更新
+            newBlocks = existingBlocks.map((block, idx) => {
+              if (idx === existingBlockIdx) {
+                return {
+                  ...block,
+                  content: content,
+                  reasoning: isThinking ? content : block.reasoning,
+                  timestamp: new Date()
+                }
+              }
+              return block
+            })
+          } else {
+            // 没有同类型块，创建新块
+            const newBlock: MessageBlock = {
+              id: `block-${Date.now()}-${blockType}`,
+              type: blockType,
+              content: content,
+              reasoning: isThinking ? content : undefined,
+              timestamp: new Date()
+            }
+            newBlocks = [...existingBlocks, newBlock]
+          }
+
+          // 更新消息ID为带序号的ID
+          return prev.map(m => {
+            if (extractOriginalId(m.id) === originalReplyTo) {
+              return { ...m, id: replyTo, messageBlocks: newBlocks }
+            }
+            return m
+          })
+        })
       }
     }
   }, [messages, events, activeConversationId])
 
   const handleSendMessage = () => {
     if (!inputValue.trim() || connectionState !== 'connected') return
-    if (!activeConversationId) return // Need an active conversation
+    if (!activeConversationId) return
 
     const userMessage: ChatMessage = {
       id: `user-${Date.now()}`,
@@ -206,13 +318,13 @@ export default function ChatPanel() {
 
     setChatMessages(prev => [...prev, userMessage])
 
-    // Send to WebSocket
+    const messageId = `msg-${Date.now()}`
     const inbound: InboundMessage = {
-      id: `msg-${Date.now()}`,
+      id: messageId,
       channel: WEB_CHANNEL,
       account_id: WEB_ACCOUNT_ID,
       sender_id: 'web-user',
-      chat_id: activeConversationId, // Use dynamic chat_id
+      chat_id: activeConversationId,
       content: inputValue.trim(),
       streaming_mode: 'accumulate',
       timestamp: new Date(),
@@ -223,13 +335,13 @@ export default function ChatPanel() {
     inputRef.current?.focus()
   }
 
-  // Handle interrupt confirmation (yes/no)
   const handleInterruptConfirm = (approved: boolean) => {
     if (!interruptInfo) return
 
     const response = approved ? 'y' : 'n'
+    const messageId = generateMessageId(interruptInfo.replyTo)
     const inbound: InboundMessage = {
-      id: interruptInfo.replyTo, // 使用原始消息ID，确保恢复后的事件reply_to一致
+      id: messageId,
       channel: WEB_CHANNEL,
       account_id: WEB_ACCOUNT_ID,
       sender_id: 'web-user',
@@ -272,54 +384,44 @@ export default function ChatPanel() {
     }
   }
 
-  const renderToolCall = (tool: ToolCallDisplay, isRunning: boolean = false) => {
-    const isExpanded = expandedTools.has(tool.id)
+  const renderToolCall = (toolInfo: MessageBlock['toolInfo'], isRunning: boolean = false) => {
+    if (!toolInfo) return null
+    const isExpanded = expandedTools.has(toolInfo.id)
 
     return (
       <motion.div
-        key={tool.id}
+        key={toolInfo.id}
         initial={{ opacity: 0, x: -10 }}
         animate={{ opacity: 1, x: 0 }}
         className="tool-call-container"
       >
-        {/* Tool Call Section - 参数 */}
         <div
           className="flex items-center gap-2 px-3 py-2 rounded-lg bg-ocean-depth/10 cursor-pointer hover:bg-ocean-depth/15"
-          onClick={() => toggleToolExpand(tool.id)}
+          onClick={() => toggleToolExpand(toolInfo.id)}
         >
-          {/* Tool Icon */}
           <Wrench size={14} className="text-cyan-electric" />
-
-          {/* Status Icon */}
           {isRunning ? (
             <Loader2 size={12} className="text-cyan-mist animate-spin" />
-          ) : tool.status === 'completed' ? (
+          ) : toolInfo.status === 'completed' ? (
             <CheckCircle2 size={12} className="text-green-500" />
           ) : (
             <XCircle size={12} className="text-red-500" />
           )}
-
-          {/* Tool Name */}
           <span className="text-xs font-mono text-cyan-electric font-medium">
-            {tool.name}
+            {toolInfo.name}
           </span>
-
-          {/* Expand Icon */}
           {isExpanded ? (
             <ChevronDown size={14} className="text-ocean-depth/50" />
           ) : (
             <ChevronRight size={14} className="text-ocean-depth/50" />
           )}
-
-          {/* Time */}
-          {!isRunning && tool.endTime && (
+          {!isRunning && toolInfo.endTime && (
             <span className="text-xs text-ocean-depth/40 font-body ml-auto">
-              {Math.round((tool.endTime.getTime() - tool.startTime.getTime()) / 1000)}s
+              {Math.round((toolInfo.endTime.getTime() - toolInfo.startTime.getTime()) / 1000)}s
             </span>
           )}
         </div>
 
-        {/* Expanded Content */}
         <AnimatePresence>
           {isExpanded && (
             <motion.div
@@ -328,32 +430,28 @@ export default function ChatPanel() {
               exit={{ opacity: 0, height: 0 }}
               className="mt-2 ml-4 space-y-2 overflow-hidden"
             >
-              {/* Arguments - 工具调用参数 */}
               <div className="tool-section">
                 <div className="flex items-center gap-2 mb-1">
                   <Wrench size={12} className="text-cyan-mist" />
                   <span className="text-xs font-body text-ocean-depth/60 uppercase">工具调用</span>
                 </div>
                 <pre className="text-xs font-mono text-ocean-depth/70 bg-ocean-depth/5 p-2 rounded overflow-x-auto">
-                  {parseJsonArgs(tool.arguments)}
+                  {parseJsonArgs(toolInfo.arguments)}
                 </pre>
               </div>
 
-              {/* Result - 工具结果 */}
-              {!isRunning && tool.result && (
+              {!isRunning && toolInfo.result && (
                 <div className="tool-section">
                   <div className="flex items-center gap-2 mb-1">
-                    <Wrench size={12} className={tool.status === 'completed' ? 'text-green-500' : 'text-red-500'} />
-                    <span className="text-xs font-body text-ocean-depth/60 uppercase">
-                      工具结果
-                    </span>
+                    <Wrench size={12} className={toolInfo.status === 'completed' ? 'text-green-500' : 'text-red-500'} />
+                    <span className="text-xs font-body text-ocean-depth/60 uppercase">工具结果</span>
                   </div>
                   <pre className={`text-xs font-mono p-2 rounded overflow-x-auto ${
-                    tool.status === 'completed'
+                    toolInfo.status === 'completed'
                       ? 'text-green-600 bg-green-500/10'
                       : 'text-red-500 bg-red-500/10'
                   }`}>
-                    {tool.result}
+                    {toolInfo.result}
                   </pre>
                 </div>
               )}
@@ -364,9 +462,64 @@ export default function ChatPanel() {
     )
   }
 
+  const renderMessageBlock = (block: MessageBlock) => {
+    switch (block.type) {
+      case 'start':
+        // 只渲染 loading 状态
+        return (
+          <div key={block.id} className="flex items-center gap-2 py-2">
+            <Loader2 size={14} className="text-cyan-electric animate-spin" />
+            <span className="text-sm text-ocean-depth/60">正在处理...</span>
+          </div>
+        )
+
+      case 'thinking':
+        // 只渲染有内容的 thinking 块
+        if (!block.reasoning) return null
+        return (
+          <div key={block.id} className="inline-block px-3 py-2 rounded-lg bg-ocean-depth/10 border border-cyan-electric/10 mb-1 max-w-full">
+            <p className="text-xs text-ocean-depth/60 font-body italic whitespace-pre-wrap break-words">{block.reasoning}</p>
+          </div>
+        )
+
+      case 'output':
+        // 只渲染有内容的 output 块
+        if (!block.content) return null
+        return (
+          <div key={block.id} className="message-bubble message-agent">
+            <div className="markdown-content font-body">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                {block.content}
+              </ReactMarkdown>
+            </div>
+          </div>
+        )
+
+      case 'tool_call':
+        // 只渲染有工具信息的块
+        if (!block.toolInfo) return null
+        return (
+          <div key={block.id} className="flex flex-col gap-2 mb-2">
+            {renderToolCall(block.toolInfo, true)}
+          </div>
+        )
+
+      case 'tool_result':
+        // 只渲染有工具信息的块
+        if (!block.toolInfo) return null
+        return (
+          <div key={block.id} className="flex flex-col gap-2 mb-2">
+            {renderToolCall(block.toolInfo, false)}
+          </div>
+        )
+
+      default:
+        return null
+    }
+  }
+
   return (
     <div className="glass-card-solid h-full flex flex-col overflow-hidden">
-      {/* Chat Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-cyan-electric/15">
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-cyan-electric to-cyan-glow flex items-center justify-center shadow-md">
@@ -380,7 +533,6 @@ export default function ChatPanel() {
           </div>
         </div>
 
-        {/* Thinking Indicator */}
         <AnimatePresence>
           {isAgentThinking && (
             <motion.div
@@ -396,7 +548,6 @@ export default function ChatPanel() {
         </AnimatePresence>
       </div>
 
-      {/* No Active Conversation State */}
       {!activeConversationId && (
         <div className="flex-1 flex flex-col items-center justify-center px-4">
           <motion.div
@@ -426,7 +577,6 @@ export default function ChatPanel() {
         </div>
       )}
 
-      {/* Messages Area - Only show when there's an active conversation */}
       {activeConversationId && (
         <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
         {chatMessages.length === 0 && (
@@ -455,7 +605,6 @@ export default function ChatPanel() {
               animate={{ opacity: 1, y: 0 }}
               className={`flex items-start gap-3 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}
             >
-              {/* Avatar */}
               <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 shadow-md ${
                 msg.role === 'user'
                   ? 'bg-ocean-surface'
@@ -468,44 +617,30 @@ export default function ChatPanel() {
                 )}
               </div>
 
-              {/* Message Content */}
               <div className="flex flex-col gap-1 max-w-[75%]">
-                {/* Tool Calls - 统一渲染 toolCallDisplays（包含 running 和 completed） */}
-                {msg.role === 'assistant' && msg.toolCallDisplays && msg.toolCallDisplays.length > 0 && (
-                  <div className="flex flex-col gap-2 mb-2">
-                    {msg.toolCallDisplays.map((tool) => renderToolCall(tool, tool.status === 'running'))}
-                  </div>
-                )}
-
-                {/* Reasoning */}
-                {msg.reasoning && (
-                  <div className="inline-block px-3 py-2 rounded-lg bg-ocean-depth/10 border border-cyan-electric/10 mb-1 max-w-full">
-                    <p className="text-xs text-ocean-depth/60 font-body italic whitespace-pre-wrap break-words">{msg.reasoning}</p>
-                  </div>
-                )}
-
-                {/* Message Bubble */}
-                {msg.content ? (
-                  <div className={`message-bubble ${msg.role === 'user' ? 'message-user' : 'message-agent'}`}>
-                    <div className="markdown-content font-body">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                        {msg.content}
-                      </ReactMarkdown>
+                {msg.role === 'user' ? (
+                  <>
+                    <div className="message-bubble message-user">
+                      <div className="markdown-content font-body">
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                          {msg.content}
+                        </ReactMarkdown>
+                      </div>
                     </div>
-                  </div>
-                ) : msg.role === 'assistant' && msg.isStreaming ? (
-                  <div className="message-bubble message-agent">
-                    <div className="flex items-center gap-2">
-                      <Loader2 size={14} className="text-cyan-electric animate-spin" />
-                      <span className="text-sm text-ocean-depth/60">正在处理...</span>
-                    </div>
-                  </div>
-                ) : null}
-
-                {/* Timestamp */}
-                <span className={`text-xs text-ocean-depth/40 font-body ${msg.role === 'user' ? 'text-right' : ''}`}>
-                  {format(msg.timestamp, 'HH:mm:ss')}
-                </span>
+                    <span className={`text-xs text-ocean-depth/40 font-body ${msg.role === 'user' ? 'text-right' : ''}`}>
+                      {format(msg.timestamp, 'HH:mm:ss')}
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    {msg.messageBlocks?.map(block => renderMessageBlock(block))}
+                    {msg.messageBlocks && msg.messageBlocks.length > 0 && (
+                      <span className="text-xs text-ocean-depth/40 font-body">
+                        {format(msg.messageBlocks[msg.messageBlocks.length - 1].timestamp, 'HH:mm:ss')}
+                      </span>
+                    )}
+                  </>
+                )}
               </div>
             </motion.div>
           ))}
@@ -515,7 +650,6 @@ export default function ChatPanel() {
       </div>
       )}
 
-      {/* Input Area - Only show when there's an active conversation */}
       {activeConversationId && (
       <div className="px-4 py-3 border-t border-cyan-electric/15">
         <div className="flex items-center gap-3">
@@ -543,7 +677,6 @@ export default function ChatPanel() {
       </div>
       )}
 
-      {/* Interrupt Confirmation Dialog */}
       <AnimatePresence>
         {interruptInfo && (
           <motion.div
@@ -560,7 +693,6 @@ export default function ChatPanel() {
               className="glass-card-solid max-w-md w-full p-6 rounded-xl"
               onClick={(e) => e.stopPropagation()}
             >
-              {/* Header */}
               <div className="flex items-center gap-3 mb-4">
                 <div className="w-10 h-10 rounded-lg bg-cyan-electric/20 flex items-center justify-center">
                   <AlertCircle size={20} className="text-cyan-electric" />
@@ -568,14 +700,12 @@ export default function ChatPanel() {
                 <h3 className="font-display font-semibold text-ocean-deep">确认操作</h3>
               </div>
 
-              {/* Content */}
               <div className="mb-6">
                 <p className="text-sm text-ocean-depth/70 font-body whitespace-pre-wrap break-words">
                   {interruptInfo.content}
                 </p>
               </div>
 
-              {/* Buttons */}
               <div className="flex items-center justify-end gap-3">
                 <motion.button
                   onClick={() => handleInterruptConfirm(false)}

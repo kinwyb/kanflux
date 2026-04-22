@@ -114,16 +114,25 @@ export interface ToolCallDisplay {
   endTime?: Date
 }
 
-// Chat State
+// Chat State - 按时间顺序排列的消息块
+export type MessageBlockType = 'start' | 'thinking' | 'output' | 'tool_call' | 'tool_result'
+
+export interface MessageBlock {
+  id: string
+  type: MessageBlockType
+  content?: string
+  reasoning?: string
+  toolInfo?: ToolCallDisplay
+  timestamp: Date
+}
+
 export interface ChatMessage {
   id: string
   role: 'user' | 'assistant'
   content: string
-  reasoning?: string
   timestamp: Date
   isStreaming?: boolean
-  toolCalls?: ToolCall[]
-  toolCallDisplays?: ToolCallDisplay[]
+  messageBlocks?: MessageBlock[] // 按时间顺序的消息块数组
 }
 
 // WebSocket Connection State
