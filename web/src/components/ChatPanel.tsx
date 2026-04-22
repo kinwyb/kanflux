@@ -27,7 +27,6 @@ export default function ChatPanel() {
   const [inputValue, setInputValue] = useState('')
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
   const [isAgentThinking, setIsAgentThinking] = useState(false)
-  const [runningToolCalls, setRunningToolCalls] = useState<Map<string, ToolCallDisplay>>(new Map())
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set())
   // Interrupt confirmation state
   const [interruptInfo, setInterruptInfo] = useState<InterruptInfo | null>(null)
@@ -36,8 +35,6 @@ export default function ChatPanel() {
 
   // Track processed events to avoid re-processing
   const processedEventIds = useRef<Set<string>>(new Set())
-  // Track current active reply_to (set by 'start' event, equals inbound message ID)
-  const currentReplyTo = useRef<string | null>(null)
   // Track last loaded session key to avoid duplicate loads
   const lastLoadedSessionKey = useRef<string | null>(null)
 
@@ -59,10 +56,8 @@ export default function ChatPanel() {
 
       // Reset state
       setChatMessages([])
-      setRunningToolCalls(new Map())
       setIsAgentThinking(false)
       processedEventIds.current.clear()
-      currentReplyTo.current = null
 
       // Load history from backend
       loadHistory(sessionKey).then(session => {
@@ -90,16 +85,15 @@ export default function ChatPanel() {
       if (event.state === 'start') {
         // New conversation started - reply_to is the inbound message ID
         setIsAgentThinking(true)
-        currentReplyTo.current = event.reply_to
 
         // 检查是否已存在相同 reply_to 的消息（中断恢复的情况）
         setChatMessages(prev => {
           const existing = prev.find(msg => msg.id === event.reply_to)
           if (existing) {
-            // 已存在，更新该消息（中断恢复）
+            // 已存在，更新该消息（中断恢复）- 保留已有的工具调用记录
             return prev.map(msg =>
               msg.id === event.reply_to
-                ? { ...msg, isStreaming: true, content: '', toolCallDisplays: [] }
+                ? { ...msg, isStreaming: true, content: '' }
                 : msg
             )
           }
@@ -117,8 +111,10 @@ export default function ChatPanel() {
       } else if (event.state === 'tool' && event.tool_info) {
         const toolId = event.tool_info.id
         const toolName = event.tool_info.name
+        const replyTo = event.reply_to // 直接使用 event.reply_to
 
         if (event.tool_info.is_start) {
+          // tool_start: 直接添加到消息的 toolCallDisplays，状态为 running
           const newTool: ToolCallDisplay = {
             id: toolId,
             name: toolName,
@@ -126,49 +122,42 @@ export default function ChatPanel() {
             status: 'running',
             startTime: new Date(),
           }
-          setRunningToolCalls(prev => new Map(prev).set(toolId, newTool))
+
+          // 添加到消息的 toolCallDisplays
+          setChatMessages(prev => prev.map(msg =>
+            msg.id === replyTo
+              ? { ...msg, toolCallDisplays: [...(msg.toolCallDisplays || []), newTool] }
+              : msg
+          ))
         } else {
-          // tool_end: 先删除 runningToolCalls，在回调中获取之前保存的 arguments
-          setRunningToolCalls(prev => {
-            const runningTool = prev.get(toolId)
-            const completedTool: ToolCallDisplay = {
-              id: toolId,
-              name: toolName,
-              arguments: runningTool?.arguments || '',
-              result: event.tool_info?.result || '',
-              status: event.tool_info?.result && !event.tool_info.result.startsWith('Error') ? 'completed' : 'error',
-              startTime: runningTool?.startTime || new Date(),
-              endTime: new Date(),
-            }
-
-            // Add tool result to the message with reply_to
-            const replyTo = currentReplyTo.current
-            if (replyTo) {
-              setChatMessages(msgs =>
-                msgs.map(msg =>
-                  msg.id === replyTo
-                    ? { ...msg, toolCallDisplays: [...(msg.toolCallDisplays || []), completedTool] }
-                    : msg
-                )
-              )
-            }
-
-            const newMap = new Map(prev)
-            newMap.delete(toolId)
-            return newMap
-          })
+          // tool_end: 更新消息里的工具状态为 completed，添加结果
+          setChatMessages(prev => prev.map(msg =>
+            msg.id === replyTo
+              ? {
+                  ...msg,
+                  toolCallDisplays: (msg.toolCallDisplays || []).map(tool =>
+                    tool.id === toolId
+                      ? {
+                          ...tool,
+                          result: event.tool_info?.result || '',
+                          status: event.tool_info?.result && !event.tool_info.result.startsWith('Error') ? 'completed' : 'error',
+                          endTime: new Date(),
+                        }
+                      : tool
+                  ),
+                }
+              : msg
+          ))
         }
       } else if (event.state === 'complete' || event.state === 'error') {
         setIsAgentThinking(false)
         const replyTo = event.reply_to
-        currentReplyTo.current = null
 
         setChatMessages(prev => prev.map(msg =>
           msg.id === replyTo
             ? { ...msg, isStreaming: false }
             : msg
         ))
-        setRunningToolCalls(new Map())
       } else if (event.state === 'interrupt') {
         // Handle interrupt - show confirmation dialog for yes_no type
         setIsAgentThinking(false)
@@ -298,9 +287,12 @@ export default function ChatPanel() {
           className="flex items-center gap-2 px-3 py-2 rounded-lg bg-ocean-depth/10 cursor-pointer hover:bg-ocean-depth/15"
           onClick={() => toggleToolExpand(tool.id)}
         >
+          {/* Tool Icon */}
+          <Wrench size={14} className="text-cyan-electric" />
+
           {/* Status Icon */}
           {isRunning ? (
-            <Loader2 size={12} className="text-cyan-electric animate-spin" />
+            <Loader2 size={12} className="text-cyan-mist animate-spin" />
           ) : tool.status === 'completed' ? (
             <CheckCircle2 size={12} className="text-green-500" />
           ) : (
@@ -478,17 +470,10 @@ export default function ChatPanel() {
 
               {/* Message Content */}
               <div className="flex flex-col gap-1 max-w-[75%]">
-                {/* Running Tool Calls */}
-                {msg.role === 'assistant' && msg.isStreaming && runningToolCalls.size > 0 && (
-                  <div className="flex flex-col gap-2 mb-2">
-                    {Array.from(runningToolCalls.values()).map((tool) => renderToolCall(tool, true))}
-                  </div>
-                )}
-
-                {/* Completed Tool Calls */}
+                {/* Tool Calls - 统一渲染 toolCallDisplays（包含 running 和 completed） */}
                 {msg.role === 'assistant' && msg.toolCallDisplays && msg.toolCallDisplays.length > 0 && (
                   <div className="flex flex-col gap-2 mb-2">
-                    {msg.toolCallDisplays.map((tool) => renderToolCall(tool, false))}
+                    {msg.toolCallDisplays.map((tool) => renderToolCall(tool, tool.status === 'running'))}
                   </div>
                 )}
 
