@@ -1,12 +1,19 @@
 import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Send, Bot, User, Sparkles, Loader2, Wrench, CheckCircle2, XCircle, ChevronDown, ChevronRight, MessageSquare, Plus } from 'lucide-react'
+import { Send, Bot, User, Sparkles, Loader2, Wrench, CheckCircle2, XCircle, ChevronDown, ChevronRight, MessageSquare, Plus, AlertCircle } from 'lucide-react'
 import { useWebSocketContext } from '../contexts/WebSocketContext'
 import { useConversationContext, sessionToChatMessage, WEB_CHANNEL, WEB_ACCOUNT_ID } from '../contexts/ConversationContext'
 import type { ChatMessage, InboundMessage, ToolCallDisplay } from '../types'
 import { format } from 'date-fns'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+
+// Interrupt info type for confirmation dialog
+interface InterruptInfo {
+  chatId: string
+  content: string
+  interruptType: string
+}
 
 export default function ChatPanel() {
   const { connectionState, messages, events, sendMessage } = useWebSocketContext()
@@ -21,6 +28,8 @@ export default function ChatPanel() {
   const [isAgentThinking, setIsAgentThinking] = useState(false)
   const [runningToolCalls, setRunningToolCalls] = useState<Map<string, ToolCallDisplay>>(new Map())
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set())
+  // Interrupt confirmation state
+  const [interruptInfo, setInterruptInfo] = useState<InterruptInfo | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -141,6 +150,20 @@ export default function ChatPanel() {
             : msg
         ))
         setRunningToolCalls(new Map())
+      } else if (event.state === 'interrupt') {
+        // Handle interrupt - show confirmation dialog for yes_no type
+        setIsAgentThinking(false)
+        const metadata = event.metadata as Record<string, unknown> | undefined
+        const interruptType = metadata?.interrupt_type as string | undefined
+        const interruptContent = metadata?.interrupt_content as string | undefined
+
+        if (interruptType === 'yes_no' && interruptContent) {
+          setInterruptInfo({
+            chatId: event.chat_id,
+            content: interruptContent,
+            interruptType: interruptType,
+          })
+        }
       }
     }
 
@@ -189,6 +212,27 @@ export default function ChatPanel() {
     sendMessage(inbound)
     setInputValue('')
     inputRef.current?.focus()
+  }
+
+  // Handle interrupt confirmation (yes/no)
+  const handleInterruptConfirm = (approved: boolean) => {
+    if (!interruptInfo) return
+
+    const response = approved ? 'y' : 'n'
+    const inbound: InboundMessage = {
+      id: `msg-${Date.now()}`,
+      channel: WEB_CHANNEL,
+      account_id: WEB_ACCOUNT_ID,
+      sender_id: 'web-user',
+      chat_id: interruptInfo.chatId,
+      content: response,
+      streaming_mode: 'accumulate',
+      timestamp: new Date(),
+    }
+
+    sendMessage(inbound)
+    setInterruptInfo(null)
+    setIsAgentThinking(true)
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -499,6 +543,64 @@ export default function ChatPanel() {
         </div>
       </div>
       )}
+
+      {/* Interrupt Confirmation Dialog */}
+      <AnimatePresence>
+        {interruptInfo && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-ocean-depth/20 backdrop-blur-sm"
+            onClick={() => setInterruptInfo(null)}
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="glass-card-solid max-w-md w-full p-6 rounded-xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Header */}
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-10 h-10 rounded-lg bg-cyan-electric/20 flex items-center justify-center">
+                  <AlertCircle size={20} className="text-cyan-electric" />
+                </div>
+                <h3 className="font-display font-semibold text-ocean-deep">确认操作</h3>
+              </div>
+
+              {/* Content */}
+              <div className="mb-6">
+                <p className="text-sm text-ocean-depth/70 font-body whitespace-pre-wrap break-words">
+                  {interruptInfo.content}
+                </p>
+              </div>
+
+              {/* Buttons */}
+              <div className="flex items-center justify-end gap-3">
+                <motion.button
+                  onClick={() => handleInterruptConfirm(false)}
+                  className="btn-glass px-4 py-2 rounded-lg flex items-center gap-2 text-red-500 border-red-500/30 hover:bg-red-500/10"
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                >
+                  <XCircle size={16} />
+                  <span className="font-body">拒绝</span>
+                </motion.button>
+                <motion.button
+                  onClick={() => handleInterruptConfirm(true)}
+                  className="btn-primary px-4 py-2 rounded-lg flex items-center gap-2"
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                >
+                  <CheckCircle2 size={16} />
+                  <span className="font-body">同意</span>
+                </motion.button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   )
 }
