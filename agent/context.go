@@ -70,6 +70,13 @@ The following principles define your personality and refined behavioral patterns
 **Current Time**: %s
 **Workspace**: %s
 
+**Path Reference Protocol**:
+When 'skill.md' references or imports secondary markdown files:
+- **Directory Anchoring**: All relative paths MUST be resolved relative to the directory containing the 'skill.md' file.
+- **No Global Search**: Do not perform a global or recursive search across the entire file system.
+- **Relative Resolution**: Treat the current skill folder as the root for all dependency loading.
+- **Strict Localization**: If a file path is ambiguous, prioritize the local skill directory.
+
 IMPORTANT: When using filesystem tools (ls, read_file, glob, grep, etc.), you MUST use absolute paths.
 
 {user_preferences}

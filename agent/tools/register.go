@@ -264,8 +264,7 @@ func (ai *ApprovalInfo) String() string {
 	if ai.customPrompt != "" {
 		return ai.customPrompt
 	}
-	return fmt.Sprintf("tool '%s' interrupted with arguments '%s', waiting for your approval, "+
-		"please answer with Y/N",
+	return fmt.Sprintf("工具 '%s' 正在用参数 '%s' 执行,等待你的确认审核. 请回复 Y/N ",
 		ai.ToolName, ai.ArgumentsInJSON)
 }
 
