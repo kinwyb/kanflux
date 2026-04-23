@@ -149,6 +149,7 @@ export default function ChatPanel() {
         const toolId = event.tool_info.id
         const toolName = event.tool_info.name
         const replyTo = event.reply_to
+        const blockId = `block-${originalReplyTo}-${toolId}`
 
         // 用原始ID找到消息组
         const existingMsg = chatMessages.find(m => extractOriginalId(m.id) === originalReplyTo)
@@ -157,7 +158,7 @@ export default function ChatPanel() {
 
         if (event.tool_info.is_start) {
           const newTool: MessageBlock = {
-            id: `block-${toolId}`,
+            id: blockId,
             type: 'tool_call',
             toolInfo: {
               id: toolId,
@@ -182,14 +183,14 @@ export default function ChatPanel() {
           }))
 
         } else {
-          // 用原始ID找到消息组
+          // 用原始ID找到消息组，用块ID匹配
           setChatMessages(prev => prev.map(msg => {
             if (extractOriginalId(msg.id) === originalReplyTo) {
               return {
                 ...msg,
                 id: replyTo, // 更新为带序号的ID
                 messageBlocks: (msg.messageBlocks || []).map(block => {
-                  if (block.type === 'tool_call' && block.toolInfo?.id === toolId) {
+                  if (block.type === 'tool_call' && block.id === blockId && block.toolInfo) {
                     return {
                       ...block,
                       toolInfo: {
@@ -207,7 +208,7 @@ export default function ChatPanel() {
             return msg
           }))
         }
-
+        
       } else if (event.state === 'complete' || event.state === 'error') {
         setIsAgentThinking(false)
         const replyTo = event.reply_to
@@ -346,7 +347,6 @@ export default function ChatPanel() {
 
     const response = approved ? 'y' : 'n'
     const messageId = generateMessageId(interruptInfo.replyTo)
-    console.log('===中断确认发送消息===', { originalId: interruptInfo.replyTo, messageId })
     const inbound: InboundMessage = {
       id: messageId,
       channel: WEB_CHANNEL,
@@ -507,7 +507,7 @@ export default function ChatPanel() {
         if (!block.toolInfo) return null
         return (
           <div key={block.id} className="flex flex-col gap-2 mb-2">
-            {renderToolCall(block.toolInfo, true)}
+            {renderToolCall(block.toolInfo, block.toolInfo.status === 'running')}
           </div>
         )
 
