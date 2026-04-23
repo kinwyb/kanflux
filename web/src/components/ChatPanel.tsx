@@ -79,12 +79,12 @@ export default function ChatPanel() {
       messageSendCounts.current.set(baseId, count)
       return `${baseId}_${count}`
     }
-    // 第一次发送（无序号）
-    const count = messageSendCounts.current.get(originalId) || 0
-    messageSendCounts.current.set(originalId, count + 1)
-    // count=0 时是第一次，返回原始ID；count>=1 时返回 _1, _2...
-    if (count === 0) {
-      return originalId
+    // 第一次发送（无序号），记录count=1
+    const count = (messageSendCounts.current.get(originalId) || 0) + 1
+    messageSendCounts.current.set(originalId, count)
+    // 第二次开始返回带序号的ID
+    if (count === 1) {
+      return `${originalId}_1`
     }
     return `${originalId}_${count}`
   }
@@ -263,34 +263,40 @@ export default function ChatPanel() {
           const blockType = isThinking ? 'thinking' : 'output'
           const content = isThinking ? msg.reasoning_content : msg.content
 
-          // 找到同类型的块，直接覆盖更新（不用累积）
+          // 用 reply_to 作为块ID的一部分来匹配：block-{reply_to}-{type}
+          const blockId = `block-${replyTo}-${blockType}`
           const existingBlocks = targetMsg.messageBlocks || []
-          const existingBlockIdx = existingBlocks.findIndex(b => b.type === blockType)
+          const existingBlockIdx = existingBlocks.findIndex(b => b.id === blockId)
 
           let newBlocks: MessageBlock[]
           if (existingBlockIdx >= 0) {
-            // 同类型块已存在，直接覆盖更新
-            newBlocks = existingBlocks.map((block, idx) => {
-              if (idx === existingBlockIdx) {
-                return {
-                  ...block,
-                  content: content,
-                  reasoning: isThinking ? content : block.reasoning,
-                  timestamp: new Date()
+            // 找到对应ID的块，覆盖更新，同时移除 start 块
+            newBlocks = existingBlocks
+              .map((block, idx) => {
+                // 移除 start 块
+                if (block.type === 'start') return null
+                // 覆盖对应ID的块
+                if (idx === existingBlockIdx) {
+                  return {
+                    ...block,
+                    content: content,
+                    reasoning: isThinking ? content : block.reasoning,
+                    timestamp: new Date()
+                  }
                 }
-              }
-              return block
-            })
+                return block
+              })
+              .filter((b): b is MessageBlock => b !== null)
           } else {
-            // 没有同类型块，创建新块
+            // 没有找到对应ID的块，新增块，同时移除 start 块
             const newBlock: MessageBlock = {
-              id: `block-${Date.now()}-${blockType}`,
+              id: blockId,
               type: blockType,
               content: content,
               reasoning: isThinking ? content : undefined,
               timestamp: new Date()
             }
-            newBlocks = [...existingBlocks, newBlock]
+            newBlocks = [...existingBlocks.filter(b => b.type !== 'start'), newBlock]
           }
 
           // 更新消息ID为带序号的ID
@@ -340,6 +346,7 @@ export default function ChatPanel() {
 
     const response = approved ? 'y' : 'n'
     const messageId = generateMessageId(interruptInfo.replyTo)
+    console.log('===中断确认发送消息===', { originalId: interruptInfo.replyTo, messageId })
     const inbound: InboundMessage = {
       id: messageId,
       channel: WEB_CHANNEL,
