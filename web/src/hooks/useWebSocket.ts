@@ -309,6 +309,8 @@ export function useWebSocket(): UseWebSocketReturn {
         metadata: response.metadata,
         messages: (response.messages || []).map((m): SessionMessage => ({
           role: m.role as 'user' | 'assistant' | 'tool' | 'system',
+          id:m.id,
+          reasoning:m.reasoning,
           content: m.content,
           tool_call_id: m.tool_call_id,
           name: m.name,

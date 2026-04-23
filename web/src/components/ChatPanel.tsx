@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Send, Bot, User, Sparkles, Loader2, Wrench, CheckCircle2, XCircle, ChevronDown, ChevronRight, MessageSquare, Plus, AlertCircle } from 'lucide-react'
 import { useWebSocketContext } from '../contexts/WebSocketContext'
-import { useConversationContext, sessionToChatMessage, WEB_CHANNEL, WEB_ACCOUNT_ID } from '../contexts/ConversationContext'
+import { useConversationContext, sessionToChatMessage, extractOriginalId, WEB_CHANNEL, WEB_ACCOUNT_ID } from '../contexts/ConversationContext'
 import type { ChatMessage, InboundMessage, MessageBlock } from '../types'
 import { format } from 'date-fns'
 import ReactMarkdown from 'react-markdown'
@@ -56,19 +56,13 @@ export default function ChatPanel() {
 
       loadHistory(sessionKey).then(session => {
         if (session && session.messages.length > 0) {
-          const historyMessages = session.messages
-            .filter(msg => msg.role === 'user' || msg.role === 'assistant')
-            .map((msg, idx) => sessionToChatMessage(msg, idx))
+          console.log("==sessions==",session.messages)
+          const historyMessages = sessionToChatMessage(session.messages)
           setChatMessages(historyMessages)
         }
       })
     }
   }, [connectionState, activeConversationId, getActiveSessionKey, loadHistory])
-
-  const extractOriginalId = (id: string): string => {
-    const match = id.match(/^(.+)_(\d+)$/)
-    return match ? match[1] : id
-  }
 
   const generateMessageId = (originalId: string): string => {
     // 检查是否已经有序号了

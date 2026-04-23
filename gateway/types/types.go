@@ -11,12 +11,12 @@ type MessageType string
 
 const (
 	// 客户端 -> 服务端
-	MsgTypeInbound     MessageType = "inbound"     // 入站消息
-	MsgTypeSubscribe   MessageType = "subscribe"   // 订阅请求
-	MsgTypeHeartbeat   MessageType = "heartbeat"   // 心跳
-	MsgTypeControl     MessageType = "control"     // 控制消息（如 shutdown）
-	MsgTypeSessionList MessageType = "session_list" // 获取 session 列表
-	MsgTypeSessionGet  MessageType = "session_get"  // 获取 session 内容
+	MsgTypeInbound       MessageType = "inbound"        // 入站消息
+	MsgTypeSubscribe     MessageType = "subscribe"      // 订阅请求
+	MsgTypeHeartbeat     MessageType = "heartbeat"      // 心跳
+	MsgTypeControl       MessageType = "control"        // 控制消息（如 shutdown）
+	MsgTypeSessionList   MessageType = "session_list"   // 获取 session 列表
+	MsgTypeSessionGet    MessageType = "session_get"    // 获取 session 内容
 	MsgTypeSessionDelete MessageType = "session_delete" // 删除 session
 	// 定时任务管理
 	MsgTypeTaskList    MessageType = "task_list"    // 获取任务列表
@@ -30,14 +30,14 @@ const (
 	MsgTypeConfigUpdate MessageType = "config_update" // 更新配置
 
 	// 服务端 -> 客户端
-	MsgTypeOutbound        MessageType = "outbound"        // 出站消息
-	MsgTypeChatEvent       MessageType = "chat_event"      // 聊天事件（流式）
-	MsgTypeLogEvent        MessageType = "log_event"       // 日志事件
-	MsgTypeHeartbeatAck    MessageType = "heartbeat_ack"   // 心跳响应
-	MsgTypeControlAck      MessageType = "control_ack"     // 控制消息响应
-	MsgTypeError           MessageType = "error"           // 错误消息
-	MsgTypeSessionListAck  MessageType = "session_list_ack" // session 列表响应
-	MsgTypeSessionGetAck   MessageType = "session_get_ack"  // session 内容响应
+	MsgTypeOutbound         MessageType = "outbound"           // 出站消息
+	MsgTypeChatEvent        MessageType = "chat_event"         // 聊天事件（流式）
+	MsgTypeLogEvent         MessageType = "log_event"          // 日志事件
+	MsgTypeHeartbeatAck     MessageType = "heartbeat_ack"      // 心跳响应
+	MsgTypeControlAck       MessageType = "control_ack"        // 控制消息响应
+	MsgTypeError            MessageType = "error"              // 错误消息
+	MsgTypeSessionListAck   MessageType = "session_list_ack"   // session 列表响应
+	MsgTypeSessionGetAck    MessageType = "session_get_ack"    // session 内容响应
 	MsgTypeSessionDeleteAck MessageType = "session_delete_ack" // session 删除响应
 	// 定时任务响应
 	MsgTypeTaskListAck    MessageType = "task_list_ack"    // 任务列表响应
@@ -184,8 +184,8 @@ type SessionMetaPayload struct {
 
 // SessionListAckPayload session 列表响应 payload
 type SessionListAckPayload struct {
-	Success bool                `json:"success"`
-	Error   string              `json:"error,omitempty"`
+	Success  bool                  `json:"success"`
+	Error    string                `json:"error,omitempty"`
 	Sessions []*SessionMetaPayload `json:"sessions,omitempty"`
 }
 
@@ -196,7 +196,9 @@ type SessionGetPayload struct {
 
 // MessagePayload 消息 payload（用于 session 内容返回）
 type MessagePayload struct {
+	ID         string             `json:"id"`
 	Role       string             `json:"role"`
+	Reasoning  string             `json:"reasoning"`
 	Content    string             `json:"content"`
 	ToolCallID string             `json:"tool_call_id,omitempty"`
 	Name       string             `json:"name,omitempty"`
@@ -205,8 +207,8 @@ type MessagePayload struct {
 
 // ToolCallPayload 工具调用 payload
 type ToolCallPayload struct {
-	ID       string             `json:"id"`
-	Type     string             `json:"type"`
+	ID       string               `json:"id"`
+	Type     string               `json:"type"`
 	Function *ToolFunctionPayload `json:"function"`
 }
 
@@ -225,14 +227,14 @@ type InstructionPayload struct {
 
 // SessionGetAckPayload session 内容响应 payload
 type SessionGetAckPayload struct {
-	Success      bool                 `json:"success"`
-	Error        string               `json:"error,omitempty"`
-	Key          string               `json:"key,omitempty"`
-	CreatedAt    string               `json:"created_at,omitempty"`
-	UpdatedAt    string               `json:"updated_at,omitempty"`
+	Success      bool                   `json:"success"`
+	Error        string                 `json:"error,omitempty"`
+	Key          string                 `json:"key,omitempty"`
+	CreatedAt    string                 `json:"created_at,omitempty"`
+	UpdatedAt    string                 `json:"updated_at,omitempty"`
 	Metadata     map[string]interface{} `json:"metadata,omitempty"`
-	Messages     []*MessagePayload    `json:"messages,omitempty"`
-	Instructions []*InstructionPayload `json:"instructions,omitempty"`
+	Messages     []*MessagePayload      `json:"messages,omitempty"`
+	Instructions []*InstructionPayload  `json:"instructions,omitempty"`
 }
 
 // SessionDeletePayload session 删除请求 payload
@@ -254,10 +256,10 @@ type TaskListPayload struct{}
 
 // TaskAddPayload 添加任务请求 payload
 type TaskAddPayload struct {
-	ID          string         `json:"id"`
-	Name        string         `json:"name"`
-	Description string         `json:"description,omitempty"`
-	Enabled     bool           `json:"enabled"`
+	ID          string          `json:"id"`
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Enabled     bool            `json:"enabled"`
 	Schedule    SchedulePayload `json:"schedule"`
 	Target      TargetPayload   `json:"target"`
 	Content     ContentPayload  `json:"content"`
@@ -265,10 +267,10 @@ type TaskAddPayload struct {
 
 // TaskUpdatePayload 更新任务请求 payload
 type TaskUpdatePayload struct {
-	ID          string          `json:"id"`
-	Name        string          `json:"name,omitempty"`
-	Description string          `json:"description,omitempty"`
-	Enabled     bool            `json:"enabled,omitempty"`
+	ID          string           `json:"id"`
+	Name        string           `json:"name,omitempty"`
+	Description string           `json:"description,omitempty"`
+	Enabled     bool             `json:"enabled,omitempty"`
 	Schedule    *SchedulePayload `json:"schedule,omitempty"`
 	Target      *TargetPayload   `json:"target,omitempty"`
 	Content     *ContentPayload  `json:"content,omitempty"`
@@ -309,8 +311,8 @@ type ContentPayload struct {
 
 // TaskListAckPayload 任务列表响应 payload
 type TaskListAckPayload struct {
-	Success bool              `json:"success"`
-	Error   string            `json:"error,omitempty"`
+	Success bool                 `json:"success"`
+	Error   string               `json:"error,omitempty"`
 	Tasks   []*TaskDetailPayload `json:"tasks,omitempty"`
 }
 
@@ -323,20 +325,20 @@ type TaskDetailPayload struct {
 	Schedule    SchedulePayload   `json:"schedule"`
 	Target      TargetPayload     `json:"target"`
 	Content     ContentPayload    `json:"content"`
-	NextRun     int64             `json:"next_run,omitempty"`   // Unix 时间戳（毫秒）
-	LastRun     int64             `json:"last_run,omitempty"`   // Unix 时间戳（毫秒）
+	NextRun     int64             `json:"next_run,omitempty"` // Unix 时间戳（毫秒）
+	LastRun     int64             `json:"last_run,omitempty"` // Unix 时间戳（毫秒）
 	IsRunning   bool              `json:"is_running"`
 	State       *TaskStatePayload `json:"state,omitempty"`
 }
 
 // TaskStatePayload 任务状态 payload
 type TaskStatePayload struct {
-	LastRun      int64  `json:"last_run,omitempty"`    // Unix 时间戳（毫秒）
+	LastRun      int64  `json:"last_run,omitempty"` // Unix 时间戳（毫秒）
 	LastResult   string `json:"last_result,omitempty"`
 	LastError    string `json:"last_error,omitempty"`
 	SuccessCount int    `json:"success_count"`
 	FailCount    int    `json:"fail_count"`
-	NextRun      int64  `json:"next_run,omitempty"`    // Unix 时间戳（毫秒）
+	NextRun      int64  `json:"next_run,omitempty"` // Unix 时间戳（毫秒）
 }
 
 // TaskAddAckPayload 添加任务响应 payload

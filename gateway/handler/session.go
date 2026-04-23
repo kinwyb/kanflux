@@ -3,7 +3,9 @@ package handler
 
 import (
 	"context"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/kinwyb/kanflux/gateway/types"
 	"github.com/kinwyb/kanflux/session"
@@ -130,9 +132,13 @@ func (h *SessionGetHandler) Handle(ctx context.Context, conn Conn, msg *types.WS
 	for _, m := range history {
 		msgPayload := &types.MessagePayload{
 			Role:       string(m.Role),
-			Content:    m.Content,
+			Content:    strings.TrimLeftFunc(m.Content, unicode.IsSpace),
 			ToolCallID: m.ToolCallID,
 			Name:       m.Name,
+			Reasoning:  strings.TrimLeftFunc(m.ReasoningContent, unicode.IsSpace),
+		}
+		if m.Extra != nil {
+			msgPayload.ID = m.Extra["req_id"].(string)
 		}
 		// 转换 ToolCalls
 		if len(m.ToolCalls) > 0 {

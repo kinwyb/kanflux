@@ -821,6 +821,12 @@ func (m *Manager) handleInboundMessage(ctx context.Context, msg *bus.InboundMess
 	if len(responses) > historyLen { // +1 是因为添加了用户消息
 		newResponses := responses[historyLen:]
 		for _, resp := range newResponses {
+			if resp.Extra == nil {
+				resp.Extra = make(map[string]interface{})
+			}
+			if v, ok := resp.Extra["req_id"]; !ok || v == "" {
+				resp.Extra["req_id"] = msg.ID
+			}
 			sess.AddMessage(resp)
 		}
 	}

@@ -87,6 +87,8 @@ export interface InstructionEntry {
 
 export interface SessionMessage {
   role: 'user' | 'assistant' | 'tool' | 'system'
+  id: string
+  reasoning: string
   content: string
   tool_calls?: ToolCall[]
   tool_call_id?: string
@@ -128,7 +130,7 @@ export interface MessageBlock {
 
 export interface ChatMessage {
   id: string
-  role: 'user' | 'assistant'
+  role: 'user' | 'assistant' | 'tool' | 'system'
   content: string
   timestamp: Date
   isStreaming?: boolean
@@ -218,7 +220,9 @@ export interface SessionGetAckPayload {
 }
 
 export interface SessionMessagePayload {
+  id:string
   role: string
+  reasoning: string
   content: string
   tool_call_id?: string
   name?: string

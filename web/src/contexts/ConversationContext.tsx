@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react'
 import { useWebSocketContext } from './WebSocketContext'
-import type { Conversation, Session, SessionMessage, ToolCall } from '../types'
+import type {Conversation, Session, SessionMessage, MessageBlock, ChatMessage} from '../types'
 
 // Web channel constants
 export const WEB_CHANNEL = 'web'
@@ -43,15 +43,113 @@ export function useConversationContext(): ConversationContextValue {
   return context
 }
 
-// Convert SessionMessage to display message format
-function sessionToChatMessage(msg: SessionMessage, idx: number): { id: string; role: 'user' | 'assistant'; content: string; timestamp: Date; toolCalls?: ToolCall[] } {
-  return {
-    id: `history-${idx}`,
-    role: msg.role === 'tool' || msg.role === 'system' ? 'assistant' : msg.role,
-    content: msg.content,
-    timestamp: msg.timestamp || new Date(),
-    toolCalls: msg.tool_calls,
-  }
+// Extract original ID from message ID (e.g., "msg_1" -> "msg")
+function extractOriginalId(id: string): string {
+  const match = id.match(/^(.+)_(\d+)$/)
+  return match ? match[1] : id
+}
+
+// Convert SessionMessages to display message format (for history loading)
+function sessionToChatMessage(messages: SessionMessage[]): ChatMessage[] {
+  // 按原始ID分组消息
+  const groupedMessages = new Map<string, SessionMessage[]>()
+
+  messages
+    .filter(msg => msg.role === 'user' || msg.role === 'assistant' || msg.role === 'tool')
+    .forEach(msg => {
+      const originalId = extractOriginalId(msg.id)
+      if (!groupedMessages.has(originalId)) {
+        groupedMessages.set(originalId, [])
+      }
+      groupedMessages.get(originalId)!.push(msg)
+    })
+
+  // 转换为 ChatMessage 格式
+  const result: ChatMessage[] = []
+
+  groupedMessages.forEach((msgs, originalId) => {
+    const messageBlocks: MessageBlock[] = []
+
+    msgs.forEach(msg => {
+      if (msg.role === 'user') {
+        result.push({
+          id: originalId+"_user",
+          role: msg.role,
+          content: msg.content || '',
+          timestamp: msg.timestamp || new Date(),
+          messageBlocks: messageBlocks.length > 0 ? messageBlocks : undefined,
+        })
+        return
+      }
+      // 添加思考块
+      if (msg.reasoning) {
+        messageBlocks.push({
+          id: `history-block-${msg.id}-thinking`,
+          type: 'thinking',
+          reasoning: msg.reasoning,
+          timestamp: msg.timestamp || new Date(),
+        })
+      }
+      // 添加内容块
+      if (!msg.tool_call_id && msg.content) {
+        messageBlocks.push({
+          id: `history-block-${msg.id}-output`,
+          type: 'output',
+          content: msg.content,
+          timestamp: msg.timestamp || new Date(),
+        })
+      }
+
+      // 添加工具调用块
+      if (msg.tool_calls && msg.tool_calls.length > 0) {
+        for (const tc of msg.tool_calls) {
+          messageBlocks.push({
+            id: `history-block-${msg.id}-${tc.id}`,
+            type: 'tool_call',
+            toolInfo: {
+              id: tc.id,
+              name: tc.function.name,
+              arguments: tc.function.arguments,
+              status: 'completed',
+              startTime: msg.timestamp || new Date(),
+              endTime: msg.timestamp || new Date(),
+            },
+            timestamp: msg.timestamp || new Date(),
+          })
+        }
+      }
+
+      // 添加工具结果块
+      if (msg.tool_call_id && msg.content) {
+        var blockid =  `history-block-${msg.id}-${msg.tool_call_id}`
+        var block =  messageBlocks.find(v => v.type === 'tool_call' && v.id === blockid)
+        if(block && block.toolInfo) {
+          block.toolInfo.result = msg.content
+          block.toolInfo.endTime = msg.timestamp || new Date()
+        }else{
+          messageBlocks.push({
+            id: `history-block-${msg.id}-result-${msg.tool_call_id}`,
+            type: 'tool_result',
+            content: msg.content,
+            timestamp: msg.timestamp || new Date(),
+          })
+        }
+      }
+    })
+
+    // 使用最后一条消息的信息
+    const lastMsg = msgs[msgs.length - 1]
+    result.push({
+      id: originalId,
+      role: lastMsg.role,
+      content: lastMsg.content || '',
+      timestamp: lastMsg.timestamp || new Date(),
+      messageBlocks: messageBlocks.length > 0 ? messageBlocks : undefined,
+    })
+  })
+
+  // 按时间戳排序
+  return result.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
 }
 
 // Extract title from first user message
@@ -243,4 +341,4 @@ export function ConversationProvider({ children }: { children: React.ReactNode }
   )
 }
 
-export { sessionToChatMessage }
+export { sessionToChatMessage, extractOriginalId }
