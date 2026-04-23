@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/kinwyb/kanflux/agent/tools"
 	"github.com/kinwyb/kanflux/bus"
@@ -971,28 +972,39 @@ func (m *Manager) removeAccumulator(msgID string) {
 func (m *Manager) publishStreamOutbound(ctx context.Context, msg *bus.InboundMessage, agentName string, event *Event, seq int) {
 	// 获取累积模式配置
 	accumulateMode := msg.StreamingMode == bus.StreamingModeAccumulate
+	// 新增的内容
+	contentToAdd := event.Message.Content
+	thinkToAdd := event.Message.ReasoningContent
 
 	// 累积内容（使用入站消息ID作为标识，避免同chatID多条消息混淆）
 	acc := m.getOrCreateAccumulator(msg.ID)
 
+	// 第一个 chunk 去掉开头的回车或空格
+	if acc.content == "" {
+		contentToAdd = strings.TrimLeftFunc(contentToAdd, unicode.IsSpace)
+	}
+	if acc.thinking == "" {
+		thinkToAdd = strings.TrimLeftFunc(thinkToAdd, unicode.IsSpace)
+		thinkToAdd = cleanModelOutput(thinkToAdd)
+	}
+
 	var content, reasoning string
-	if event.Message.ReasoningContent != "" {
-		event.Message.ReasoningContent = cleanModelOutput(event.Message.ReasoningContent)
-		acc.thinking += event.Message.ReasoningContent
+	if thinkToAdd != "" {
+		acc.thinking += thinkToAdd
 		if accumulateMode {
 			reasoning = acc.thinking
 			content = acc.content
 		} else {
-			reasoning = event.Message.ReasoningContent
+			reasoning = thinkToAdd
 			content = ""
 		}
 	} else {
-		acc.content += event.Message.Content
+		acc.content += contentToAdd
 		if accumulateMode {
 			content = acc.content
 			reasoning = acc.thinking
 		} else {
-			content = event.Message.Content
+			content = contentToAdd
 			reasoning = ""
 		}
 	}
@@ -1011,7 +1023,7 @@ func (m *Manager) publishStreamOutbound(ctx context.Context, msg *bus.InboundMes
 		Content:          content,
 		ReasoningContent: reasoning,
 		IsStreaming:      true,
-		IsThinking:       event.Message.ReasoningContent != "",
+		IsThinking:       thinkToAdd != "",
 		IsFinal:          false,
 		ChunkIndex:       seq,
 		ReplyTo:          msg.ID,
@@ -1033,16 +1045,18 @@ func (m *Manager) publishFinalOutbound(ctx context.Context, msg *bus.InboundMess
 			outboundMeta[k] = v
 		}
 	}
+	content := strings.TrimLeftFunc(event.Message.Content, unicode.IsSpace)
+	think := strings.TrimLeftFunc(event.Message.ReasoningContent, unicode.IsSpace)
 
 	// 最终消息直接使用完整内容
 	outbound := &bus.OutboundMessage{
 		Channel:          msg.Channel,
 		ChatID:           msg.ChatID,
-		Content:          event.Message.Content,
-		ReasoningContent: event.Message.ReasoningContent,
+		Content:          content,
+		ReasoningContent: think,
 		IsStreaming:      true,
 		IsFinal:          true,
-		IsThinking:       event.Message.ReasoningContent != "",
+		IsThinking:       think != "",
 		ChunkIndex:       seq,
 		ReplyTo:          msg.ID,
 		Timestamp:        time.Now(),
