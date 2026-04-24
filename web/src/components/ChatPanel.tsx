@@ -17,7 +17,7 @@ interface InterruptInfo {
 }
 
 export default function ChatPanel() {
-  const { connectionState, messages, events, sendMessage } = useWebSocketContext()
+  const { connectionState, messages, events, sendMessage, clearEvents } = useWebSocketContext()
   const {
     activeConversationId,
     getActiveSessionKey,
@@ -53,6 +53,7 @@ export default function ChatPanel() {
       setChatMessages([])
       setIsAgentThinking(false)
       processedEventIds.current.clear()
+      clearEvents()
 
       loadHistory(sessionKey).then(session => {
         if (session && session.messages.length > 0) {

@@ -22,6 +22,7 @@ interface WebSocketContextValue {
   sendMessage: (message: InboundMessage) => void
   clearMessages: () => void
   clearLogs: () => void
+  clearEvents: () => void
   // Session methods
   fetchSessionList: (dateStart?: string, dateEnd?: string) => Promise<SessionMetaPayload[]>
   fetchSession: (key: string) => Promise<Session | null>

@@ -45,6 +45,7 @@ interface UseWebSocketReturn {
   sendMessage: (message: InboundMessage) => void
   clearMessages: () => void
   clearLogs: () => void
+  clearEvents: () => void
   // Session methods
   fetchSessionList: (dateStart?: string, dateEnd?: string) => Promise<SessionMetaPayload[]>
   fetchSession: (key: string) => Promise<Session | null>
@@ -272,6 +273,10 @@ export function useWebSocket(): UseWebSocketReturn {
 
   const clearLogs = useCallback(() => {
     setLogs([])
+  }, [])
+
+  const clearEvents = useCallback(() => {
+    setEvents([])
   }, [])
 
   // Fetch session list
@@ -532,6 +537,7 @@ export function useWebSocket(): UseWebSocketReturn {
     sendMessage,
     clearMessages,
     clearLogs,
+    clearEvents,
     fetchSessionList,
     fetchSession,
     deleteSession,
