@@ -322,6 +322,7 @@ export function useWebSocket(): UseWebSocketReturn {
               arguments: tc.function.arguments,
             },
           })),
+          timestamp: m.timestamp ? new Date(m.timestamp) : undefined,
         })),
         instructions: (response.instructions || []).map((i) => ({
           type: 'instruction',

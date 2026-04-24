@@ -227,6 +227,7 @@ export interface SessionMessagePayload {
   tool_call_id?: string
   name?: string
   tool_calls?: ToolCallPayload[]
+  timestamp?: string
 }
 
 export interface ToolCallPayload {
