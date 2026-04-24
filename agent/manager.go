@@ -755,7 +755,10 @@ func (m *Manager) handleInboundMessage(ctx context.Context, msg *bus.InboundMess
 
 		// 将用户消息添加到 session（支持媒体内容）
 		userMsg := buildUserMessage(msg.Content, msg.Media)
-		userMsg.Extra["timestamp"] = time.Now()
+		if userMsg.Extra == nil {
+			userMsg.Extra = make(map[string]interface{})
+		}
+		userMsg.Extra["timestamp"] = time.Now().Format(time.RFC3339)
 		newMessages := append(history, userMsg)
 
 		// 使用 Agent 处理消息
@@ -826,7 +829,7 @@ func (m *Manager) handleInboundMessage(ctx context.Context, msg *bus.InboundMess
 				resp.Extra = make(map[string]interface{})
 			}
 			if resp.Extra["timestamp"] == nil {
-				resp.Extra["timestamp"] = time.Now()
+				resp.Extra["timestamp"] = time.Now().Format(time.RFC3339)
 			}
 			if v, ok := resp.Extra["req_id"]; !ok || v == "" {
 				resp.Extra["req_id"] = msg.ID

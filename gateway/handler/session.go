@@ -139,8 +139,8 @@ func (h *SessionGetHandler) Handle(ctx context.Context, conn Conn, msg *types.WS
 		}
 		if m.Extra != nil {
 			msgPayload.ID = m.Extra["req_id"].(string)
-			if ts, ok := m.Extra["timestamp"].(time.Time); ok {
-				msgPayload.Timestamp = ts.Format(time.RFC3339)
+			if ts, ok := m.Extra["timestamp"].(string); ok {
+				msgPayload.Timestamp = ts
 			}
 		}
 		// 转换 ToolCalls

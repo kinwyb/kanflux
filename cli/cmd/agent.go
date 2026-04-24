@@ -205,7 +205,7 @@ func runDirect(ctx context.Context, cfg *config.Config, agentName, message strin
 				m.Extra = make(map[string]interface{})
 			}
 			if m.Extra["timestamp"] == nil {
-				m.Extra["timestamp"] = time.Now()
+				m.Extra["timestamp"] = time.Now().Format(time.RFC3339)
 			}
 			sess.AddMessage(m)
 		}
