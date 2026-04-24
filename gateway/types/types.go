@@ -203,6 +203,7 @@ type MessagePayload struct {
 	ToolCallID string             `json:"tool_call_id,omitempty"`
 	Name       string             `json:"name,omitempty"`
 	ToolCalls  []*ToolCallPayload `json:"tool_calls,omitempty"`
+	Timestamp  string             `json:"timestamp,omitempty"`
 }
 
 // ToolCallPayload 工具调用 payload

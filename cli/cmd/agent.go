@@ -201,6 +201,12 @@ func runDirect(ctx context.Context, cfg *config.Config, agentName, message strin
 	if len(resp) > len(history) {
 		newResp := resp[len(history):]
 		for _, m := range newResp {
+			if m.Extra == nil {
+				m.Extra = make(map[string]interface{})
+			}
+			if m.Extra["timestamp"] == nil {
+				m.Extra["timestamp"] = time.Now()
+			}
 			sess.AddMessage(m)
 		}
 	}
