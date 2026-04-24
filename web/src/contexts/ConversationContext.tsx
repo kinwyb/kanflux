@@ -104,7 +104,7 @@ function sessionToChatMessage(messages: SessionMessage[]): ChatMessage[] {
       if (msg.tool_calls && msg.tool_calls.length > 0) {
         for (const tc of msg.tool_calls) {
           messageBlocks.push({
-            id: `history-block-${msg.id}-${tc.id}`,
+            id: `history-block-${originalId}-${tc.id}`,
             type: 'tool_call',
             toolInfo: {
               id: tc.id,
@@ -121,7 +121,7 @@ function sessionToChatMessage(messages: SessionMessage[]): ChatMessage[] {
 
       // 添加工具结果块
       if (msg.tool_call_id && msg.content) {
-        var blockid =  `history-block-${msg.id}-${msg.tool_call_id}`
+        var blockid =  `history-block-${originalId}-${msg.tool_call_id}`
         var block =  messageBlocks.find(v => v.type === 'tool_call' && v.id === blockid)
         if(block && block.toolInfo) {
           block.toolInfo.result = msg.content

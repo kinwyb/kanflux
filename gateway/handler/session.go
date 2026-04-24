@@ -138,7 +138,9 @@ func (h *SessionGetHandler) Handle(ctx context.Context, conn Conn, msg *types.WS
 			Reasoning:  strings.TrimLeftFunc(m.ReasoningContent, unicode.IsSpace),
 		}
 		if m.Extra != nil {
-			msgPayload.ID = m.Extra["req_id"].(string)
+			if ri, ok := m.Extra["req_id"]; ok {
+				msgPayload.ID = ri.(string)
+			}
 			if ts, ok := m.Extra["timestamp"].(string); ok {
 				msgPayload.Timestamp = ts
 			}
