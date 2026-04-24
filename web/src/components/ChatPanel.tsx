@@ -99,29 +99,19 @@ export default function ChatPanel() {
       if (event.state === 'start') {
         setIsAgentThinking(true)
 
-        // 用原始ID找到消息组
+        // 消息可能在 handleSendMessage 时已经创建了（立即显示 start）
+        // 如果存在，说明是已处理的，跳过
         const existingMsg = chatMessages.find(m => extractOriginalId(m.id) === originalReplyTo)
-
         if (existingMsg) {
-          // 已有消息组，添加新的消息块
-          const newBlock: MessageBlock = {
-            id: `block-${Date.now()}-start`,
-            type: 'start',
-            timestamp: new Date()
-          }
+          // 消息已存在，只更新ID为带序号的ID
           setChatMessages(prev => prev.map(msg => {
             if (extractOriginalId(msg.id) === originalReplyTo) {
-              return {
-                ...msg,
-                id: replyTo, // 更新为带序号的ID
-                isStreaming: true,
-                messageBlocks: [...(msg.messageBlocks || []), newBlock]
-              }
+              return { ...msg, id: replyTo }
             }
             return msg
           }))
         } else {
-          // 没有消息组，创建新消息
+          // 没有消息组（理论上不应该走到这里），创建新消息
           const newMsg: ChatMessage = {
             id: replyTo,
             role: 'assistant',
@@ -164,7 +154,7 @@ export default function ChatPanel() {
             timestamp: new Date()
           }
 
-          // 用原始ID找到消息组，添加新块
+          // 用原始ID找到消息组，添加新块（保留 start 块）
           setChatMessages(prev => prev.map(msg => {
             if (extractOriginalId(msg.id) === originalReplyTo) {
               return {
@@ -207,13 +197,14 @@ export default function ChatPanel() {
         setIsAgentThinking(false)
         const replyTo = event.reply_to
 
-        // 用原始ID找到消息组
+        // 用原始ID找到消息组，移除 start 块
         setChatMessages(prev => prev.map(msg => {
           if (extractOriginalId(msg.id) === originalReplyTo) {
             return {
               ...msg,
               id: replyTo, // 更新为带序号的ID
-              isStreaming: false
+              isStreaming: false,
+              messageBlocks: (msg.messageBlocks || []).filter(b => b.type !== 'start')
             }
           }
           return msg
@@ -265,25 +256,21 @@ export default function ChatPanel() {
 
           let newBlocks: MessageBlock[]
           if (existingBlockIdx >= 0) {
-            // 找到对应ID的块，覆盖更新，同时移除 start 块
-            newBlocks = existingBlocks
-              .map((block, idx) => {
-                // 移除 start 块
-                if (block.type === 'start') return null
-                // 覆盖对应ID的块
-                if (idx === existingBlockIdx) {
-                  return {
-                    ...block,
-                    content: content,
-                    reasoning: isThinking ? content : block.reasoning,
-                    timestamp: new Date()
-                  }
+            // 找到对应ID的块，覆盖更新（保留 start 块）
+            newBlocks = existingBlocks.map((block, idx) => {
+              // 覆盖对应ID的块
+              if (idx === existingBlockIdx) {
+                return {
+                  ...block,
+                  content: content,
+                  reasoning: isThinking ? content : block.reasoning,
+                  timestamp: new Date()
                 }
-                return block
-              })
-              .filter((b): b is MessageBlock => b !== null)
+              }
+              return block
+            })
           } else {
-            // 没有找到对应ID的块，新增块，同时移除 start 块
+            // 没有找到对应ID的块，新增块（保留 start 块）
             const newBlock: MessageBlock = {
               id: blockId,
               type: blockType,
@@ -291,7 +278,7 @@ export default function ChatPanel() {
               reasoning: isThinking ? content : undefined,
               timestamp: new Date()
             }
-            newBlocks = [...existingBlocks.filter(b => b.type !== 'start'), newBlock]
+            newBlocks = [...existingBlocks, newBlock]
           }
 
           // 更新消息ID为带序号的ID
@@ -317,9 +304,25 @@ export default function ChatPanel() {
       timestamp: new Date(),
     }
 
-    setChatMessages(prev => [...prev, userMessage])
-
+    // 立即创建 assistant 消息块，带 start 状态（不等待服务器 start 事件）
     const messageId = `msg-${Date.now()}`
+    const assistantMessage: ChatMessage = {
+      id: messageId,
+      role: 'assistant',
+      content: '',
+      timestamp: new Date(),
+      isStreaming: true,
+      messageBlocks: [
+        {
+          id: `block-${messageId}-start`,
+          type: 'start',
+          timestamp: new Date()
+        }
+      ]
+    }
+
+    setChatMessages(prev => [...prev, userMessage, assistantMessage])
+
     const inbound: InboundMessage = {
       id: messageId,
       channel: WEB_CHANNEL,
