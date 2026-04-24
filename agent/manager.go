@@ -685,6 +685,7 @@ func (m *Manager) handleInboundMessage(ctx context.Context, msg *bus.InboundMess
 	ctx = context.WithValue(ctx, "channel", msg.Channel)
 	ctx = context.WithValue(ctx, "chat_id", msg.ChatID)
 	ctx = context.WithValue(ctx, "account_id", msg.AccountID)
+	ctx = context.WithValue(ctx, messageReqIDKey, msg.ID)
 
 	// 获取 agent 名称
 	agentName := agent.cfg.Name
@@ -758,7 +759,8 @@ func (m *Manager) handleInboundMessage(ctx context.Context, msg *bus.InboundMess
 		if userMsg.Extra == nil {
 			userMsg.Extra = make(map[string]interface{})
 		}
-		userMsg.Extra["timestamp"] = time.Now().Format(time.RFC3339)
+		userMsg.Extra[messageTimestampKey] = time.Now().Format(time.RFC3339)
+		userMsg.Extra[messageReqIDKey] = msg.ID
 		newMessages := append(history, userMsg)
 
 		// 使用 Agent 处理消息
@@ -825,15 +827,6 @@ func (m *Manager) handleInboundMessage(ctx context.Context, msg *bus.InboundMess
 	if len(responses) > historyLen { // +1 是因为添加了用户消息
 		newResponses := responses[historyLen:]
 		for _, resp := range newResponses {
-			if resp.Extra == nil {
-				resp.Extra = make(map[string]interface{})
-			}
-			if resp.Extra["timestamp"] == nil {
-				resp.Extra["timestamp"] = time.Now().Format(time.RFC3339)
-			}
-			if v, ok := resp.Extra["req_id"]; !ok || v == "" {
-				resp.Extra["req_id"] = msg.ID
-			}
 			sess.AddMessage(resp)
 		}
 	}

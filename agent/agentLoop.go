@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/compose"
@@ -181,6 +182,7 @@ func (o *looper) runLoop(ctx context.Context, messages []adk.Message, checkPoint
 
 // processEvents 公共事件处理逻辑
 func (o *looper) processEvents(ctx context.Context, allMsgs []adk.Message, events *adk.AsyncIterator[*adk.AgentEvent], checkPointID string) ([]adk.Message, error) {
+	msgID := ctx.Value(messageReqIDKey).(string)
 	for {
 		event, ok := events.Next()
 		if !ok {
@@ -218,7 +220,15 @@ func (o *looper) processEvents(ctx context.Context, allMsgs []adk.Message, event
 			} else {
 				o.emit(NewEvent(EventMessageEnd).WithMessage(msg))
 			}
-
+			if msg.Extra == nil {
+				msg.Extra = make(map[string]interface{})
+			}
+			if tv, hasT := msg.Extra[messageTimestampKey]; !hasT || tv == "" {
+				msg.Extra[messageTimestampKey] = time.Now().Format(time.RFC3339)
+			}
+			if iv, hasI := msg.Extra[messageReqIDKey]; !hasI || iv == "" {
+				msg.Extra[messageReqIDKey] = msgID
+			}
 			allMsgs = append(allMsgs, msg)
 		}
 	}

@@ -6,6 +6,11 @@ import (
 	"github.com/cloudwego/eino/adk"
 )
 
+const (
+	messageReqIDKey     = "req_id"
+	messageTimestampKey = "timestamp"
+)
+
 type EventType string
 
 const (
