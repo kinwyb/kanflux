@@ -287,7 +287,7 @@ func (c *WxComChannel) Send(ctx context.Context, msg *bus.OutboundMessage) error
 		return nil
 	}
 
-	// 从metadata获取req_id，同时用作streamID
+	// 从metadata获取req_id
 	reqID := msg.ReplyTo
 	if msg.Metadata != nil {
 		if id, ok := msg.Metadata["req_id"].(string); ok && id != "" {
@@ -295,7 +295,12 @@ func (c *WxComChannel) Send(ctx context.Context, msg *bus.OutboundMessage) error
 		}
 	}
 
-	// 如果没有req_id，生成一个用于主动发送
+	// 如果是事件消息，使用专用回复方法
+	if eventType := c.getEventType(msg); eventType != "" {
+		return c.sendEventReply(ctx, reqID, eventType, msg)
+	}
+
+	// 非事件消息，正常回复
 	if reqID == "" {
 		reqID = generateReqID(WsCmdSendMsg)
 	}
@@ -327,7 +332,7 @@ func (c *WxComChannel) SendStream(ctx context.Context, msg *bus.OutboundMessage)
 		return nil
 	}
 
-	// 从metadata获取req_id，同时用作streamID
+	// 从metadata获取req_id
 	reqID := msg.ReplyTo
 	if msg.Metadata != nil {
 		if id, ok := msg.Metadata["req_id"].(string); ok && id != "" {
@@ -335,7 +340,11 @@ func (c *WxComChannel) SendStream(ctx context.Context, msg *bus.OutboundMessage)
 		}
 	}
 
-	// 如果没有req_id，生成一个（主动发送场景）
+	// 如果是事件消息，使用专用回复方法（流式最终帧）
+	if eventType := c.getEventType(msg); eventType != "" && msg.IsFinal {
+		return c.sendEventReply(ctx, reqID, eventType, msg)
+	}
+
 	if reqID == "" {
 		reqID = generateReqID(WsCmdSendMsg)
 	}
@@ -359,6 +368,43 @@ func (c *WxComChannel) SendStream(ctx context.Context, msg *bus.OutboundMessage)
 	}
 
 	return nil
+}
+
+// getEventType 从消息元数据中获取事件类型
+func (c *WxComChannel) getEventType(msg *bus.OutboundMessage) string {
+	if msg.Metadata == nil {
+		return ""
+	}
+	if et, ok := msg.Metadata["event_type"].(string); ok {
+		return et
+	}
+	return ""
+}
+
+// sendEventReply 使用专用回复方法回复事件
+func (c *WxComChannel) sendEventReply(ctx context.Context, reqID, eventType string, msg *bus.OutboundMessage) error {
+	content := msg.Content
+	if msg.Error != "" {
+		content = msg.Error
+	}
+
+	switch eventType {
+	case EventTypeEnterChat:
+		if content == "" {
+			content = "你好"
+		}
+		return c.ReplyWelcome(ctx, reqID, content)
+
+	case EventTypeTemplateCardEvent:
+		return c.UpdateTemplateCard(ctx, reqID, NewTextNoticeCard("任务完成", content), nil)
+
+	case EventTypeFeedbackEvent:
+		return c.ReplyWelcome(ctx, reqID, content)
+
+	default:
+		_, err := c.wsManager.SendReply(ctx, reqID, c.handler.BuildTextReply(content), WsCmdResponse)
+		return err
+	}
 }
 
 // HandleChatEvent 处理聊天事件（仅状态通知）
