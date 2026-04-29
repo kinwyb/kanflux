@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"github.com/kinwyb/kanflux/assets"
 	"github.com/kinwyb/kanflux/agent"
 	"github.com/kinwyb/kanflux/bus"
 	"github.com/kinwyb/kanflux/channel"
@@ -23,23 +24,23 @@ import (
 
 // Gateway 后台服务
 type Gateway struct {
-	cfg          *config.Config
-	configPath   string              // 配置文件路径
-	workspace    string
-	msgBus       *bus.MessageBus
-	sessionMgr   *session.Manager
-	agentMgr     *agent.Manager
-	channelMgr   *channel.Manager
-	wsServer     *ws.Server
-	wsConfig     *ws.ServerConfig
+	cfg           *config.Config
+	configPath    string              // 配置文件路径
+	workspace     string
+	msgBus        *bus.MessageBus
+	sessionMgr    *session.Manager
+	agentMgr      *agent.Manager
+	channelMgr    *channel.Manager
+	wsServer      *ws.Server
+	wsConfig      *ws.ServerConfig
 	taskScheduler *scheduler.Scheduler // 定时任务调度器
-	configMgr    *config.Manager       // 配置管理器
+	configMgr     *config.Manager      // 配置管理器
 
-	ctx          context.Context
-	cancel       context.CancelFunc
+	ctx    context.Context
+	cancel context.CancelFunc
 
 	// 日志文件（需要关闭）
-	logFile      *os.File
+	logFile *os.File
 }
 
 // New 创建 Gateway 实例
@@ -143,6 +144,9 @@ func (g *Gateway) Start(ctx context.Context) error {
 
 	// 11. 创建 WebSocket 服务器
 	g.wsServer = ws.NewServer(g.msgBus, g.wsConfig, g.sessionMgr)
+	if assets.WebDist != nil {
+		g.wsServer.SetStaticFS(assets.WebDist)
+	}
 	g.wsServer.SetShutdownCallback(func() {
 		slog.Info("收到远程关闭请求")
 		p, _ := os.FindProcess(os.Getpid())
