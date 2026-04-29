@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -378,16 +379,30 @@ func (p *ChatProcessor) findFinalAnswer(messages []ChatMessage, startPos int) st
 	return ""
 }
 
+// thinkTagRegex matches <think>...
+// 思考标签块（非贪婪，多行）
+var thinkTagRegex = regexp.MustCompile(`(?s)<think>(.*?)</think>`)
+
+// stripThinkTags 移除文本中的 <think> 思考标签
+func stripThinkTags(text string) string {
+	cleaned := thinkTagRegex.ReplaceAllString(text, "")
+	// 处理未闭合的 <think> 标签
+	if idx := strings.Index(cleaned, "<think>"); idx >= 0 {
+		cleaned = cleaned[:idx]
+	}
+	return strings.TrimSpace(cleaned)
+}
+
 // extractMessageText extracts text content from a message
 func (p *ChatProcessor) extractMessageText(msg ChatMessage) string {
 	if msg.Content != "" {
-		return strings.TrimSpace(msg.Content)
+		return stripThinkTags(msg.Content)
 	}
 	if len(msg.MultiContent) > 0 {
 		var texts []string
 		for _, part := range msg.MultiContent {
 			if part.Type == "text" && part.Text != "" {
-				texts = append(texts, strings.TrimSpace(part.Text))
+				texts = append(texts, stripThinkTags(part.Text))
 			}
 		}
 		return strings.TrimSpace(strings.Join(texts, "\n"))
