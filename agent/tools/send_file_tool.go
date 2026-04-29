@@ -83,7 +83,6 @@ func (t *SendFileTool) Execute(ctx context.Context, params map[string]interface{
 
 	// 创建请求
 	requestID, responseChan := t.responseMgr.CreateRequest()
-
 	// 构建请求消息
 	request := &bus.OutboundMessage{
 		RequestID:   requestID,
@@ -100,6 +99,13 @@ func (t *SendFileTool) Execute(ctx context.Context, params map[string]interface{
 			},
 		},
 		Timestamp: time.Now(),
+	}
+	reqID, ok := ctx.Value("req_id").(string)
+	if ok && reqID != "" {
+		if request.Metadata == nil {
+			request.Metadata = map[string]interface{}{}
+		}
+		request.Metadata["req_id"] = reqID
 	}
 
 	// 发送请求

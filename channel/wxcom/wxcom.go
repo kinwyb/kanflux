@@ -6,6 +6,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"crypto/md5"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -486,6 +487,28 @@ func (c *WxComChannel) SendMessage(ctx context.Context, chatID string, content s
 	return err
 }
 
+// SendMedia 主动发送媒体资源
+func (c *WxComChannel) SendMedia(ctx context.Context, mediaType string, reqID string, chatID string, mediaID string) error {
+	if !c.IsRunning() {
+		return ErrNotConnected
+	}
+	cmd := WsCmdSendMsg
+	if reqID != "" {
+		cmd = WsCmdResponse
+	} else {
+		reqID = generateReqID(WsCmdSendMsg)
+	}
+	body := map[string]interface{}{
+		"chatid":  chatID,
+		"msgtype": mediaType,
+		mediaType: map[string]interface{}{
+			"media_id": mediaID,
+		},
+	}
+	_, err := c.wsManager.SendReply(ctx, reqID, body, cmd)
+	return err
+}
+
 // DownloadFile 下载并解密文件
 // url: 文件下载地址
 // aesKey: Base64编码的AES密钥 (来自消息中的 aeskey)
@@ -609,6 +632,158 @@ func (c *WxComChannel) handleSendFileRequest(ctx context.Context, request *bus.O
 		Content: "✅ 文件发送请求已接收",
 		Result:  fmt.Sprintf("文件发送成功（模拟）：%s", filePath),
 	}, nil
+}
+
+// UploadMedia 上传临时素材到企业微信
+// mediaType: "file" / "image" / "voice" / "video"
+// 返回: media_id（3天内有效），错误
+func (c *WxComChannel) UploadMedia(ctx context.Context, mediaType, filename string, data []byte) (string, error) {
+	if !c.IsRunning() {
+		return "", ErrNotConnected
+	}
+
+	totalSize := len(data)
+	if totalSize < 5 {
+		return "", fmt.Errorf("file too small: %d bytes, minimum 5", totalSize)
+	}
+
+	// 分片大小 512KB，最多 100 分片
+	const chunkSize = 512 * 1024
+	totalChunks := (totalSize + chunkSize - 1) / chunkSize
+	if totalChunks > 100 {
+		return "", fmt.Errorf("file too large: %d chunks, maximum 100", totalChunks)
+	}
+
+	// 计算 MD5
+	md5 := fmt.Sprintf("%x", computeMD5(data))
+
+	var mediaID string
+	var lastErr error
+
+	// 最多重试 3 次（上传会话 30 分钟有效，分片幂等可重复上传）
+	for attempt := 1; attempt <= 3; attempt++ {
+		if attempt > 1 {
+			// 断线后重连，等连接稳定再重试
+			time.Sleep(2 * time.Second)
+			if !c.IsRunning() {
+				return "", fmt.Errorf("connection lost, upload aborted: %w", lastErr)
+			}
+		}
+
+		// 1. 初始化上传
+		uploadID, err := c.uploadMediaInit(ctx, mediaType, filename, totalSize, totalChunks, md5)
+		if err != nil {
+			lastErr = fmt.Errorf("upload init failed: %w", err)
+			if attempt < 3 {
+				c.logger.Warn("Upload init failed, will retry", "attempt", attempt, "error", err)
+				continue
+			}
+			return "", lastErr
+		}
+
+		// 2. 分片上传
+		uploadFailed := false
+		for i := 0; i < totalChunks; i++ {
+			start := i * chunkSize
+			end := start + chunkSize
+			if end > totalSize {
+				end = totalSize
+			}
+			chunkData := data[start:end]
+			if err := c.uploadMediaChunk(ctx, uploadID, i, chunkData); err != nil {
+				lastErr = fmt.Errorf("upload chunk %d failed: %w", i, err)
+				if attempt < 3 {
+					c.logger.Warn("Upload chunk failed, will retry from init", "attempt", attempt, "chunk", i, "error", err)
+				}
+				uploadFailed = true
+				break
+			}
+		}
+		if uploadFailed {
+			continue
+		}
+
+		// 3. 完成上传
+		mediaID, err = c.uploadMediaFinish(ctx, uploadID)
+		if err != nil {
+			lastErr = fmt.Errorf("upload finish failed: %w", err)
+			if attempt < 3 {
+				c.logger.Warn("Upload finish failed, will retry", "attempt", attempt, "error", err)
+				continue
+			}
+			return "", lastErr
+		}
+
+		return mediaID, nil
+	}
+
+	return "", lastErr
+}
+
+// uploadMediaInit 上传初始化
+func (c *WxComChannel) uploadMediaInit(ctx context.Context, mediaType, filename string, totalSize, totalChunks int, md5 string) (string, error) {
+	body := map[string]interface{}{
+		"type":         mediaType,
+		"filename":     filename,
+		"total_size":   totalSize,
+		"total_chunks": totalChunks,
+		"md5":          md5,
+	}
+
+	frame, err := c.wsManager.SendCommand(ctx, WsCmdUploadMediaInit, body, 30*time.Second)
+	if err != nil {
+		return "", err
+	}
+
+	if frame.ErrCode != 0 {
+		return "", fmt.Errorf("upload init error: %d %s", frame.ErrCode, frame.ErrMsg)
+	}
+
+	if uploadID, ok := getStringFromMap(frame.Body, "upload_id"); ok {
+		return uploadID, nil
+	}
+	return "", fmt.Errorf("upload_id not found in response")
+}
+
+// uploadMediaChunk 上传分片
+func (c *WxComChannel) uploadMediaChunk(ctx context.Context, uploadID string, chunkIndex int, data []byte) error {
+	body := map[string]interface{}{
+		"upload_id":   uploadID,
+		"chunk_index": chunkIndex,
+		"base64_data": base64.StdEncoding.EncodeToString(data),
+	}
+
+	frame, err := c.wsManager.SendCommand(ctx, WsCmdUploadMediaChunk, body, 30*time.Second)
+	if err != nil {
+		return err
+	}
+
+	if frame.ErrCode != 0 {
+		return fmt.Errorf("upload chunk %d error: %d %s", chunkIndex, frame.ErrCode, frame.ErrMsg)
+	}
+
+	return nil
+}
+
+// uploadMediaFinish 完成上传
+func (c *WxComChannel) uploadMediaFinish(ctx context.Context, uploadID string) (string, error) {
+	body := map[string]interface{}{
+		"upload_id": uploadID,
+	}
+
+	frame, err := c.wsManager.SendCommand(ctx, WsCmdUploadMediaFinish, body, 30*time.Second)
+	if err != nil {
+		return "", err
+	}
+
+	if frame.ErrCode != 0 {
+		return "", fmt.Errorf("upload finish error: %d %s", frame.ErrCode, frame.ErrMsg)
+	}
+
+	if mediaID, ok := getStringFromMap(frame.Body, "media_id"); ok {
+		return mediaID, nil
+	}
+	return "", fmt.Errorf("media_id not found in response")
 }
 
 // processMedia 下载并解密媒体文件，填充 Media 字段
@@ -836,4 +1011,26 @@ func parseSheetCells(xmlStr string, sharedStrings map[string]string) []string {
 		}
 	}
 	return cells
+}
+
+// computeMD5 计算数据的 MD5 值
+func computeMD5(data []byte) []byte {
+	h := md5.New()
+	h.Write(data)
+	return h.Sum(nil)
+}
+
+// getStringFromMap 从 map 中获取字符串值
+func getStringFromMap(m map[string]interface{}, key string) (string, bool) {
+	if m == nil {
+		return "", false
+	}
+	v, ok := m[key]
+	if !ok {
+		return "", false
+	}
+	if s, ok := v.(string); ok {
+		return s, true
+	}
+	return "", false
 }

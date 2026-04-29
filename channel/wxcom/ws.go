@@ -35,15 +35,15 @@ type WsManager struct {
 	reconnectAttempts int
 
 	// 回复队列 (reqID -> queue)
-	replyQueues     map[string][]*replyQueueItem
-	replyQueuesMu   sync.Mutex
+	replyQueues   map[string][]*replyQueueItem
+	replyQueuesMu sync.Mutex
 
 	// 正在处理的 reqID（防止重复通知 worker）
 	processingReqIDs map[string]bool
 	processingMu     sync.Mutex
 
 	// Worker pool 控制
-	replyNotifyCh     chan string           // 无缓冲，阻塞发送保证可靠
+	replyNotifyCh     chan string // 无缓冲，阻塞发送保证可靠
 	replyWorkerCtx    context.Context
 	replyWorkerCancel context.CancelFunc
 
@@ -87,15 +87,15 @@ type pendingAck struct {
 func NewWsManager(config *WxComConfig, logger *slog.Logger) *WsManager {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &WsManager{
-		config:           config,
-		logger:           logger,
-		replyQueues:      make(map[string][]*replyQueueItem),
-		processingReqIDs: make(map[string]bool),
-		pendingAcks:      make(map[string]*pendingAck),
-		replyNotifyCh:    make(chan string), // 无缓冲，阻塞发送
-		replyWorkerCtx:   ctx,
+		config:            config,
+		logger:            logger,
+		replyQueues:       make(map[string][]*replyQueueItem),
+		processingReqIDs:  make(map[string]bool),
+		pendingAcks:       make(map[string]*pendingAck),
+		replyNotifyCh:     make(chan string), // 无缓冲，阻塞发送
+		replyWorkerCtx:    ctx,
 		replyWorkerCancel: cancel,
-		stopChan:         make(chan struct{}),
+		stopChan:          make(chan struct{}),
 	}
 }
 
@@ -258,6 +258,9 @@ func (m *WsManager) receiveLoop(ctx context.Context) {
 // handleFrame 处理收到的帧数据
 func (m *WsManager) handleFrame(frame *WsFrame) {
 	cmd := frame.Cmd
+
+	// 收到任何帧都重置心跳计数，证明连接活跃
+	m.missedPongCount = 0
 
 	// 消息推送
 	if cmd == WsCmdCallback {
@@ -500,6 +503,56 @@ func (m *WsManager) SendReply(ctx context.Context, reqID string, body map[string
 	}
 }
 
+// SendCommand 发送 WebSocket 命令并等待响应
+// 用于上传素材等非回复类命令，不走 reply worker 队列
+func (m *WsManager) SendCommand(ctx context.Context, cmd string, body map[string]interface{}, timeout time.Duration) (*WsFrame, error) {
+	reqID := generateReqID(cmd)
+	frame := &WsFrame{
+		Cmd: cmd,
+		Headers: map[string]string{
+			"req_id": reqID,
+		},
+		Body: body,
+	}
+
+	// 发送帧
+	if err := m.send(frame); err != nil {
+		return nil, err
+	}
+
+	// 创建 ack channel
+	ackResultCh := make(chan *WsFrame, 1)
+	ackErrCh := make(chan error, 1)
+
+	ack := &pendingAck{
+		result: ackResultCh,
+		err:    ackErrCh,
+		reqID:  reqID,
+	}
+	ack.timeout = time.AfterFunc(timeout, func() {
+		m.onReplyAckTimeout(reqID, ack)
+	})
+
+	m.pendingAcksMu.Lock()
+	m.pendingAcks[reqID] = ack
+	m.pendingAcksMu.Unlock()
+
+	m.logger.Debug("Command sent", "cmd", cmd, "req_id", reqID)
+
+	select {
+	case result := <-ackResultCh:
+		return result, nil
+	case err := <-ackErrCh:
+		return nil, err
+	case <-ctx.Done():
+		// 清理 ack
+		m.pendingAcksMu.Lock()
+		delete(m.pendingAcks, reqID)
+		m.pendingAcksMu.Unlock()
+		return nil, ctx.Err()
+	}
+}
+
 // startReplyWorkers 启动多个回复 worker
 func (m *WsManager) startReplyWorkers(count int) {
 	// 创建新的 worker context（每次连接成功时重新创建）
@@ -575,9 +628,9 @@ func (m *WsManager) sendAndWaitAck(frame *WsFrame, reqID string) (*WsFrame, erro
 	ackErrCh := make(chan error, 1)
 
 	ack := &pendingAck{
-		result:  ackResultCh,
-		err:     ackErrCh,
-		reqID:   reqID,
+		result: ackResultCh,
+		err:    ackErrCh,
+		reqID:  reqID,
 	}
 	ack.timeout = time.AfterFunc(time.Duration(DefaultReplyAckTimeout)*time.Second, func() {
 		m.onReplyAckTimeout(reqID, ack)

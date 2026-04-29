@@ -8,14 +8,17 @@ import (
 
 // WebSocket 命令常量
 const (
-	WsCmdSubscribe       = "aibot_subscribe"            // 认证订阅
-	WsCmdHeartbeat       = "ping"                       // 心跳
-	WsCmdResponse        = "aibot_respond_msg"          // 回复消息
-	WsCmdResponseWelcome = "aibot_respond_welcome_msg"  // 回复欢迎语
-	WsCmdResponseUpdate  = "aibot_respond_update_msg"   // 更新模板卡片
-	WsCmdSendMsg         = "aibot_send_msg"             // 主动发送消息
-	WsCmdCallback        = "aibot_msg_callback"         // 消息推送回调
-	WsCmdEventCallback   = "aibot_event_callback"       // 事件推送回调
+	WsCmdSubscribe        = "aibot_subscribe"            // 认证订阅
+	WsCmdHeartbeat        = "ping"                       // 心跳
+	WsCmdResponse         = "aibot_respond_msg"          // 回复消息
+	WsCmdResponseWelcome  = "aibot_respond_welcome_msg"  // 回复欢迎语
+	WsCmdResponseUpdate   = "aibot_respond_update_msg"   // 更新模板卡片
+	WsCmdSendMsg          = "aibot_send_msg"             // 主动发送消息
+	WsCmdCallback         = "aibot_msg_callback"         // 消息推送回调
+	WsCmdEventCallback    = "aibot_event_callback"       // 事件推送回调
+	WsCmdUploadMediaInit  = "aibot_upload_media_init"    // 上传临时素材初始化
+	WsCmdUploadMediaChunk = "aibot_upload_media_chunk"   // 上传临时素材分片
+	WsCmdUploadMediaFinish = "aibot_upload_media_finish" // 上传临时素材完成
 )
 
 // 消息类型常量
