@@ -35,7 +35,16 @@ import type {
   SessionDeleteAckPayload,
 } from '../types'
 
-const WS_URL = 'ws://localhost:8765/ws'
+// WebSocket URL: configurable at build time, or dynamically derived from current page
+function getWsUrl(): string {
+  const envUrl = import.meta.env.VITE_WS_URL
+  if (envUrl) return envUrl
+  // Dynamic: use same host as the page (ws for http, wss for https)
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  return `${protocol}//${window.location.host}/ws`
+}
+
+const WS_URL = getWsUrl()
 
 interface UseWebSocketReturn {
   connectionState: ConnectionState

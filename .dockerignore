@@ -1,0 +1,36 @@
+# Git
+.git
+.gitignore
+
+# Claude
+.claude
+CLAUDE.md
+MEMORY.md
+
+# Dependencies
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Build output
+kanflux
+*.exe
+
+# Web frontend source (dist is built in Docker)
+web/node_modules/
+web/dist/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Tests
+*_test.go
+
+# Docs
+*.md
+!README.md

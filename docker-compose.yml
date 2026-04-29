@@ -1,0 +1,17 @@
+services:
+  kanflux:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kanflux
+    restart: unless-stopped
+    ports:
+      - "8765:8765"
+    volumes:
+      # 挂载配置目录
+      - ./config:/app/config:ro
+      # 挂载工作目录（workspace）
+      - ./workspace:/app/workspace
+    environment:
+      - TZ=Asia/Shanghai
+    # 如果需要外部 LLM API，确保网络可达

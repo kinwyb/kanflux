@@ -3,6 +3,7 @@ package ws
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -61,6 +62,7 @@ type Server struct {
 	taskScheduler *scheduler.Scheduler // 定时任务调度器
 	configMgr     *config.Manager      // 配置管理器
 	logger        *slog.Logger
+	staticFS      fs.FS      // 静态文件文件系统（Web 前端）
 
 	upgrader    websocket.Upgrader
 	connections map[string]*Connection
@@ -144,6 +146,12 @@ func (s *Server) Start(ctx context.Context) error {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc(s.config.Path, s.handleWebSocket)
+
+	// 注册静态文件处理器（Web 前端）
+	if s.staticFS != nil {
+		mux.Handle("/", s.spaHandler(s.staticFS))
+		s.logger.Info("Static file handler registered", "port", s.config.Port)
+	}
 
 	s.httpServer = &http.Server{
 		Addr:         addr,
@@ -963,4 +971,34 @@ func (s *Server) sendConfigError(connID string, msgID string, msgType MessageTyp
 	default:
 		return s.sendConfigResponse(connID, msgID, MsgTypeError, &ErrorPayload{Message: errMsg})
 	}
+}
+
+// SetStaticFS 设置静态文件文件系统
+func (s *Server) SetStaticFS(fsys fs.FS) {
+	s.staticFS = fsys
+}
+
+// spaHandler 处理 SPA 单页应用路由
+func (s *Server) spaHandler(fsys fs.FS) http.Handler {
+	fileServer := http.FileServer(http.FS(fsys))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 尝试打开请求的文件
+		f, err := fsys.Open(r.URL.Path)
+		if err == nil {
+			if closer, ok := f.(interface{ Close() error }); ok {
+				closer.Close()
+			}
+			fileServer.ServeHTTP(w, r)
+			return
+		}
+		// SPA fallback: 返回 index.html
+		if index, err := fsys.Open("index.html"); err == nil {
+			if closer, ok := index.(interface{ Close() error }); ok {
+				closer.Close()
+			}
+			http.ServeFileFS(w, r, fsys, "index.html")
+			return
+		}
+		http.NotFound(w, r)
+	})
 }
