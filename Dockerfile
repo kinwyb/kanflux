@@ -26,8 +26,19 @@ RUN go mod download
 # Copy web dist from frontend build stage (required for go:embed)
 COPY --from=web-builder /app/web/dist ./web/dist
 
-# Copy source code
-COPY . ./
+# Copy Go source code (explicit directories, not "COPY . ./" to avoid overwriting web/dist)
+COPY main.go ./
+COPY agent/ ./agent/
+COPY assets/ ./assets/
+COPY bus/ ./bus/
+COPY channel/ ./channel/
+COPY cli/ ./cli/
+COPY config/ ./config/
+COPY gateway/ ./gateway/
+COPY memoria/ ./memoria/
+COPY providers/ ./providers/
+COPY scheduler/ ./scheduler/
+COPY session/ ./session/
 
 # Build with embedassets tag to include web frontend
 RUN CGO_ENABLED=0 GOOS=linux go build \
