@@ -3,9 +3,16 @@
 package wxcom
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
+	"io"
 	"log/slog"
+	"path/filepath"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -160,6 +167,11 @@ func (c *WxComChannel) handleMessage(frame *WsFrame) {
 
 	// 转换为bus消息，使用 channel 自己的名称（支持多账号场景）
 	inbound := c.handler.ConvertToInbound(msg, c.Name(), c.config.BotID)
+
+	// 下载并解密媒体文件
+	if len(inbound.Media) > 0 {
+		c.processMedia(context.Background(), inbound)
+	}
 
 	// 发布入站消息
 	if err := c.PublishInbound(context.Background(), inbound); err != nil {
@@ -551,4 +563,231 @@ func (c *WxComChannel) handleSendFileRequest(ctx context.Context, request *bus.O
 		Content: "✅ 文件发送请求已接收",
 		Result:  fmt.Sprintf("文件发送成功（模拟）：%s", filePath),
 	}, nil
+}
+
+// processMedia 下载并解密媒体文件，填充 Media 字段
+func (c *WxComChannel) processMedia(ctx context.Context, inbound *bus.InboundMessage) {
+	// 倒序遍历以支持安全删除 document 项
+	for i := len(inbound.Media) - 1; i >= 0; i-- {
+		media := &inbound.Media[i]
+		switch media.Type {
+		case "image", "audio":
+			data, filename, err := c.DownloadImage(ctx, media)
+			if err != nil {
+				c.logger.Warn("Failed to download media", "type", media.Type, "error", err)
+				continue
+			}
+			media.Base64 = base64.StdEncoding.EncodeToString(data)
+			media.URL = "" // 清空 URL，避免 OpenAI 接口优先使用已失效的临时链接
+			media.MimeType = DetectMimeType(data)
+			if media.Metadata == nil {
+				media.Metadata = make(map[string]interface{})
+			}
+			media.Metadata["filename"] = filename
+
+		case "document":
+			aesKey := ""
+			if media.Metadata != nil {
+				if key, ok := media.Metadata["aeskey"].(string); ok {
+					aesKey = key
+				}
+			}
+			data, filename, err := c.DownloadFile(ctx, media.URL, aesKey)
+			if err != nil {
+				c.logger.Warn("Failed to download document", "error", err)
+				continue
+			}
+			text := extractText(data, filename)
+			if inbound.Content != "" {
+				inbound.Content = inbound.Content + fmt.Sprintf("\n\n[文件: %s]\n%s", filename, text)
+			} else {
+				inbound.Content = fmt.Sprintf("[文件: %s]\n%s", filename, text)
+			}
+			// 文档已提取为文本，移除 Media 避免 LLM 收到不支持的 file_url type
+			inbound.Media = append(inbound.Media[:i], inbound.Media[i+1:]...)
+		}
+	}
+}
+
+// 常见纯文本扩展名
+var textExtensions = map[string]bool{
+	".txt":  true,
+	".csv":  true,
+	".json": true,
+	".md":   true,
+	".xml":  true,
+	".yaml": true,
+	".yml":  true,
+	".log":  true,
+	".ini":  true,
+	".conf": true,
+	".cfg":  true,
+	".env":  true,
+	".sh":   true,
+	".html": true,
+	".htm":  true,
+	".sql":  true,
+	".js":   true,
+	".ts":   true,
+	".py":   true,
+	".go":   true,
+	".java": true,
+	".c":    true,
+	".h":    true,
+	".css":  true,
+}
+
+var xmlTagRegex = regexp.MustCompile(`<[^>]+>`)
+
+// extractText 从文件数据中提取文本内容
+func extractText(data []byte, filename string) string {
+	ext := strings.ToLower(filepath.Ext(filename))
+
+	// 纯文本文件：直接返回
+	if textExtensions[ext] {
+		if t := strings.TrimSpace(string(data)); t != "" {
+			return t
+		}
+		return "(空文件)"
+	}
+
+	// ZIP 格式：docx / xlsx / pptx
+	if ext == ".zip" || ext == ".docx" || ext == ".xlsx" || ext == ".pptx" {
+		return extractZipText(data, ext, filename)
+	}
+
+	// PDF 和其他二进制文件：返回描述
+	return fmt.Sprintf("(无法提取文本，%d 字节)", len(data))
+}
+
+// extractZipText 从 ZIP 文件中提取文本
+func extractZipText(data []byte, ext, filename string) string {
+	r, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return fmt.Sprintf("(ZIP 解析失败: %s)", err.Error())
+	}
+
+	switch ext {
+	case ".docx":
+		return extractDocxText(r)
+	case ".xlsx":
+		return extractXlsxText(r)
+	case ".pptx":
+		return "(PPTX 暂不支持文本提取)"
+	default:
+		return "(无法从 ZIP 中提取文本)"
+	}
+}
+
+// extractDocxText 从 docx 中提取文本（读取 word/document.xml）
+func extractDocxText(r *zip.Reader) string {
+	for _, f := range r.File {
+		if f.Name == "word/document.xml" || strings.HasSuffix(f.Name, "document.xml") {
+			rc, err := f.Open()
+			if err != nil {
+				continue
+			}
+			xmlData, _ := io.ReadAll(rc)
+			rc.Close()
+			text := stripXMLTags(string(xmlData))
+			if t := strings.TrimSpace(text); t != "" {
+				return t
+			}
+		}
+	}
+	return "(docx 中未找到文本内容)"
+}
+
+// extractXlsxText 从 xlsx 中提取文本（读取 sharedStrings.xml 和 sheet*.xml）
+func extractXlsxText(r *zip.Reader) string {
+	// 先读取 shared strings
+	sharedStrings := make(map[string]string)
+	for _, f := range r.File {
+		if strings.HasSuffix(f.Name, "sharedStrings.xml") {
+			rc, err := f.Open()
+			if err != nil {
+				continue
+			}
+			xmlData, _ := io.ReadAll(rc)
+			rc.Close()
+			sharedStrings = parseSharedStrings(string(xmlData))
+			break
+		}
+	}
+
+	var result strings.Builder
+	for _, f := range r.File {
+		if strings.Contains(f.Name, "worksheets/sheet") && strings.HasSuffix(f.Name, ".xml") {
+			rc, err := f.Open()
+			if err != nil {
+				continue
+			}
+			xmlData, _ := io.ReadAll(rc)
+			rc.Close()
+			cells := parseSheetCells(string(xmlData), sharedStrings)
+			if len(cells) > 0 {
+				if result.Len() > 0 {
+					result.WriteString("\n")
+				}
+				result.WriteString(strings.Join(cells, "\t"))
+			}
+		}
+	}
+	if result.Len() > 0 {
+		return result.String()
+	}
+	return "(xlsx 中未找到文本内容)"
+}
+
+// stripXMLTags 去除 XML 标签，保留文本
+func stripXMLTags(xmlStr string) string {
+	// 替换标签为空格
+	text := xmlTagRegex.ReplaceAllString(xmlStr, " ")
+	// 清理多余空白
+	spaces := regexp.MustCompile(`\s+`)
+	text = spaces.ReplaceAllString(text, " ")
+	return strings.TrimSpace(text)
+}
+
+// parseSharedStrings 解析 xlsx shared strings
+func parseSharedStrings(xmlStr string) map[string]string {
+	result := make(map[string]string)
+	// 简化的解析：提取 <t>...</t> 之间的内容
+	re := regexp.MustCompile(`<t[^>]*>([^<]*)</t>`)
+	matches := re.FindAllStringSubmatch(xmlStr, -1)
+	for i, m := range matches {
+		if len(m) > 1 {
+			result[fmt.Sprintf("%d", i)] = m[1]
+		}
+	}
+	return result
+}
+
+// parseSheetCells 解析 xlsx sheet 的单元格文本
+func parseSheetCells(xmlStr string, sharedStrings map[string]string) []string {
+	var cells []string
+	// 简化解析：提取所有 <v>...</v> 和 <t>...</t> 之间的内容
+	re := regexp.MustCompile(`<t r="[^"]*"[^>]*>([^<]*)</t>`)
+	matches := re.FindAllStringSubmatch(xmlStr, -1)
+	for _, m := range matches {
+		if len(m) > 1 {
+			cells = append(cells, m[1])
+		}
+	}
+	// 如果没有 inline 字符串，尝试提取 value
+	if len(cells) == 0 {
+		re2 := regexp.MustCompile(`<v>([^<]*)</v>`)
+		matches2 := re2.FindAllStringSubmatch(xmlStr, -1)
+		for _, m := range matches2 {
+			if len(m) > 1 {
+				// 尝试作为 shared string 引用
+				if text, ok := sharedStrings[m[1]]; ok {
+					cells = append(cells, text)
+				} else {
+					cells = append(cells, m[1])
+				}
+			}
+		}
+	}
+	return cells
 }
