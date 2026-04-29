@@ -21,6 +21,9 @@ go test -v ./agent/...
 # Run a single test file
 go test -v ./agent/agent_test.go
 
+# Run a single test function
+go test -v -run TestAgentName ./agent/...
+
 # Build the CLI binary
 go build -o kanflux .
 
@@ -60,6 +63,26 @@ go build -o kanflux .
 - **`providers/`**: LLM providers
   - `openai.go`: OpenAI-compatible model initialization
 
+- **`gateway/`**: WebSocket gateway service
+  - `gateway.go`: Main service entry, integrates TaskScheduler
+  - `handler/`: WebSocket message handlers (inbound, subscribe, heartbeat, control, session, task)
+  - `ws/`: WebSocket core (server, client, connection, detector)
+  - `types/`: Type definitions without dependencies
+
+- **`channel/`**: Channel implementations
+  - `manager.go`: ChannelManager for registration and message routing with ThreadBinding support
+  - `wxcom/`: WeChat Work (企业微信) bot channel
+  - `interface.go`: Channel interface definition
+
+- **`scheduler/`**: Cron-based task scheduler
+  - `scheduler.go`: Scheduler with task state persistence
+  - `task.go`: Task and TaskState structures
+  - `store_json.go`: JSON file-based task state storage
+  - Tasks publish to MessageBus via InboundMessage, routing through AgentManager
+
+- **`memoria/`**: User preference extraction service (L1/L2/L3 memory layers)
+- **`config/`**: Configuration parsing for kanflux.json
+
 ### Key Design Patterns
 
 1. **Deep Agent Pattern**: Uses Eino ADK's `deep.New()` prebuilt agent with:
@@ -76,6 +99,8 @@ go build -o kanflux .
 4. **Tool Registry Middleware**: Implements `WrapInvokableToolCall` and `WrapStreamableToolCall` to intercept tool calls needing approval.
 
 5. **Session History Safety**: `GetHistorySafe()` ensures tool call sequences (assistant+tool messages) aren't truncated mid-sequence.
+
+6. **ThreadBinding**: Routes messages from one channel/chat to a different channel (e.g., `tui:chat123 -> wxcom:work`). Configured via `channel.thread_bindings` in kanflux.json.
 
 ## Message Sending Flow
 
@@ -146,6 +171,16 @@ if msg.IsStreaming && !msg.IsFinal {
     ch.Send(ctx, msg)
 }
 ```
+
+## Gateway Architecture
+
+Gateway 包采用模块化三层设计：
+
+- **`types/`**: 独立类型定义（MessageType, Payload），避免循环依赖
+- **`handler/`**: 通过接口解耦，支持自定义处理器注册（inbound, subscribe, heartbeat, control, session, task）
+- **`ws/`**: WebSocket 核心层，`init()` 自动注册 handlers 到 Registry
+
+Gateway 集成 TaskScheduler，支持通过 WebSocket API 动态管理定时任务（添加/删除/修改/触发）。
 
 ## Eino Framework Integration
 

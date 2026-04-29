@@ -60,4 +60,4 @@ COPY --from=go-builder /kanflux /app/kanflux
 EXPOSE 8765
 
 ENTRYPOINT ["/app/kanflux"]
-CMD ["gateway", "start", "--config", "/app/config.yaml"]
+CMD ["gateway", "start", "--config", "/app/config/kanflux.json"]

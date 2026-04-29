@@ -36,7 +36,7 @@ func (c *ServerConfig) SetDefaults() {
 		c.Port = 8765
 	}
 	if c.Host == "" {
-		c.Host = "localhost"
+		c.Host = "0.0.0.0"
 	}
 	if c.Path == "" {
 		c.Path = "/ws"
@@ -49,9 +49,13 @@ func (c *ServerConfig) SetDefaults() {
 	}
 }
 
-// URL 返回 WebSocket URL
+// URL 返回 WebSocket URL（0.0.0.0 映射为 localhost 用于本地连接）
 func (c *ServerConfig) URL() string {
-	return fmt.Sprintf("ws://%s:%d%s", c.Host, c.Port, c.Path)
+	host := c.Host
+	if host == "0.0.0.0" {
+		host = "localhost"
+	}
+	return fmt.Sprintf("ws://%s:%d%s", host, c.Port, c.Path)
 }
 
 // Server WebSocket 服务器
@@ -982,16 +986,23 @@ func (s *Server) SetStaticFS(fsys fs.FS) {
 func (s *Server) spaHandler(fsys fs.FS) http.Handler {
 	fileServer := http.FileServer(http.FS(fsys))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// 尝试打开请求的文件
-		f, err := fsys.Open(r.URL.Path)
-		if err == nil {
-			if closer, ok := f.(interface{ Close() error }); ok {
-				closer.Close()
-			}
-			fileServer.ServeHTTP(w, r)
-			return
+		// Strip leading "/" for embed.FS compatibility
+		path := r.URL.Path
+		if len(path) > 0 && path[0] == '/' {
+			path = path[1:]
 		}
-		// SPA fallback: 返回 index.html
+		// Try to open the requested file
+		if path != "" {
+			f, err := fsys.Open(path)
+			if err == nil {
+				if closer, ok := f.(interface{ Close() error }); ok {
+					closer.Close()
+				}
+				fileServer.ServeHTTP(w, r)
+				return
+			}
+		}
+		// SPA fallback: return index.html
 		if index, err := fsys.Open("index.html"); err == nil {
 			if closer, ok := index.(interface{ Close() error }); ok {
 				closer.Close()
