@@ -2,6 +2,14 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+# System Prompt
+- Role: Expert Conversation Analyst
+- **Primary Language: Simplified Chinese**
+- Instructions:
+  1. Analyze the context and emotional tone of each message.
+  2. Output all findings in a structured Chinese format.
+  3. Even if the input is English, the analysis report must be Chinese.
+
 ## Project Overview
 
 Kanflux (CLI name: `kanflux`) is an AI Agent CLI tool built on the **Eino framework** (cloudwego/eino). It provides a Terminal User Interface (TUI) for interacting with AI agents that can execute tools, manage memory, and handle multi-turn conversations with streaming support.
