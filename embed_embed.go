@@ -1,20 +1,20 @@
 //go:build embedassets
 
-package assets
+package main
 
 import (
-	"embed"
 	"io/fs"
+	"embed"
+
+	"github.com/kinwyb/kanflux/assets"
 )
 
 //go:embed web/dist/*
 var webDist embed.FS
 
-// WebDist returns the embedded web dist filesystem.
-var WebDist fs.FS
-
+// init registers the embedded web FS with the assets package.
 func init() {
 	if sub, err := fs.Sub(webDist, "web/dist"); err == nil {
-		WebDist = sub
+		assets.WebDist = sub
 	}
 }
