@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 	"time"
 
@@ -432,8 +433,7 @@ func getTokenLimit(layer types.Layer) int {
 // Response parsing functions
 
 func parseFactsResponse(response string, userCtx types.UserIdentity) []*types.MemoryItem {
-	response = strings.TrimSpace(response)
-	response = cleanCodeBlock(response)
+	response = cleanLLMResponse(response)
 
 	var facts []struct {
 		Content    string `json:"content"`
@@ -504,7 +504,7 @@ func parsePlainTextFacts(response string, userCtx types.UserIdentity) []*types.M
 }
 
 func parseCategorizeResponse(response string) (types.HallType, types.Layer) {
-	response = strings.TrimSpace(response)
+	response = cleanLLMResponse(response)
 	response = strings.ToLower(response)
 
 	var hallType types.HallType
@@ -535,8 +535,7 @@ func parseCategorizeResponse(response string) (types.HallType, types.Layer) {
 }
 
 func parseChatResponse(response string, userCtx types.UserIdentity) []*types.MemoryItem {
-	response = strings.TrimSpace(response)
-	response = cleanCodeBlock(response)
+	response = cleanLLMResponse(response)
 
 	// Check if response is a JSON array - redirect to batch parser
 	if strings.HasPrefix(response, "[") {
@@ -610,8 +609,7 @@ func truncateString(s string, maxLen int) string {
 }
 
 func parseChatBatchResponse(response string, userCtx types.UserIdentity) []*types.MemoryItem {
-	response = strings.TrimSpace(response)
-	response = cleanCodeBlock(response)
+	response = cleanLLMResponse(response)
 
 	// Handle empty array case
 	if response == "[]" || response == "" {
@@ -756,8 +754,7 @@ func fixJSONResponse(response string) string {
 // parseSimpleFileResponse parses the simplified file response (no HallType)
 // Files are stored as hall_discoveries in L2 (knowledge discovered from files)
 func parseSimpleFileResponse(response string, userCtx types.UserIdentity) []*types.MemoryItem {
-	response = strings.TrimSpace(response)
-	response = cleanCodeBlock(response)
+	response = cleanLLMResponse(response)
 
 	var result struct {
 		Summary  string   `json:"summary"`
@@ -811,8 +808,7 @@ func parseSimpleFileResponse(response string, userCtx types.UserIdentity) []*typ
 }
 
 func parseCompactResponse(response string) []string {
-	response = strings.TrimSpace(response)
-	response = cleanCodeBlock(response)
+	response = cleanLLMResponse(response)
 
 	var items []struct {
 		Summary  string `json:"summary"`
@@ -839,11 +835,19 @@ func parseCompactResponse(response string) []string {
 	return result
 }
 
-func cleanCodeBlock(s string) string {
-	s = strings.TrimPrefix(s, "```json")
-	s = strings.TrimPrefix(s, "```")
-	s = strings.TrimSuffix(s, "```")
-	return strings.TrimSpace(s)
+var thinkTagRegex = regexp.MustCompile(`(?s)<think>(.*?)</think>`)
+
+// cleanLLMResponse 清理 LLM 返回结果：去除空白、思考标签、代码块标记
+func cleanLLMResponse(text string) string {
+	text = strings.TrimSpace(text)
+	text = thinkTagRegex.ReplaceAllString(text, "")
+	if idx := strings.Index(text, "<think>"); idx >= 0 {
+		text = text[:idx]
+	}
+	text = strings.TrimPrefix(text, "```json")
+	text = strings.TrimPrefix(text, "```")
+	text = strings.TrimSuffix(text, "```")
+	return strings.TrimSpace(text)
 }
 
 func generateID() string {
